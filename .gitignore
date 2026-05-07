@@ -1,0 +1,33 @@
+# Binaries
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go
+vendor/
+*.prof
+coverage.txt
+coverage.out
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Kubebuilder / project specific
+testbin/
+cover.out
+
+# Local overrides
+.env
+.env.local
