@@ -9,12 +9,10 @@ import (
 )
 
 // Restart reasons recorded into JSHook.status.instance.lastRestartReason.
+// More reasons (memory-limit, panic, timeout-streak, manual) will land here
+// alongside the rescue paths that trigger them — phase-2 in the plan.
 const (
 	ReasonSourceChanged = "source-changed"
-	ReasonMemoryLimit   = "memory-limit"
-	ReasonPanic         = "panic"
-	ReasonTimeoutStreak = "timeout-streak"
-	ReasonManual        = "manual"
 )
 
 // ManagedInstance is the registry's view of a per-hook persistent runtime.
