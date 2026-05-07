@@ -28,18 +28,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	"github.com/o-haase/gojsop/internal/hooks"
 )
 
 var _ = Describe("JSHook Controller", func() {
-	Context("When reconciling a resource", func() {
+	Context("When reconciling an inline hook", func() {
 		const resourceName = "test-resource"
 
 		ctx := context.Background()
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
-		}
+		// JSHook is cluster-scoped, so no Namespace.
+		typeNamespacedName := types.NamespacedName{Name: resourceName}
 		jshook := &corev1alpha1.JSHook{}
 
 		BeforeEach(func() {
@@ -47,18 +46,29 @@ var _ = Describe("JSHook Controller", func() {
 			err := k8sClient.Get(ctx, typeNamespacedName, jshook)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &corev1alpha1.JSHook{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
+					ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+					Spec: corev1alpha1.JSHookSpec{
+						Source: corev1alpha1.JSHookSource{
+							Inline: `function config() {
+								return {
+									configVersion: "v1",
+									onStartup: 5,
+									kubernetes: [{
+										name: "watch-cm",
+										apiVersion: "v1",
+										kind: "ConfigMap",
+										executeHookOnEvent: ["Added"],
+									}],
+								};
+							}`,
+						},
 					},
-					// TODO(user): Specify other spec details if needed.
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &corev1alpha1.JSHook{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -66,19 +76,27 @@ var _ = Describe("JSHook Controller", func() {
 			By("Cleanup the specific resource instance JSHook")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
+
+		It("should reconcile and write resolved bindings into status", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &JSHookReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
+				Loader: hooks.NewChain(hooks.InlineLoader{}),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			updated := &corev1alpha1.JSHook{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal("Ready"))
+			Expect(updated.Status.Bindings).To(ContainElement("kubernetes:v1/ConfigMap/watch-cm"))
+			Expect(updated.Status.Bindings).To(ContainElement("onStartup:5"))
+			Expect(updated.Status.Instance).NotTo(BeNil())
+			Expect(updated.Status.Instance.SourceHash).NotTo(BeEmpty())
 		})
 	})
 })

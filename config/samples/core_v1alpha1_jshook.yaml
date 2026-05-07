@@ -6,4 +6,33 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: jshook-sample
 spec:
-  # TODO(user): Add fields here
+  source:
+    inline: |
+      // Top-level state — survives across handle() calls thanks to the
+      // persistent QuickJS instance.
+      var seen = 0;
+
+      function config() {
+        return {
+          configVersion: "v1",
+          onStartup: 1,
+          kubernetes: [{
+            name: "watch-configmaps",
+            apiVersion: "v1",
+            kind: "ConfigMap",
+            executeHookOnEvent: ["Added", "Modified", "Deleted"],
+            namespace: { nameSelector: { matchNames: ["default"] } },
+          }],
+        };
+      }
+
+      function handle(ctx) {
+        for (const evt of ctx) {
+          seen++;
+          // host-bound logger; arrives once host_log.go is wired in.
+          // log.info("event", evt.type, "for", evt.object?.metadata?.name, "total seen:", seen);
+        }
+      }
+  resources:
+    memoryMB: 32
+    timeoutSeconds: 30

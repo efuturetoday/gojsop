@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/fastschema/qjs"
@@ -39,6 +40,38 @@ func (i *Instance) Eval(name, source string) (string, error) {
 	}
 	defer res.Free()
 	return res.String(), nil
+}
+
+// LoadModule evaluates the user's hook source on the persistent runtime.
+// The source is treated as a script (not an ES module): top-level
+// `function config() {}` and `function handle(ctx) {}` declarations become
+// globals on globalThis and are callable afterwards.
+//
+// Module-top-level state (var declarations, globalThis assignments) survives
+// across subsequent Handle/LoadConfig calls — that's the persistent-instance
+// contract.
+func (i *Instance) LoadModule(name, source string) error {
+	_, err := i.Eval(name, source)
+	return err
+}
+
+// LoadConfig calls the hook's exported `config()` function and decodes the
+// returned object as our runtime.Config. The hook MUST export config() —
+// missing or non-function returns an error (we can't subscribe blindly).
+func (i *Instance) LoadConfig() (*Config, error) {
+	const bridge = `JSON.stringify(typeof config === "function" ? config() : null)`
+	raw, err := i.Eval("__config_bridge__", bridge)
+	if err != nil {
+		return nil, fmt.Errorf("calling config(): %w", err)
+	}
+	if raw == "null" || raw == "" || raw == "undefined" {
+		return nil, fmt.Errorf("hook does not export a config() function")
+	}
+	var cfg Config
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return nil, fmt.Errorf("config() returned non-JSON: %w (raw=%s)", err, raw)
+	}
+	return &cfg, nil
 }
 
 // Close releases the underlying QuickJS runtime. Always call this when the
