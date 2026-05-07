@@ -27,6 +27,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -37,6 +38,7 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/controller"
+	"github.com/o-haase/gojsop/internal/dispatcher"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -178,9 +180,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	dyn, err := dynamic.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to build dynamic client")
+		os.Exit(1)
+	}
+	disp := dispatcher.New(dyn, dispatcher.FromMetaMapper(mgr.GetRESTMapper()))
+
+	managerCtx := ctrl.SetupSignalHandler()
 	if err := (&controller.JSHookReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Dispatcher:   disp,
+		SubscribeCtx: managerCtx,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSHook")
 		os.Exit(1)
@@ -197,7 +209,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(managerCtx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

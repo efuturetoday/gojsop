@@ -29,6 +29,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	"github.com/o-haase/gojsop/internal/dispatcher"
 	"github.com/o-haase/gojsop/internal/hooks"
 	jsruntime "github.com/o-haase/gojsop/internal/runtime"
 )
@@ -50,6 +51,13 @@ type JSHookReconciler struct {
 	// Registry owns the per-hook persistent JS instances.
 	// Defaults to a fresh registry via SetupWithManager when nil.
 	Registry *jsruntime.Registry
+
+	// Dispatcher subscribes hooks to Kubernetes events. Optional in tests.
+	Dispatcher *dispatcher.Dispatcher
+
+	// SubscribeCtx is the parent context handed to dispatcher.Subscribe so
+	// that informer goroutines tear down when the manager stops.
+	SubscribeCtx context.Context
 }
 
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks,verbs=get;list;watch;create;update;patch;delete
@@ -62,7 +70,10 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var hook corev1alpha1.JSHook
 	if err := r.Get(ctx, req.NamespacedName, &hook); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Hook was deleted — close and forget its persistent instance.
+			// Hook was deleted — tear down informers and close the instance.
+			if r.Dispatcher != nil {
+				r.Dispatcher.Drop(req.NamespacedName)
+			}
 			r.Registry.Drop(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
@@ -89,6 +100,13 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		log.Error(err, "calling config()")
 		return r.fail(ctx, &hook, fmt.Sprintf("config(): %v", err))
+	}
+
+	if r.Dispatcher != nil && (restarted || hook.Status.ObservedGeneration != hook.Generation) {
+		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, mi.Instance, cfg); err != nil {
+			log.Error(err, "subscribing bindings")
+			return r.fail(ctx, &hook, fmt.Sprintf("subscribe: %v", err))
+		}
 	}
 
 	bindings := summarizeBindings(cfg)
@@ -135,6 +153,13 @@ func summarizeBindings(cfg *jsruntime.Config) []string {
 		out = append(out, fmt.Sprintf("onStartup:%d", cfg.OnStartup))
 	}
 	return out
+}
+
+func (r *JSHookReconciler) subscribeCtx() context.Context {
+	if r.SubscribeCtx != nil {
+		return r.SubscribeCtx
+	}
+	return context.Background()
 }
 
 // SetupWithManager sets up the controller with the Manager.
