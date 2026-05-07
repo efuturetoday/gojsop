@@ -56,7 +56,7 @@ func NewRegistry() *Registry {
 // or if sourceHash differs from the last load, a fresh QuickJS runtime is
 // started, the source is evaluated, and the previous instance (if any) is
 // closed. The boolean reports whether a (re)start happened on this call.
-func (r *Registry) GetOrLoad(key types.NamespacedName, source []byte, sourceHash string) (*ManagedInstance, bool, error) {
+func (r *Registry) GetOrLoad(key types.NamespacedName, source []byte, sourceHash string, res Resources) (*ManagedInstance, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -65,7 +65,7 @@ func (r *Registry) GetOrLoad(key types.NamespacedName, source []byte, sourceHash
 		return existing, false, nil
 	}
 
-	inst, err := New()
+	inst, err := New(res)
 	if err != nil {
 		return nil, false, fmt.Errorf("registry: new instance: %w", err)
 	}
@@ -114,7 +114,7 @@ func (r *Registry) Drop(key types.NamespacedName) {
 // reason. Used when the persistent instance is unhealthy (panic, OOM, repeated
 // timeouts). Returns the new ManagedInstance or an error if the source isn't
 // known yet.
-func (r *Registry) Restart(key types.NamespacedName, source []byte, sourceHash, reason string) (*ManagedInstance, error) {
+func (r *Registry) Restart(key types.NamespacedName, source []byte, sourceHash, reason string, res Resources) (*ManagedInstance, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -122,7 +122,7 @@ func (r *Registry) Restart(key types.NamespacedName, source []byte, sourceHash, 
 	if !ok {
 		return nil, fmt.Errorf("registry: restart called for unknown hook %s", key)
 	}
-	inst, err := New()
+	inst, err := New(res)
 	if err != nil {
 		return nil, fmt.Errorf("registry: new instance: %w", err)
 	}

@@ -18,7 +18,7 @@ func TestLoadConfig_FromHookSource(t *testing.T) {
 		  };
 		}
 	`
-	inst, err := New()
+	inst, err := New(Resources{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestLoadConfig_FromHookSource(t *testing.T) {
 }
 
 func TestLoadConfig_MissingFunction(t *testing.T) {
-	inst, err := New()
+	inst, err := New(Resources{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

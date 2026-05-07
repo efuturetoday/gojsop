@@ -89,8 +89,9 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.fail(ctx, &hook, fmt.Sprintf("source: %v", err))
 	}
 	srcHash := hooks.Hash(source)
+	res := resourcesFromSpec(hook.Spec.Resources)
 
-	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, source, srcHash)
+	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, source, srcHash, res)
 	if err != nil {
 		log.Error(err, "registry GetOrLoad")
 		return r.fail(ctx, &hook, fmt.Sprintf("instance: %v", err))
@@ -138,6 +139,18 @@ func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, 
 	}
 	// shell-operator-style 5s backoff on failure.
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// resourcesFromSpec maps the CRD's optional Resources to runtime.Resources.
+// Zero/missing fields fall back to runtime defaults inside New().
+func resourcesFromSpec(r *corev1alpha1.JSHookResources) jsruntime.Resources {
+	if r == nil {
+		return jsruntime.Resources{}
+	}
+	return jsruntime.Resources{
+		MemoryMB:       r.MemoryMB,
+		TimeoutSeconds: r.TimeoutSeconds,
+	}
 }
 
 func summarizeBindings(cfg *jsruntime.Config) []string {

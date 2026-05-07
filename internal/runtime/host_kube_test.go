@@ -32,7 +32,7 @@ func newKubeHost(t *testing.T, seed ...runtime.Object) *KubeHost {
 // instance for further inspection.
 func runHook(t *testing.T, h *KubeHost, source string) *Instance {
 	t.Helper()
-	inst, err := New()
+	inst, err := New(Resources{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

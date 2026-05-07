@@ -13,21 +13,70 @@ import (
 	"github.com/fastschema/qjs"
 )
 
+// Resources caps what a single Instance may consume. Zero fields fall back to
+// the defaults in DefaultResources(); callers are encouraged to pass explicit
+// values plumbed from spec.resources on the JSHook.
+type Resources struct {
+	// MemoryMB caps the QuickJS heap in megabytes. Translated to bytes for
+	// JS_SetMemoryLimit. Zero means "use default".
+	MemoryMB int32
+	// TimeoutSeconds bounds a single handle() call. Currently advisory —
+	// dispatcher logs a warning when exceeded but does not yet interrupt the
+	// running call (qjs's MaxExecutionTime is a no-op in v0.0.6, and the
+	// per-op CloseOnContextDone path has significant overhead per the qjs
+	// docs). Phase 2: real interruption.
+	TimeoutSeconds int32
+}
+
+// DefaultResources matches the CRD doc defaults (memoryMB:32, timeoutSeconds:30).
+func DefaultResources() Resources {
+	return Resources{MemoryMB: 32, TimeoutSeconds: 30}
+}
+
+// applyDefaults fills in zero fields from DefaultResources.
+func (r Resources) applyDefaults() Resources {
+	d := DefaultResources()
+	if r.MemoryMB <= 0 {
+		r.MemoryMB = d.MemoryMB
+	}
+	if r.TimeoutSeconds <= 0 {
+		r.TimeoutSeconds = d.TimeoutSeconds
+	}
+	return r
+}
+
+// maxStackSizeBytes is the QuickJS stack cap. 1 MiB is the qjs README's
+// reference value and is plenty for typical hook code without inviting
+// pathological recursion.
+const maxStackSizeBytes = 1 * 1024 * 1024
+
 // Instance is one persistent JS runtime, owned by exactly one JSHook.
 // All Eval/Call must be serialized by the caller (the per-hook FIFO queue
 // in the dispatcher does this for us).
 type Instance struct {
-	rt *qjs.Runtime
+	rt        *qjs.Runtime
+	resources Resources
 }
 
-// New starts a fresh JS instance. It does not yet evaluate user code —
-// callers eval the hook source once via Eval, then drive Config()/Handle().
-func New() (*Instance, error) {
-	rt, err := qjs.New()
+// New starts a fresh JS instance with the given Resources caps. Zero fields
+// fall back to DefaultResources(). The instance does not yet evaluate user
+// code — callers eval the hook source once via Eval, then drive
+// Config()/Handle().
+func New(res Resources) (*Instance, error) {
+	res = res.applyDefaults()
+	rt, err := qjs.New(qjs.Option{
+		MemoryLimit:  int(res.MemoryMB) * 1024 * 1024,
+		MaxStackSize: maxStackSizeBytes,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("qjs.New: %w", err)
 	}
-	return &Instance{rt: rt}, nil
+	return &Instance{rt: rt, resources: res}, nil
+}
+
+// Resources returns the limits this instance was started with.
+func (i *Instance) Resources() Resources {
+	return i.resources
 }
 
 // Eval runs source on the underlying runtime and returns the last expression's

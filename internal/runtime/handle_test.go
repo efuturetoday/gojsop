@@ -10,7 +10,7 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 			return { ack: ctx.length };
 		}
 	`
-	inst, err := New()
+	inst, err := New(Resources{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 }
 
 func TestHandle_MissingFunction(t *testing.T) {
-	inst, err := New()
+	inst, err := New(Resources{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

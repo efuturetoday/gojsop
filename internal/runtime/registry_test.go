@@ -15,7 +15,7 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	key := types.NamespacedName{Name: "h1"}
 
 	// First load: starts a new instance.
-	mi, restarted, err := reg.GetOrLoad(key, src, hash)
+	mi, restarted, err := reg.GetOrLoad(key, src, hash, Resources{})
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	}
 
 	// Second load with same hash: must return the same instance, state intact.
-	mi2, restarted2, err := reg.GetOrLoad(key, src, hash)
+	mi2, restarted2, err := reg.GetOrLoad(key, src, hash, Resources{})
 	if err != nil {
 		t.Fatalf("GetOrLoad #2: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 	src1 := []byte(`globalThis.tag = "v1"; function config(){return {}}`)
 	src2 := []byte(`globalThis.tag = "v2"; function config(){return {}}`)
 
-	mi, _, err := reg.GetOrLoad(key, src1, "h1")
+	mi, _, err := reg.GetOrLoad(key, src1, "h1", Resources{})
 	if err != nil {
 		t.Fatalf("load v1: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 		t.Fatalf("v1 tag: got %q", got)
 	}
 
-	mi2, restarted, err := reg.GetOrLoad(key, src2, "h2")
+	mi2, restarted, err := reg.GetOrLoad(key, src2, "h2", Resources{})
 	if err != nil {
 		t.Fatalf("load v2: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestRegistry_Drop(t *testing.T) {
 	key := types.NamespacedName{Name: "h3"}
 
 	src := []byte(`function config(){return {}}`)
-	if _, _, err := reg.GetOrLoad(key, src, "x"); err != nil {
+	if _, _, err := reg.GetOrLoad(key, src, "x", Resources{}); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if reg.Len() != 1 {
