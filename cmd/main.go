@@ -39,6 +39,7 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/controller"
 	"github.com/o-haase/gojsop/internal/dispatcher"
+	jsruntime "github.com/o-haase/gojsop/internal/runtime"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -188,9 +189,16 @@ func main() {
 	disp := dispatcher.New(dyn, dispatcher.FromMetaMapper(mgr.GetRESTMapper()))
 
 	managerCtx := ctrl.SetupSignalHandler()
+	registry := jsruntime.NewRegistry()
+	registry.Binder = &jsruntime.KubeHost{
+		Ctx:    managerCtx,
+		Dyn:    dyn,
+		Mapper: mgr.GetRESTMapper(),
+	}
 	if err := (&controller.JSHookReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
+		Registry:     registry,
 		Dispatcher:   disp,
 		SubscribeCtx: managerCtx,
 	}).SetupWithManager(mgr); err != nil {

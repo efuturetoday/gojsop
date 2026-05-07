@@ -34,6 +34,11 @@ type ManagedInstance struct {
 // reconciler holds the per-hook lock implicitly via controller-runtime's
 // per-key serialization, so contention here is rare.
 type Registry struct {
+	// Binder, if non-nil, is invoked on every newly created instance before
+	// the user's module is evaluated. Use this to register host functions
+	// (e.g. globalThis.kube) onto the runtime.
+	Binder HostBinder
+
 	mu        sync.Mutex
 	instances map[types.NamespacedName]*ManagedInstance
 }
@@ -58,6 +63,10 @@ func (r *Registry) GetOrLoad(key types.NamespacedName, source []byte, sourceHash
 	inst, err := New()
 	if err != nil {
 		return nil, false, fmt.Errorf("registry: new instance: %w", err)
+	}
+	if err := inst.BindHost(r.Binder); err != nil {
+		inst.Close()
+		return nil, false, fmt.Errorf("registry: bind host: %w", err)
 	}
 	if err := inst.LoadModule(key.Name+".js", string(source)); err != nil {
 		inst.Close()
@@ -105,6 +114,10 @@ func (r *Registry) Restart(key types.NamespacedName, source []byte, sourceHash, 
 	inst, err := New()
 	if err != nil {
 		return nil, fmt.Errorf("registry: new instance: %w", err)
+	}
+	if err := inst.BindHost(r.Binder); err != nil {
+		inst.Close()
+		return nil, fmt.Errorf("registry: bind host: %w", err)
 	}
 	if err := inst.LoadModule(key.Name+".js", string(source)); err != nil {
 		inst.Close()
