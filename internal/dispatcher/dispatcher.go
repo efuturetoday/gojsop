@@ -77,10 +77,11 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 
 	ctx, cancel := context.WithCancel(parent)
 	sub := &subscription{
-		key:    key,
-		inst:   inst,
-		queue:  workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), key.String()),
-		cancel: cancel,
+		key:     key,
+		inst:    inst,
+		queue:   workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), key.String()),
+		cancel:  cancel,
+		pending: make(map[string]jsruntime.BindingContext),
 	}
 
 	for _, b := range cfg.Kubernetes {
@@ -116,11 +117,23 @@ func (d *Dispatcher) Drop(key types.NamespacedName) {
 }
 
 // subscription is one JSHook's slice of the world.
+//
+// The workqueue holds opaque string keys ("binding|event|ns/name|uid"); the
+// associated BindingContext payload lives in `pending`. Two reasons:
+//
+//   - workqueue dedupes by hashing the queued item, but BindingContext contains
+//     maps/slices and is therefore unhashable.
+//   - keying on the object identity collapses bursts of Modified events for the
+//     same resource into a single queue entry that always carries the freshest
+//     snapshot — which is what hook authors expect.
 type subscription struct {
 	key    types.NamespacedName
 	inst   *jsruntime.Instance
 	queue  workqueue.RateLimitingInterface
 	cancel context.CancelFunc
+
+	pendMu  sync.Mutex
+	pending map[string]jsruntime.BindingContext
 }
 
 func (s *subscription) stop() {
@@ -178,12 +191,21 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 				raw = u.UnstructuredContent()
 			}
 		}
-		s.queue.Add(jsruntime.BindingContext{
+		md, _ := raw["metadata"].(map[string]any)
+		ns, _ := md["namespace"].(string)
+		name, _ := md["name"].(string)
+		uid, _ := md["uid"].(string)
+		qkey := bindingName + "|" + eventName + "|" + ns + "/" + name + "|" + uid
+		bc := jsruntime.BindingContext{
 			Binding:    bindingName,
 			Type:       "Event",
 			WatchEvent: eventName,
 			Object:     raw,
-		})
+		}
+		s.pendMu.Lock()
+		s.pending[qkey] = bc
+		s.pendMu.Unlock()
+		s.queue.Add(qkey)
 	}
 
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -209,21 +231,36 @@ func (s *subscription) runWorker(ctx context.Context) {
 		if shutdown {
 			return
 		}
-		bc, ok := item.(jsruntime.BindingContext)
+		qkey, ok := item.(string)
 		if !ok {
+			s.queue.Done(item)
+			continue
+		}
+		s.pendMu.Lock()
+		bc, present := s.pending[qkey]
+		delete(s.pending, qkey)
+		s.pendMu.Unlock()
+		if !present {
 			s.queue.Done(item)
 			continue
 		}
 		out, err := s.inst.Handle([]jsruntime.BindingContext{bc})
 		if err != nil {
 			logger.Error(err, "handle() failed", "binding", bc.Binding, "event", bc.WatchEvent)
-			s.queue.AddRateLimited(item)
+			// Re-stash payload so the retry has something to deliver — unless
+			// a fresher event for the same key already arrived.
+			s.pendMu.Lock()
+			if _, fresher := s.pending[qkey]; !fresher {
+				s.pending[qkey] = bc
+			}
+			s.pendMu.Unlock()
+			s.queue.AddRateLimited(qkey)
 		} else {
 			if out != "" {
 				logger.V(1).Info("handle() returned", "value", out)
 			}
-			s.queue.Forget(item)
+			s.queue.Forget(qkey)
 		}
-		s.queue.Done(item)
+		s.queue.Done(qkey)
 	}
 }

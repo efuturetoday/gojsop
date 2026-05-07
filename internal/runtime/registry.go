@@ -25,6 +25,11 @@ type ManagedInstance struct {
 	StartedAt    time.Time
 	RestartCount int32
 	LastReason   string
+	// Config is the result of calling config() once at load time. It's cached
+	// here so reconciles don't have to re-enter the JS runtime concurrently
+	// with the dispatcher's handle() calls — qjs is not goroutine-safe and
+	// the per-hook FIFO only serializes Handle, not LoadConfig.
+	Config *Config
 }
 
 // Registry holds the live JS instance for every JSHook the controller knows
@@ -72,11 +77,17 @@ func (r *Registry) GetOrLoad(key types.NamespacedName, source []byte, sourceHash
 		inst.Close()
 		return nil, false, fmt.Errorf("registry: load module: %w", err)
 	}
+	cfg, err := inst.LoadConfig()
+	if err != nil {
+		inst.Close()
+		return nil, false, fmt.Errorf("registry: load config: %w", err)
+	}
 
 	mi := &ManagedInstance{
 		Instance:   inst,
 		SourceHash: sourceHash,
 		StartedAt:  time.Now(),
+		Config:     cfg,
 	}
 	if ok {
 		// restart due to source change
@@ -123,6 +134,11 @@ func (r *Registry) Restart(key types.NamespacedName, source []byte, sourceHash, 
 		inst.Close()
 		return nil, fmt.Errorf("registry: load module: %w", err)
 	}
+	cfg, err := inst.LoadConfig()
+	if err != nil {
+		inst.Close()
+		return nil, fmt.Errorf("registry: load config: %w", err)
+	}
 	old.Instance.Close()
 	mi := &ManagedInstance{
 		Instance:     inst,
@@ -130,6 +146,7 @@ func (r *Registry) Restart(key types.NamespacedName, source []byte, sourceHash, 
 		StartedAt:    time.Now(),
 		RestartCount: old.RestartCount + 1,
 		LastReason:   reason,
+		Config:       cfg,
 	}
 	r.instances[key] = mi
 	return mi, nil

@@ -99,11 +99,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", mi.RestartCount, "reason", mi.LastReason)
 	}
 
-	cfg, err := mi.Instance.LoadConfig()
-	if err != nil {
-		log.Error(err, "calling config()")
-		return r.fail(ctx, &hook, fmt.Sprintf("config(): %v", err))
-	}
+	cfg := mi.Config
 
 	if r.Dispatcher != nil && (restarted || hook.Status.ObservedGeneration != hook.Generation) {
 		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, mi.Instance, cfg); err != nil {
