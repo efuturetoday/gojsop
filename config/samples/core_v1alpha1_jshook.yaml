@@ -4,33 +4,51 @@ metadata:
   labels:
     app.kubernetes.io/name: gojsop
     app.kubernetes.io/managed-by: kustomize
-  name: jshook-sample
+  name: configmap-sync
 spec:
   source:
     inline: |
-      // Top-level state — survives across handle() calls thanks to the
-      // persistent QuickJS instance.
-      var seen = 0;
+      // Persistent state — the QuickJS instance lives across reconciles, so
+      // these globals stay populated until the hook source changes.
+      var seenEvents = 0;
 
       function config() {
         return {
           configVersion: "v1",
-          onStartup: 1,
           kubernetes: [{
-            name: "watch-configmaps",
+            name: "watch-source-configmaps",
             apiVersion: "v1",
             kind: "ConfigMap",
             executeHookOnEvent: ["Added", "Modified", "Deleted"],
-            namespace: { nameSelector: { matchNames: ["default"] } },
+            // Only react to ConfigMaps that opt in via this annotation.
+            // (selector evaluation lives in JS — the dispatcher hands us
+            //  every ConfigMap event and we filter here.)
           }],
         };
       }
 
       function handle(ctx) {
         for (const evt of ctx) {
-          seen++;
-          // host-bound logger; arrives once host_log.go is wired in.
-          // log.info("event", evt.type, "for", evt.object?.metadata?.name, "total seen:", seen);
+          seenEvents++;
+          const obj = evt.object;
+          if (!obj || !obj.metadata) continue;
+          const ann = obj.metadata.annotations || {};
+          const targets = ann["gojsop.io/sync-to"];
+          if (!targets) continue;
+          const namespaces = targets.split(",").map(s => s.trim()).filter(Boolean);
+          for (const ns of namespaces) {
+            if (ns === obj.metadata.namespace) continue; // never copy onto self
+            kube.apply({
+              apiVersion: "v1",
+              kind: "ConfigMap",
+              metadata: {
+                name: obj.metadata.name,
+                namespace: ns,
+                labels: { "gojsop.io/synced-from": obj.metadata.namespace },
+              },
+              data: obj.data || {},
+            });
+          }
         }
       }
   resources:

@@ -63,6 +63,9 @@ type JSHookReconciler struct {
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/finalizers,verbs=update
+// MVP: hooks can watch and mutate any resource. Phase 2 will narrow this
+// based on the bindings each hook actually declares (per-hook ServiceAccount).
+// +kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch;create;update;patch;delete
 
 func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).WithValues("jshook", req.Name)
