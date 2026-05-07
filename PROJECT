@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: gojsop
 repo: github.com/o-haase/gojsop
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: gojsop.io
+  group: core
+  kind: JSHook
+  path: github.com/o-haase/gojsop/api/v1alpha1
+  version: v1alpha1
 version: "3"

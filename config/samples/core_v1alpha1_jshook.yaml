@@ -1,0 +1,9 @@
+apiVersion: core.gojsop.io/v1alpha1
+kind: JSHook
+metadata:
+  labels:
+    app.kubernetes.io/name: gojsop
+    app.kubernetes.io/managed-by: kustomize
+  name: jshook-sample
+spec:
+  # TODO(user): Add fields here
