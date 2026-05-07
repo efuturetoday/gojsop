@@ -29,6 +29,7 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/hooks"
+	jsruntime "github.com/o-haase/gojsop/internal/runtime"
 )
 
 var _ = Describe("JSHook Controller", func() {
@@ -80,9 +81,10 @@ var _ = Describe("JSHook Controller", func() {
 		It("should reconcile and write resolved bindings into status", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &JSHookReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-				Loader: hooks.NewChain(hooks.InlineLoader{}),
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Loader:   hooks.NewChain(hooks.InlineLoader{}),
+				Registry: jsruntime.NewRegistry(),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

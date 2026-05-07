@@ -35,10 +35,10 @@ import (
 
 // JSHookReconciler reconciles a JSHook object.
 //
-// MVP behavior: on every reconcile we re-load the source, instantiate a fresh
-// QuickJS runtime, call config(), and write the resolved bindings back into
-// status. The persistent-instance registry replaces the per-reconcile
-// instantiation in the next iteration (task: persistent registry).
+// Each JSHook is backed by exactly one persistent QuickJS instance held in
+// Registry. The instance survives across reconciles so that JS module-top-level
+// state (globalThis caches, counters, expensive setups) persists. A change in
+// spec.source's sha256 triggers a controlled restart; deletion drops it.
 type JSHookReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -46,6 +46,10 @@ type JSHookReconciler struct {
 	// Loader is the chain that resolves spec.source to JS bytes.
 	// Defaults to inline-only via SetupWithManager when nil.
 	Loader *hooks.Chain
+
+	// Registry owns the per-hook persistent JS instances.
+	// Defaults to a fresh registry via SetupWithManager when nil.
+	Registry *jsruntime.Registry
 }
 
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks,verbs=get;list;watch;create;update;patch;delete
@@ -58,6 +62,8 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var hook corev1alpha1.JSHook
 	if err := r.Get(ctx, req.NamespacedName, &hook); err != nil {
 		if apierrors.IsNotFound(err) {
+			// Hook was deleted — close and forget its persistent instance.
+			r.Registry.Drop(req.NamespacedName)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
@@ -69,36 +75,32 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.fail(ctx, &hook, fmt.Sprintf("source: %v", err))
 	}
 	srcHash := hooks.Hash(source)
-	log.Info("loaded hook source", "bytes", len(source), "hash", srcHash[:12])
 
-	inst, err := jsruntime.New()
+	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, source, srcHash)
 	if err != nil {
-		return r.fail(ctx, &hook, fmt.Sprintf("engine init: %v", err))
+		log.Error(err, "registry GetOrLoad")
+		return r.fail(ctx, &hook, fmt.Sprintf("instance: %v", err))
 	}
-	defer inst.Close() // MVP: instance is per-reconcile until the registry lands
-
-	if err := inst.LoadModule(req.Name+".js", string(source)); err != nil {
-		log.Error(err, "evaluating module")
-		return r.fail(ctx, &hook, fmt.Sprintf("module eval: %v", err))
+	if restarted {
+		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", mi.RestartCount, "reason", mi.LastReason)
 	}
 
-	cfg, err := inst.LoadConfig()
+	cfg, err := mi.Instance.LoadConfig()
 	if err != nil {
 		log.Error(err, "calling config()")
 		return r.fail(ctx, &hook, fmt.Sprintf("config(): %v", err))
 	}
 
 	bindings := summarizeBindings(cfg)
-	log.Info("hook configured", "bindings", bindings)
-
-	now := metav1.NewTime(time.Now())
+	startedAt := metav1.NewTime(mi.StartedAt)
 	hook.Status.Phase = "Ready"
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.Bindings = bindings
 	hook.Status.Instance = &corev1alpha1.JSHookInstanceStatus{
-		StartedAt:  &now,
-		SourceHash: srcHash,
-		// RestartCount stays 0 in this MVP; tracked properly by the registry.
+		StartedAt:         &startedAt,
+		SourceHash:        srcHash,
+		RestartCount:      mi.RestartCount,
+		LastRestartReason: mi.LastReason,
 	}
 	if err := r.Status().Update(ctx, &hook); err != nil {
 		return ctrl.Result{}, err
@@ -139,6 +141,9 @@ func summarizeBindings(cfg *jsruntime.Config) []string {
 func (r *JSHookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Loader == nil {
 		r.Loader = hooks.NewChain(hooks.InlineLoader{})
+	}
+	if r.Registry == nil {
+		r.Registry = jsruntime.NewRegistry()
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSHook{}).
