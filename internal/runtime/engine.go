@@ -55,6 +55,35 @@ func (i *Instance) LoadModule(name, source string) error {
 	return err
 }
 
+// Handle invokes the hook's exported `handle(ctx)` function with a
+// BindingContext array. The array is shipped as JSON via globalThis and
+// awaited inside an IIFE so async hooks work transparently.
+//
+// Returns the JSON form of whatever handle returned (or "" if it returned
+// undefined). Errors from inside JS surface as Go errors.
+func (i *Instance) Handle(bindingCtx []BindingContext) (string, error) {
+	raw, err := json.Marshal(bindingCtx)
+	if err != nil {
+		return "", fmt.Errorf("marshal bindingCtx: %w", err)
+	}
+	if _, err := i.Eval("__handle_setup__", "globalThis.__ctx = "+string(raw)+";"); err != nil {
+		return "", fmt.Errorf("seeding ctx: %w", err)
+	}
+	const call = `(() => {
+		if (typeof handle !== "function") {
+			throw new Error("hook does not export a handle() function");
+		}
+		const r = handle(globalThis.__ctx);
+		// Promise.resolve().then() returns a Promise; qjs awaits it transparently.
+		return r === undefined ? "" : JSON.stringify(r);
+	})()`
+	out, err := i.Eval("__handle_call__", call)
+	if err != nil {
+		return "", fmt.Errorf("calling handle(): %w", err)
+	}
+	return out, nil
+}
+
 // LoadConfig calls the hook's exported `config()` function and decodes the
 // returned object as our runtime.Config. The hook MUST export config() —
 // missing or non-function returns an error (we can't subscribe blindly).
