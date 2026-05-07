@@ -20,38 +20,119 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// JSHookSpec defines the desired state of JSHook
-type JSHookSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of JSHook. Edit jshook_types.go to remove/update
+// JSHookSource describes where the JavaScript module body comes from.
+// Exactly one of the three fields must be set; the controller validates that.
+type JSHookSource struct {
+	// Inline embeds the JS module text directly into the JSHook resource.
+	// Convenient for small hooks and demos.
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Inline string `json:"inline,omitempty"`
+
+	// ConfigMapRef pulls the JS module text from a key in a ConfigMap.
+	// +optional
+	ConfigMapRef *ConfigMapKeyRef `json:"configMapRef,omitempty"`
+
+	// OCIRef pulls the JS module from an OCI artifact (e.g. ghcr.io/foo/hook:v1).
+	// The artifact must contain a single layer whose body is the JS source.
+	// +optional
+	OCIRef string `json:"ociRef,omitempty"`
+}
+
+// ConfigMapKeyRef points to a single key inside a ConfigMap.
+type ConfigMapKeyRef struct {
+	// +required
+	Name string `json:"name"`
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+	// Key inside the ConfigMap. Defaults to "hook.js".
+	// +optional
+	Key string `json:"key,omitempty"`
+}
+
+// JSHookResources caps what the persistent JS instance is allowed to consume.
+type JSHookResources struct {
+	// MemoryMB is the hard limit on the QuickJS heap in megabytes. Default 32.
+	// +optional
+	MemoryMB int32 `json:"memoryMB,omitempty"`
+
+	// TimeoutSeconds bounds a single handle() call. Default 30.
+	// On timeout the call is interrupted; the persistent instance survives
+	// unless timeouts repeat (see status.instance.lastRestartReason).
+	// +optional
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
+}
+
+// JSHookSpec defines the desired state of JSHook.
+type JSHookSpec struct {
+	// Source is where to load the hook's JS module from.
+	// +required
+	Source JSHookSource `json:"source"`
+
+	// Resources caps memory and per-call execution time of the JS instance.
+	// +optional
+	Resources *JSHookResources `json:"resources,omitempty"`
+}
+
+// JSHookInstanceStatus reports the lifecycle state of the persistent
+// JavaScript instance backing this hook. Users rely on this to know whether
+// their globalThis state is still alive.
+type JSHookInstanceStatus struct {
+	// StartedAt is when the current persistent instance was created.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// SourceHash is a sha256 of the loaded JS source. A change here triggers
+	// a controlled instance restart.
+	// +optional
+	SourceHash string `json:"sourceHash,omitempty"`
+
+	// RestartCount counts how often the persistent instance has been replaced
+	// since the JSHook was created.
+	// +optional
+	RestartCount int32 `json:"restartCount,omitempty"`
+
+	// LastRestartReason is one of: source-changed, memory-limit, panic,
+	// timeout-streak, manual.
+	// +optional
+	LastRestartReason string `json:"lastRestartReason,omitempty"`
+}
+
+// JSHookExecutionStatus reports the outcome of the most recent handle() call.
+type JSHookExecutionStatus struct {
+	// +optional
+	Time *metav1.Time `json:"time,omitempty"`
+	// +optional
+	DurationMs int64 `json:"durationMs,omitempty"`
+	// Error is non-empty if the last call failed.
+	// +optional
+	Error string `json:"error,omitempty"`
 }
 
 // JSHookStatus defines the observed state of JSHook.
 type JSHookStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// Phase is a coarse rollup: Pending, Ready, Failed.
+	// +optional
+	Phase string `json:"phase,omitempty"`
 
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// ObservedGeneration is the generation last reconciled by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// conditions represent the current state of the JSHook resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// Bindings are the resolved bindings the hook declared in its config()
+	// call (kubernetes/schedule/onStartup), echoed here so users can see what
+	// the hook is subscribed to.
+	// +optional
+	Bindings []string `json:"bindings,omitempty"`
+
+	// Instance reports the lifecycle of the persistent JS runtime.
+	// +optional
+	Instance *JSHookInstanceStatus `json:"instance,omitempty"`
+
+	// LastExecution reports the most recent handle() call.
+	// +optional
+	LastExecution *JSHookExecutionStatus `json:"lastExecution,omitempty"`
+
+	// Conditions follows standard Kubernetes condition conventions.
 	// +listType=map
 	// +listMapKey=type
 	// +optional
@@ -60,8 +141,18 @@ type JSHookStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Cluster,shortName=jshook
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Bindings",type=integer,JSONPath=`.status.bindings[*]`,priority=1
+// +kubebuilder:printcolumn:name="Restarts",type=integer,JSONPath=`.status.instance.restartCount`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// JSHook is the Schema for the jshooks API
+// JSHook declares a JavaScript-based Kubernetes hook. The controller loads
+// the module, calls its config() export to learn which events to subscribe to,
+// then dispatches matching events to its handle() export.
+//
+// JSHook is cluster-scoped because hooks typically observe resources across
+// namespaces.
 type JSHook struct {
 	metav1.TypeMeta `json:",inline"`
 

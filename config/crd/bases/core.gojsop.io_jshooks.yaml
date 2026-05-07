@@ -11,13 +11,35 @@ spec:
     kind: JSHook
     listKind: JSHookList
     plural: jshooks
+    shortNames:
+    - jshook
     singular: jshook
-  scope: Namespaced
+  scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.bindings[*]
+      name: Bindings
+      priority: 1
+      type: integer
+    - jsonPath: .status.instance.restartCount
+      name: Restarts
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: JSHook is the Schema for the jshooks API
+        description: |-
+          JSHook declares a JavaScript-based Kubernetes hook. The controller loads
+          the module, calls its config() export to learn which events to subscribe to,
+          then dispatches matching events to its handle() export.
+
+          JSHook is cluster-scoped because hooks typically observe resources across
+          namespaces.
         properties:
           apiVersion:
             description: |-
@@ -39,25 +61,67 @@ spec:
           spec:
             description: spec defines the desired state of JSHook
             properties:
-              foo:
-                description: foo is an example field of JSHook. Edit jshook_types.go
-                  to remove/update
-                type: string
+              resources:
+                description: Resources caps memory and per-call execution time of
+                  the JS instance.
+                properties:
+                  memoryMB:
+                    description: MemoryMB is the hard limit on the QuickJS heap in
+                      megabytes. Default 32.
+                    format: int32
+                    type: integer
+                  timeoutSeconds:
+                    description: |-
+                      TimeoutSeconds bounds a single handle() call. Default 30.
+                      On timeout the call is interrupted; the persistent instance survives
+                      unless timeouts repeat (see status.instance.lastRestartReason).
+                    format: int32
+                    type: integer
+                type: object
+              source:
+                description: Source is where to load the hook's JS module from.
+                properties:
+                  configMapRef:
+                    description: ConfigMapRef pulls the JS module text from a key
+                      in a ConfigMap.
+                    properties:
+                      key:
+                        description: Key inside the ConfigMap. Defaults to "hook.js".
+                        type: string
+                      name:
+                        type: string
+                      namespace:
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  inline:
+                    description: |-
+                      Inline embeds the JS module text directly into the JSHook resource.
+                      Convenient for small hooks and demos.
+                    type: string
+                  ociRef:
+                    description: |-
+                      OCIRef pulls the JS module from an OCI artifact (e.g. ghcr.io/foo/hook:v1).
+                      The artifact must contain a single layer whose body is the JS source.
+                    type: string
+                type: object
+            required:
+            - source
             type: object
           status:
             description: status defines the observed state of JSHook
             properties:
-              conditions:
+              bindings:
                 description: |-
-                  conditions represent the current state of the JSHook resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                  Bindings are the resolved bindings the hook declared in its config()
+                  call (kubernetes/schedule/onStartup), echoed here so users can see what
+                  the hook is subscribed to.
+                items:
+                  type: string
+                type: array
+              conditions:
+                description: Conditions follows standard Kubernetes condition conventions.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -116,6 +180,52 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              instance:
+                description: Instance reports the lifecycle of the persistent JS runtime.
+                properties:
+                  lastRestartReason:
+                    description: |-
+                      LastRestartReason is one of: source-changed, memory-limit, panic,
+                      timeout-streak, manual.
+                    type: string
+                  restartCount:
+                    description: |-
+                      RestartCount counts how often the persistent instance has been replaced
+                      since the JSHook was created.
+                    format: int32
+                    type: integer
+                  sourceHash:
+                    description: |-
+                      SourceHash is a sha256 of the loaded JS source. A change here triggers
+                      a controlled instance restart.
+                    type: string
+                  startedAt:
+                    description: StartedAt is when the current persistent instance
+                      was created.
+                    format: date-time
+                    type: string
+                type: object
+              lastExecution:
+                description: LastExecution reports the most recent handle() call.
+                properties:
+                  durationMs:
+                    format: int64
+                    type: integer
+                  error:
+                    description: Error is non-empty if the last call failed.
+                    type: string
+                  time:
+                    format: date-time
+                    type: string
+                type: object
+              observedGeneration:
+                description: ObservedGeneration is the generation last reconciled
+                  by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: 'Phase is a coarse rollup: Pending, Ready, Failed.'
+                type: string
             type: object
         required:
         - spec
