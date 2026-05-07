@@ -72,17 +72,13 @@ func (h *KubeHost) resourceFor(apiVersion, kind, namespace string) (dynamic.Reso
 // apply performs server-side-apply of the JS object: kube.apply({apiVersion,
 // kind, metadata:{name,namespace}, ...}). Returns the persisted object.
 func (h *KubeHost) apply(t *qjs.This) (*qjs.Value, error) {
-	args := t.Args()
-	if len(args) == 0 {
-		return nil, fmt.Errorf("kube.apply: missing object argument")
-	}
-	raw, err := args[0].JSONStringify()
+	raw, err := stringifyArg(t, "kube.apply")
 	if err != nil {
-		return nil, fmt.Errorf("kube.apply: stringify arg: %w", err)
+		return nil, err
 	}
 	obj := &unstructured.Unstructured{}
 	if err := obj.UnmarshalJSON([]byte(raw)); err != nil {
-		return nil, fmt.Errorf("kube.apply: parse object: %w", err)
+		return nil, fmt.Errorf("kube.apply: parse object: %w (raw=%q)", err, raw)
 	}
 	if obj.GetAPIVersion() == "" || obj.GetKind() == "" || obj.GetName() == "" {
 		return nil, fmt.Errorf("kube.apply: object requires apiVersion, kind and metadata.name")
@@ -129,11 +125,7 @@ type kubeRef struct {
 
 // get returns the named resource, or null if it does not exist.
 func (h *KubeHost) get(t *qjs.This) (*qjs.Value, error) {
-	args := t.Args()
-	if len(args) == 0 {
-		return nil, fmt.Errorf("kube.get: missing argument")
-	}
-	raw, err := args[0].JSONStringify()
+	raw, err := stringifyArg(t, "kube.get")
 	if err != nil {
 		return nil, err
 	}
@@ -168,11 +160,7 @@ type kubeListSpec struct {
 
 // list returns an array of objects matching the selector.
 func (h *KubeHost) list(t *qjs.This) (*qjs.Value, error) {
-	args := t.Args()
-	if len(args) == 0 {
-		return nil, fmt.Errorf("kube.list: missing argument")
-	}
-	raw, err := args[0].JSONStringify()
+	raw, err := stringifyArg(t, "kube.list")
 	if err != nil {
 		return nil, err
 	}
@@ -207,11 +195,7 @@ func (h *KubeHost) list(t *qjs.This) (*qjs.Value, error) {
 
 // del removes the named resource. Missing-resource is treated as success.
 func (h *KubeHost) del(t *qjs.This) (*qjs.Value, error) {
-	args := t.Args()
-	if len(args) == 0 {
-		return nil, fmt.Errorf("kube.delete: missing argument")
-	}
-	raw, err := args[0].JSONStringify()
+	raw, err := stringifyArg(t, "kube.delete")
 	if err != nil {
 		return nil, err
 	}
@@ -230,6 +214,63 @@ func (h *KubeHost) del(t *qjs.This) (*qjs.Value, error) {
 		return nil, fmt.Errorf("kube.delete: %w", err)
 	}
 	return t.Context().NewBool(true), nil
+}
+
+// stringifyArg pulls args[0] off `t` and JSONStringifies it. We've seen a rare
+// production case where JSONStringify returns "" for what looks like a normal
+// object literal — likely a qjs handle-lifetime quirk under GC pressure. As a
+// fallback we route the conversion through the JS JSON global, which uses the
+// argument by reference instead of going through the cloned handle.
+func stringifyArg(t *qjs.This, fnName string) (string, error) {
+	args := t.Args()
+	if len(args) == 0 {
+		return "", fmt.Errorf("%s: missing object argument", fnName)
+	}
+	raw, err := args[0].JSONStringify()
+	if err != nil {
+		return "", fmt.Errorf("%s: stringify arg: %w", fnName, err)
+	}
+	if raw != "" {
+		return raw, nil
+	}
+	// Fallback: invoke JSON.stringify(arg) via the JS global. This avoids the
+	// cloned-handle path that occasionally returns "".
+	ctx := t.Context()
+	jsonGlobal := ctx.Global().GetPropertyStr("JSON")
+	if jsonGlobal == nil || jsonGlobal.IsUndefined() {
+		return "", fmt.Errorf("%s: stringify arg returned empty and no JSON global available", fnName)
+	}
+	res, err := jsonGlobal.Invoke("stringify", args[0])
+	if err != nil {
+		return "", fmt.Errorf("%s: stringify fallback: %w", fnName, err)
+	}
+	defer res.Free()
+	out := res.String()
+	if out == "" || out == "undefined" {
+		return "", fmt.Errorf("%s: argument serialised to undefined (typeof=%s)", fnName, jsTypeOf(args[0]))
+	}
+	return out, nil
+}
+
+func jsTypeOf(v *qjs.Value) string {
+	switch {
+	case v == nil || v.IsUndefined():
+		return "undefined"
+	case v.IsNull():
+		return "null"
+	case v.IsString():
+		return "string"
+	case v.IsNumber():
+		return "number"
+	case v.IsBool():
+		return "boolean"
+	case v.IsArray():
+		return "array"
+	case v.IsObject():
+		return "object"
+	default:
+		return "unknown"
+	}
 }
 
 func objToJS(ctx *qjs.Context, obj *unstructured.Unstructured) (*qjs.Value, error) {

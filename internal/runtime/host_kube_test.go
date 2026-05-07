@@ -134,6 +134,70 @@ func TestKubeHost_ListReturnsItems(t *testing.T) {
 	}
 }
 
+// TestKubeHost_RepeatedApplyInLoop reproduces the JS-side pattern that the
+// configmap-sync demo uses: a single handle() invocation calls kube.apply many
+// times in a row. This guards against an issue we saw in production where the
+// Nth call would receive an empty JSONStringify of args[0].
+func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
+	h := newKubeHost(t)
+	// Mirrors the configmap-sync demo: handle() reads evt.object.data and
+	// passes a derived object into kube.apply. This is the path that surfaced
+	// the empty-JSONStringify bug in production.
+	const src = `
+		function handle(ctx) {
+			for (const evt of ctx) {
+				const obj = evt.object;
+				const ann = (obj.metadata && obj.metadata.annotations) || {};
+				const targets = (ann["sync-to"] || "").split(",").filter(Boolean);
+				for (const ns of targets) {
+					kube.apply({
+						apiVersion: "v1", kind: "ConfigMap",
+						metadata: { name: obj.metadata.name, namespace: ns },
+						data: obj.data || {},
+					});
+				}
+			}
+		}
+	`
+	inst := runHook(t, h, src)
+
+	// Run handle() many times with realistic BindingContext payloads.
+	for i := 0; i < 10; i++ {
+		bc := []BindingContext{{
+			Binding:    "watch",
+			Type:       "Event",
+			WatchEvent: "Modified",
+			Object: map[string]any{
+				"apiVersion": "v1", "kind": "ConfigMap",
+				"metadata": map[string]any{
+					"name":      "src",
+					"namespace": "default",
+					"annotations": map[string]any{
+						"sync-to": "ns-a,ns-b,ns-c,ns-d,ns-e",
+					},
+				},
+				"data": map[string]any{"color": "blue", "n": "v" + string(rune('0'+i))},
+			},
+		}}
+		if _, err := inst.Handle(bc); err != nil {
+			t.Fatalf("Handle iteration %d: %v", i, err)
+		}
+	}
+	// Verify all 5 ConfigMaps exist with the latest data values.
+	for _, ns := range []string{"ns-a", "ns-b", "ns-c", "ns-d", "ns-e"} {
+		got, err := h.Dyn.Resource(schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}).
+			Namespace(ns).Get(context.Background(), "src", metav1.GetOptions{})
+		if err != nil {
+			t.Errorf("expected configmap src in %s, got %v", ns, err)
+			continue
+		}
+		data, _, _ := unstructured.NestedStringMap(got.Object, "data")
+		if data["n"] != "v9" {
+			t.Errorf("ns %s: expected data.n=v9 (last iteration), got %v", ns, data)
+		}
+	}
+}
+
 func TestKubeHost_DeleteRemovesResource(t *testing.T) {
 	cm := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",
