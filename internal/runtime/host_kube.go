@@ -30,6 +30,23 @@ type KubeHost struct {
 	Mapper meta.RESTMapper
 }
 
+// kubeRef identifies a single resource — used by kube.get and kube.delete.
+type kubeRef struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Namespace  string `json:"namespace"`
+}
+
+// kubeListSpec is the argument shape for kube.list.
+type kubeListSpec struct {
+	APIVersion    string `json:"apiVersion"`
+	Kind          string `json:"kind"`
+	Namespace     string `json:"namespace"`
+	LabelSelector string `json:"labelSelector"`
+	FieldSelector string `json:"fieldSelector"`
+}
+
 // Bind installs the kube.* functions on globalThis. Implements HostBinder.
 func (h *KubeHost) Bind(ctx *qjs.Context) error {
 	if h.Dyn == nil || h.Mapper == nil {
@@ -70,11 +87,16 @@ func (h *KubeHost) resourceFor(apiVersion, kind, namespace string) (dynamic.Reso
 
 // apply performs a Get-then-Create-or-MergePatch of the JS object:
 // kube.apply({apiVersion, kind, metadata:{name,namespace}, ...}). Returns the
-// persisted object.
+// persisted object. The body is free-form K8s JSON, so we keep it as a generic
+// map and feed it directly into unstructured.Unstructured.
 func (h *KubeHost) apply(t *qjs.This) (*qjs.Value, error) {
-	m, err := argAsMap(t, "kube.apply")
+	args := t.Args()
+	if len(args) == 0 {
+		return nil, fmt.Errorf("kube.apply: missing object argument")
+	}
+	m, err := qjs.JsObjectOrMapToGoMap[map[string]any](args[0])
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("kube.apply: convert arg: %w", err)
 	}
 	obj := &unstructured.Unstructured{Object: m}
 	if obj.GetAPIVersion() == "" || obj.GetKind() == "" || obj.GetName() == "" {
@@ -115,29 +137,18 @@ func (h *KubeHost) apply(t *qjs.This) (*qjs.Value, error) {
 
 // get returns the named resource, or null if it does not exist.
 func (h *KubeHost) get(t *qjs.This) (*qjs.Value, error) {
-	m, err := argAsMap(t, "kube.get")
+	ref, err := argAsStruct[kubeRef](t, "kube.get")
 	if err != nil {
 		return nil, err
 	}
-	apiVersion, err := stringField(m, "apiVersion", "kube.get", true)
+	if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
+		return nil, fmt.Errorf("kube.get: apiVersion, kind and name are required")
+	}
+	rc, err := h.resourceFor(ref.APIVersion, ref.Kind, ref.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	kind, err := stringField(m, "kind", "kube.get", true)
-	if err != nil {
-		return nil, err
-	}
-	name, err := stringField(m, "name", "kube.get", true)
-	if err != nil {
-		return nil, err
-	}
-	namespace, _ := stringField(m, "namespace", "kube.get", false)
-
-	rc, err := h.resourceFor(apiVersion, kind, namespace)
-	if err != nil {
-		return nil, err
-	}
-	res, err := rc.Get(h.callCtx(), name, metav1.GetOptions{})
+	res, err := rc.Get(h.callCtx(), ref.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return t.Context().NewNull(), nil
@@ -149,29 +160,20 @@ func (h *KubeHost) get(t *qjs.This) (*qjs.Value, error) {
 
 // list returns an array of objects matching the selector.
 func (h *KubeHost) list(t *qjs.This) (*qjs.Value, error) {
-	m, err := argAsMap(t, "kube.list")
+	spec, err := argAsStruct[kubeListSpec](t, "kube.list")
 	if err != nil {
 		return nil, err
 	}
-	apiVersion, err := stringField(m, "apiVersion", "kube.list", true)
-	if err != nil {
-		return nil, err
+	if spec.APIVersion == "" || spec.Kind == "" {
+		return nil, fmt.Errorf("kube.list: apiVersion and kind are required")
 	}
-	kind, err := stringField(m, "kind", "kube.list", true)
-	if err != nil {
-		return nil, err
-	}
-	namespace, _ := stringField(m, "namespace", "kube.list", false)
-	labelSelector, _ := stringField(m, "labelSelector", "kube.list", false)
-	fieldSelector, _ := stringField(m, "fieldSelector", "kube.list", false)
-
-	rc, err := h.resourceFor(apiVersion, kind, namespace)
+	rc, err := h.resourceFor(spec.APIVersion, spec.Kind, spec.Namespace)
 	if err != nil {
 		return nil, err
 	}
 	res, err := rc.List(h.callCtx(), metav1.ListOptions{
-		LabelSelector: labelSelector,
-		FieldSelector: fieldSelector,
+		LabelSelector: spec.LabelSelector,
+		FieldSelector: spec.FieldSelector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kube.list: %w", err)
@@ -189,62 +191,36 @@ func (h *KubeHost) list(t *qjs.This) (*qjs.Value, error) {
 
 // del removes the named resource. Missing-resource is treated as success.
 func (h *KubeHost) del(t *qjs.This) (*qjs.Value, error) {
-	m, err := argAsMap(t, "kube.delete")
+	ref, err := argAsStruct[kubeRef](t, "kube.delete")
 	if err != nil {
 		return nil, err
 	}
-	apiVersion, err := stringField(m, "apiVersion", "kube.delete", true)
+	if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
+		return nil, fmt.Errorf("kube.delete: apiVersion, kind and name are required")
+	}
+	rc, err := h.resourceFor(ref.APIVersion, ref.Kind, ref.Namespace)
 	if err != nil {
 		return nil, err
 	}
-	kind, err := stringField(m, "kind", "kube.delete", true)
-	if err != nil {
-		return nil, err
-	}
-	name, err := stringField(m, "name", "kube.delete", true)
-	if err != nil {
-		return nil, err
-	}
-	namespace, _ := stringField(m, "namespace", "kube.delete", false)
-
-	rc, err := h.resourceFor(apiVersion, kind, namespace)
-	if err != nil {
-		return nil, err
-	}
-	if err := rc.Delete(h.callCtx(), name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	if err := rc.Delete(h.callCtx(), ref.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("kube.delete: %w", err)
 	}
 	return t.Context().NewBool(true), nil
 }
 
-// argAsMap pulls args[0] off `t` and converts it directly to a Go map via the
-// canonical qjs helper — no JSON detour, no handle leaks.
-func argAsMap(t *qjs.This, fnName string) (map[string]any, error) {
+// argAsStruct decodes args[0] directly into a typed Go struct using qjs's
+// canonical helper. Field mapping honours `json:"..."` tags.
+func argAsStruct[T any](t *qjs.This, fnName string) (T, error) {
+	var zero T
 	args := t.Args()
 	if len(args) == 0 {
-		return nil, fmt.Errorf("%s: missing object argument", fnName)
+		return zero, fmt.Errorf("%s: missing object argument", fnName)
 	}
-	m, err := qjs.JsObjectOrMapToGoMap[map[string]any](args[0])
+	v, err := qjs.JsObjectOrMapToGoStruct[T](args[0])
 	if err != nil {
-		return nil, fmt.Errorf("%s: convert arg: %w", fnName, err)
+		return zero, fmt.Errorf("%s: convert arg: %w", fnName, err)
 	}
-	return m, nil
-}
-
-// stringField reads a string field from a map with a clear error when required.
-func stringField(m map[string]any, key, fnName string, required bool) (string, error) {
-	v, ok := m[key]
-	if !ok || v == nil {
-		if required {
-			return "", fmt.Errorf("%s: %s is required", fnName, key)
-		}
-		return "", nil
-	}
-	s, ok := v.(string)
-	if !ok {
-		return "", fmt.Errorf("%s: %s must be a string, got %T", fnName, key, v)
-	}
-	return s, nil
+	return v, nil
 }
 
 // objToJS hands an unstructured object back to JS as a real JS object via
