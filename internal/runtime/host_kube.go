@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/fastschema/qjs"
@@ -69,17 +68,15 @@ func (h *KubeHost) resourceFor(apiVersion, kind, namespace string) (dynamic.Reso
 	return h.Dyn.Resource(rm.Resource), nil
 }
 
-// apply performs server-side-apply of the JS object: kube.apply({apiVersion,
-// kind, metadata:{name,namespace}, ...}). Returns the persisted object.
+// apply performs a Get-then-Create-or-MergePatch of the JS object:
+// kube.apply({apiVersion, kind, metadata:{name,namespace}, ...}). Returns the
+// persisted object.
 func (h *KubeHost) apply(t *qjs.This) (*qjs.Value, error) {
-	raw, err := stringifyArg(t, "kube.apply")
+	m, err := argAsMap(t, "kube.apply")
 	if err != nil {
 		return nil, err
 	}
-	obj := &unstructured.Unstructured{}
-	if err := obj.UnmarshalJSON([]byte(raw)); err != nil {
-		return nil, fmt.Errorf("kube.apply: parse object: %w (raw=%q)", err, raw)
-	}
+	obj := &unstructured.Unstructured{Object: m}
 	if obj.GetAPIVersion() == "" || obj.GetKind() == "" || obj.GetName() == "" {
 		return nil, fmt.Errorf("kube.apply: object requires apiVersion, kind and metadata.name")
 	}
@@ -103,7 +100,7 @@ func (h *KubeHost) apply(t *qjs.This) (*qjs.Value, error) {
 	}
 	// Preserve the existing resourceVersion so the merge is conflict-safe.
 	obj.SetResourceVersion(existing.GetResourceVersion())
-	data, err := json.Marshal(obj.Object)
+	data, err := obj.MarshalJSON()
 	if err != nil {
 		return nil, fmt.Errorf("kube.apply: marshal: %w", err)
 	}
@@ -116,31 +113,31 @@ func (h *KubeHost) apply(t *qjs.This) (*qjs.Value, error) {
 	return objToJS(t.Context(), res)
 }
 
-type kubeRef struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"`
-	Namespace  string `json:"namespace"`
-}
-
 // get returns the named resource, or null if it does not exist.
 func (h *KubeHost) get(t *qjs.This) (*qjs.Value, error) {
-	raw, err := stringifyArg(t, "kube.get")
+	m, err := argAsMap(t, "kube.get")
 	if err != nil {
 		return nil, err
 	}
-	var ref kubeRef
-	if err := json.Unmarshal([]byte(raw), &ref); err != nil {
-		return nil, fmt.Errorf("kube.get: parse argument: %w", err)
-	}
-	if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
-		return nil, fmt.Errorf("kube.get: apiVersion, kind and name are required")
-	}
-	rc, err := h.resourceFor(ref.APIVersion, ref.Kind, ref.Namespace)
+	apiVersion, err := stringField(m, "apiVersion", "kube.get", true)
 	if err != nil {
 		return nil, err
 	}
-	res, err := rc.Get(h.callCtx(), ref.Name, metav1.GetOptions{})
+	kind, err := stringField(m, "kind", "kube.get", true)
+	if err != nil {
+		return nil, err
+	}
+	name, err := stringField(m, "name", "kube.get", true)
+	if err != nil {
+		return nil, err
+	}
+	namespace, _ := stringField(m, "namespace", "kube.get", false)
+
+	rc, err := h.resourceFor(apiVersion, kind, namespace)
+	if err != nil {
+		return nil, err
+	}
+	res, err := rc.Get(h.callCtx(), name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return t.Context().NewNull(), nil
@@ -150,34 +147,31 @@ func (h *KubeHost) get(t *qjs.This) (*qjs.Value, error) {
 	return objToJS(t.Context(), res)
 }
 
-type kubeListSpec struct {
-	APIVersion     string `json:"apiVersion"`
-	Kind           string `json:"kind"`
-	Namespace      string `json:"namespace"`
-	LabelSelector  string `json:"labelSelector"`
-	FieldSelector  string `json:"fieldSelector"`
-}
-
 // list returns an array of objects matching the selector.
 func (h *KubeHost) list(t *qjs.This) (*qjs.Value, error) {
-	raw, err := stringifyArg(t, "kube.list")
+	m, err := argAsMap(t, "kube.list")
 	if err != nil {
 		return nil, err
 	}
-	var spec kubeListSpec
-	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
-		return nil, fmt.Errorf("kube.list: parse argument: %w", err)
+	apiVersion, err := stringField(m, "apiVersion", "kube.list", true)
+	if err != nil {
+		return nil, err
 	}
-	if spec.APIVersion == "" || spec.Kind == "" {
-		return nil, fmt.Errorf("kube.list: apiVersion and kind are required")
+	kind, err := stringField(m, "kind", "kube.list", true)
+	if err != nil {
+		return nil, err
 	}
-	rc, err := h.resourceFor(spec.APIVersion, spec.Kind, spec.Namespace)
+	namespace, _ := stringField(m, "namespace", "kube.list", false)
+	labelSelector, _ := stringField(m, "labelSelector", "kube.list", false)
+	fieldSelector, _ := stringField(m, "fieldSelector", "kube.list", false)
+
+	rc, err := h.resourceFor(apiVersion, kind, namespace)
 	if err != nil {
 		return nil, err
 	}
 	res, err := rc.List(h.callCtx(), metav1.ListOptions{
-		LabelSelector: spec.LabelSelector,
-		FieldSelector: spec.FieldSelector,
+		LabelSelector: labelSelector,
+		FieldSelector: fieldSelector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("kube.list: %w", err)
@@ -186,97 +180,79 @@ func (h *KubeHost) list(t *qjs.This) (*qjs.Value, error) {
 	for i := range res.Items {
 		items = append(items, res.Items[i].Object)
 	}
-	data, err := json.Marshal(items)
+	v, err := qjs.ToJsValue(t.Context(), items)
 	if err != nil {
-		return nil, fmt.Errorf("kube.list: marshal: %w", err)
+		return nil, fmt.Errorf("kube.list: convert result: %w", err)
 	}
-	return t.Context().ParseJSON(string(data)), nil
+	return v, nil
 }
 
 // del removes the named resource. Missing-resource is treated as success.
 func (h *KubeHost) del(t *qjs.This) (*qjs.Value, error) {
-	raw, err := stringifyArg(t, "kube.delete")
+	m, err := argAsMap(t, "kube.delete")
 	if err != nil {
 		return nil, err
 	}
-	var ref kubeRef
-	if err := json.Unmarshal([]byte(raw), &ref); err != nil {
-		return nil, fmt.Errorf("kube.delete: parse argument: %w", err)
-	}
-	if ref.APIVersion == "" || ref.Kind == "" || ref.Name == "" {
-		return nil, fmt.Errorf("kube.delete: apiVersion, kind and name are required")
-	}
-	rc, err := h.resourceFor(ref.APIVersion, ref.Kind, ref.Namespace)
+	apiVersion, err := stringField(m, "apiVersion", "kube.delete", true)
 	if err != nil {
 		return nil, err
 	}
-	if err := rc.Delete(h.callCtx(), ref.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+	kind, err := stringField(m, "kind", "kube.delete", true)
+	if err != nil {
+		return nil, err
+	}
+	name, err := stringField(m, "name", "kube.delete", true)
+	if err != nil {
+		return nil, err
+	}
+	namespace, _ := stringField(m, "namespace", "kube.delete", false)
+
+	rc, err := h.resourceFor(apiVersion, kind, namespace)
+	if err != nil {
+		return nil, err
+	}
+	if err := rc.Delete(h.callCtx(), name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("kube.delete: %w", err)
 	}
 	return t.Context().NewBool(true), nil
 }
 
-// stringifyArg pulls args[0] off `t` and JSONStringifies it. We've seen a rare
-// production case where JSONStringify returns "" for what looks like a normal
-// object literal — likely a qjs handle-lifetime quirk under GC pressure. As a
-// fallback we route the conversion through the JS JSON global, which uses the
-// argument by reference instead of going through the cloned handle.
-func stringifyArg(t *qjs.This, fnName string) (string, error) {
+// argAsMap pulls args[0] off `t` and converts it directly to a Go map via the
+// canonical qjs helper — no JSON detour, no handle leaks.
+func argAsMap(t *qjs.This, fnName string) (map[string]any, error) {
 	args := t.Args()
 	if len(args) == 0 {
-		return "", fmt.Errorf("%s: missing object argument", fnName)
+		return nil, fmt.Errorf("%s: missing object argument", fnName)
 	}
-	raw, err := args[0].JSONStringify()
+	m, err := qjs.JsObjectOrMapToGoMap[map[string]any](args[0])
 	if err != nil {
-		return "", fmt.Errorf("%s: stringify arg: %w", fnName, err)
+		return nil, fmt.Errorf("%s: convert arg: %w", fnName, err)
 	}
-	if raw != "" {
-		return raw, nil
-	}
-	// Fallback: invoke JSON.stringify(arg) via the JS global. This avoids the
-	// cloned-handle path that occasionally returns "".
-	ctx := t.Context()
-	jsonGlobal := ctx.Global().GetPropertyStr("JSON")
-	if jsonGlobal == nil || jsonGlobal.IsUndefined() {
-		return "", fmt.Errorf("%s: stringify arg returned empty and no JSON global available", fnName)
-	}
-	res, err := jsonGlobal.Invoke("stringify", args[0])
-	if err != nil {
-		return "", fmt.Errorf("%s: stringify fallback: %w", fnName, err)
-	}
-	defer res.Free()
-	out := res.String()
-	if out == "" || out == "undefined" {
-		return "", fmt.Errorf("%s: argument serialised to undefined (typeof=%s)", fnName, jsTypeOf(args[0]))
-	}
-	return out, nil
+	return m, nil
 }
 
-func jsTypeOf(v *qjs.Value) string {
-	switch {
-	case v == nil || v.IsUndefined():
-		return "undefined"
-	case v.IsNull():
-		return "null"
-	case v.IsString():
-		return "string"
-	case v.IsNumber():
-		return "number"
-	case v.IsBool():
-		return "boolean"
-	case v.IsArray():
-		return "array"
-	case v.IsObject():
-		return "object"
-	default:
-		return "unknown"
+// stringField reads a string field from a map with a clear error when required.
+func stringField(m map[string]any, key, fnName string, required bool) (string, error) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		if required {
+			return "", fmt.Errorf("%s: %s is required", fnName, key)
+		}
+		return "", nil
 	}
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s: %s must be a string, got %T", fnName, key, v)
+	}
+	return s, nil
 }
 
+// objToJS hands an unstructured object back to JS as a real JS object via
+// qjs.ToJsValue. Ownership of the returned *Value transfers to JS.
 func objToJS(ctx *qjs.Context, obj *unstructured.Unstructured) (*qjs.Value, error) {
-	data, err := json.Marshal(obj.Object)
+	v, err := qjs.ToJsValue(ctx, obj.Object)
 	if err != nil {
-		return nil, fmt.Errorf("marshal object: %w", err)
+		return nil, fmt.Errorf("convert object to JS: %w", err)
 	}
-	return ctx.ParseJSON(string(data)), nil
+	return v, nil
 }
