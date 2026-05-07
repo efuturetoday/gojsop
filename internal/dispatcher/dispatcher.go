@@ -18,8 +18,11 @@ package dispatcher
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"sync"
+	"time"
 
+	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -33,10 +36,15 @@ import (
 	jsruntime "github.com/o-haase/gojsop/internal/runtime"
 )
 
+// timeoutStreakThreshold is how many consecutive Handle() calls may exceed
+// Resources.TimeoutSeconds before the instance is rescue-restarted.
+const timeoutStreakThreshold = 3
+
 // Dispatcher routes Kubernetes events into per-hook JS handlers.
 type Dispatcher struct {
 	dyn    dynamic.Interface
 	mapper RESTMapper
+	reg    *jsruntime.Registry
 
 	mu   sync.Mutex
 	subs map[types.NamespacedName]*subscription
@@ -54,21 +62,33 @@ type RESTMapping struct {
 	Resource schema.GroupVersionResource
 }
 
-// New creates an empty Dispatcher. Pass the cluster's dynamic client and a
-// RESTMapper (controller-runtime's mgr.GetRESTMapper() can be wrapped to fit).
-func New(dyn dynamic.Interface, mapper RESTMapper) *Dispatcher {
+// New creates an empty Dispatcher. Pass the cluster's dynamic client, a
+// RESTMapper (controller-runtime's mgr.GetRESTMapper() can be wrapped to fit),
+// and the Registry that owns per-hook persistent JS instances. The registry
+// is required so that worker rescue paths (memory/panic/timeout) can rebuild
+// the instance and the next call sees the new one transparently.
+func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsruntime.Registry) *Dispatcher {
 	return &Dispatcher{
 		dyn:    dyn,
 		mapper: mapper,
+		reg:    reg,
 		subs:   make(map[types.NamespacedName]*subscription),
 	}
 }
 
-// Subscribe (re)wires informers for hook `key` to fire handle() on `inst`.
-// If a subscription already exists, it is torn down first.
-func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, inst *jsruntime.Instance, cfg *jsruntime.Config) error {
+// Subscribe (re)wires informers for hook `key`. The worker resolves the live
+// instance via Registry on every dispatch — passing `inst` here is no longer
+// required for that lookup; it is accepted for symmetry with the old API and
+// is unused internally. cfg drives which informers are started.
+//
+// If a subscription already exists for key, it is torn down first.
+func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, _ *jsruntime.Instance, cfg *jsruntime.Config) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	if d.reg == nil {
+		return fmt.Errorf("dispatcher: Registry is nil — Subscribe needs the registry to resolve live instances")
+	}
 
 	if old, ok := d.subs[key]; ok {
 		old.stop()
@@ -78,7 +98,7 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 	ctx, cancel := context.WithCancel(parent)
 	sub := &subscription{
 		key:     key,
-		inst:    inst,
+		reg:     d.reg,
 		queue:   workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), key.String()),
 		cancel:  cancel,
 		pending: make(map[string]jsruntime.BindingContext),
@@ -128,12 +148,18 @@ func (d *Dispatcher) Drop(key types.NamespacedName) {
 //     snapshot — which is what hook authors expect.
 type subscription struct {
 	key    types.NamespacedName
-	inst   *jsruntime.Instance
+	reg    *jsruntime.Registry
 	queue  workqueue.RateLimitingInterface
 	cancel context.CancelFunc
 
 	pendMu  sync.Mutex
 	pending map[string]jsruntime.BindingContext
+
+	// timeoutStreak counts consecutive Handle() calls that exceeded
+	// Resources.TimeoutSeconds. Reset on a call that finishes inside the
+	// budget. Reaching timeoutStreakThreshold triggers a rescue restart.
+	// Owned by runWorker, which is single-goroutine per subscription.
+	timeoutStreak int
 }
 
 func (s *subscription) stop() {
@@ -244,23 +270,92 @@ func (s *subscription) runWorker(ctx context.Context) {
 			s.queue.Done(item)
 			continue
 		}
-		out, err := s.inst.Handle([]jsruntime.BindingContext{bc})
-		if err != nil {
+
+		out, err, elapsed, panicked := s.invokeHandle(bc)
+
+		switch {
+		case panicked:
+			// Panic in qjs glue or a host function escaped recover() inside
+			// JS — instance state is suspect, rebuild it.
+			logger.Error(err, "handle() panicked — restarting instance", "binding", bc.Binding, "event", bc.WatchEvent)
+			s.rescue(logger, jsruntime.ReasonPanic)
+			s.requeue(qkey, bc)
+		case err != nil && jsruntime.IsOOMError(err):
+			// qjs MemoryLimit reached. The instance heap is corrupt from JS's
+			// perspective; only a fresh runtime gets us back to a known good state.
+			logger.Error(err, "handle() hit memory limit — restarting instance", "binding", bc.Binding, "event", bc.WatchEvent)
+			s.rescue(logger, jsruntime.ReasonMemoryLimit)
+			s.requeue(qkey, bc)
+		case err != nil:
 			logger.Error(err, "handle() failed", "binding", bc.Binding, "event", bc.WatchEvent)
-			// Re-stash payload so the retry has something to deliver — unless
-			// a fresher event for the same key already arrived.
-			s.pendMu.Lock()
-			if _, fresher := s.pending[qkey]; !fresher {
-				s.pending[qkey] = bc
-			}
-			s.pendMu.Unlock()
-			s.queue.AddRateLimited(qkey)
-		} else {
+			s.requeue(qkey, bc)
+		default:
 			if out != "" {
 				logger.V(1).Info("handle() returned", "value", out)
 			}
 			s.queue.Forget(qkey)
 		}
+
+		// Timeout-streak tracking runs regardless of err — a hook that always
+		// finishes overdue still deserves a kick eventually. We only consult
+		// timeoutStreak after a successful or non-fatal failure path; rescue
+		// paths above already rebuilt the instance and reset streak below.
+		if mi, ok := s.reg.Get(s.key); ok {
+			budget := time.Duration(mi.Instance.Resources().TimeoutSeconds) * time.Second
+			if budget > 0 && elapsed > budget {
+				s.timeoutStreak++
+				if s.timeoutStreak >= timeoutStreakThreshold {
+					logger.Info("handle() exceeded timeout for streak threshold — restarting instance",
+						"streak", s.timeoutStreak, "budget", budget, "elapsed", elapsed)
+					s.rescue(logger, jsruntime.ReasonTimeoutStreak)
+				}
+			} else {
+				s.timeoutStreak = 0
+			}
+		}
+
 		s.queue.Done(qkey)
 	}
+}
+
+// invokeHandle calls the live instance's Handle() with panic recovery and
+// timing. The returned panicked flag is true when recover() caught something;
+// in that case err carries the panic value formatted as an error.
+func (s *subscription) invokeHandle(bc jsruntime.BindingContext) (out string, err error, elapsed time.Duration, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic in handle(): %v\n%s", r, debug.Stack())
+			panicked = true
+		}
+	}()
+	mi, ok := s.reg.Get(s.key)
+	if !ok {
+		return "", fmt.Errorf("hook %s not in registry", s.key), 0, false
+	}
+	start := time.Now()
+	out, err = mi.Instance.Handle([]jsruntime.BindingContext{bc})
+	elapsed = time.Since(start)
+	return out, err, elapsed, false
+}
+
+// rescue rebuilds the instance via the registry and resets the timeout streak.
+// On rebuild failure it logs and leaves the dead instance in place — the next
+// reconcile will retry; the queue keeps eating events meanwhile.
+func (s *subscription) rescue(logger logr.Logger, reason string) {
+	if _, err := s.reg.RestartByKey(s.key, reason); err != nil {
+		logger.Error(err, "rescue restart failed", "reason", reason)
+		return
+	}
+	s.timeoutStreak = 0
+}
+
+// requeue stashes bc back under qkey (unless a fresher event arrived) and
+// re-enqueues with rate-limited backoff.
+func (s *subscription) requeue(qkey string, bc jsruntime.BindingContext) {
+	s.pendMu.Lock()
+	if _, fresher := s.pending[qkey]; !fresher {
+		s.pending[qkey] = bc
+	}
+	s.pendMu.Unlock()
+	s.queue.AddRateLimited(qkey)
 }

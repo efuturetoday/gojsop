@@ -188,6 +188,13 @@ spec:
                       LastRestartReason is one of: source-changed, memory-limit, panic,
                       timeout-streak, manual.
                     type: string
+                  manualRestartToken:
+                    description: |-
+                      ManualRestartToken echoes the value of the gojsop.io/restart annotation
+                      that produced the most recent manual restart. Setting the annotation to
+                      a new value triggers exactly one restart; re-reconciles with the same
+                      value are no-ops.
+                    type: string
                   restartCount:
                     description: |-
                       RestartCount counts how often the persistent instance has been replaced

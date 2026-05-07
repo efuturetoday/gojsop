@@ -95,6 +95,13 @@ type JSHookInstanceStatus struct {
 	// timeout-streak, manual.
 	// +optional
 	LastRestartReason string `json:"lastRestartReason,omitempty"`
+
+	// ManualRestartToken echoes the value of the gojsop.io/restart annotation
+	// that produced the most recent manual restart. Setting the annotation to
+	// a new value triggers exactly one restart; re-reconciles with the same
+	// value are no-ops.
+	// +optional
+	ManualRestartToken string `json:"manualRestartToken,omitempty"`
 }
 
 // JSHookExecutionStatus reports the outcome of the most recent handle() call.

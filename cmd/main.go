@@ -186,8 +186,6 @@ func main() {
 		setupLog.Error(err, "unable to build dynamic client")
 		os.Exit(1)
 	}
-	disp := dispatcher.New(dyn, dispatcher.FromMetaMapper(mgr.GetRESTMapper()))
-
 	managerCtx := ctrl.SetupSignalHandler()
 	registry := jsruntime.NewRegistry()
 	registry.Binder = &jsruntime.KubeHost{
@@ -195,6 +193,7 @@ func main() {
 		Dyn:    dyn,
 		Mapper: mgr.GetRESTMapper(),
 	}
+	disp := dispatcher.New(dyn, dispatcher.FromMetaMapper(mgr.GetRESTMapper()), registry)
 	if err := (&controller.JSHookReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),

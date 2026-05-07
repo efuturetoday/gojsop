@@ -61,8 +61,10 @@ func TestMemoryLimit_Honoured(t *testing.T) {
 		t.Fatal("expected memory-limit error, got nil — limit not enforced")
 	}
 	// We don't pin the exact wording (qjs internals), just confirm it failed.
-	if !strings.Contains(strings.ToLower(err.Error()), "memory") &&
-		!strings.Contains(strings.ToLower(err.Error()), "out of") {
+	if !IsOOMError(err) {
+		t.Fatalf("IsOOMError must classify qjs OOM, got: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "memory") {
 		t.Logf("note: error did not mention memory: %v", err)
 	}
 }

@@ -34,6 +34,11 @@ import (
 	jsruntime "github.com/o-haase/gojsop/internal/runtime"
 )
 
+// ManualRestartAnnotation is the JSHook annotation that triggers a manual
+// instance restart. Any new value (typically a timestamp) forces exactly one
+// rebuild; the same value on later reconciles is a no-op.
+const ManualRestartAnnotation = "gojsop.io/restart"
+
 // JSHookReconciler reconciles a JSHook object.
 //
 // Each JSHook is backed by exactly one persistent QuickJS instance held in
@@ -100,6 +105,27 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", mi.RestartCount, "reason", mi.LastReason)
 	}
 
+	// Manual-restart annotation: a new value of gojsop.io/restart triggers
+	// exactly one rebuild. We compare against status.instance.manualRestartToken
+	// so the contract is "edit the annotation to force a restart" without
+	// needing controller-internal flags.
+	if token, ok := hook.GetAnnotations()[ManualRestartAnnotation]; ok && !restarted {
+		var prev string
+		if hook.Status.Instance != nil {
+			prev = hook.Status.Instance.ManualRestartToken
+		}
+		if token != prev {
+			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsruntime.ReasonManual)
+			if err != nil {
+				log.Error(err, "manual restart")
+				return r.fail(ctx, &hook, fmt.Sprintf("manual restart: %v", err))
+			}
+			log.Info("manual restart applied", "token", token, "restarts", newMI.RestartCount)
+			mi = newMI
+			restarted = true
+		}
+	}
+
 	cfg := mi.Config
 
 	if r.Dispatcher != nil && (restarted || hook.Status.ObservedGeneration != hook.Generation) {
@@ -115,10 +141,11 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.Bindings = bindings
 	hook.Status.Instance = &corev1alpha1.JSHookInstanceStatus{
-		StartedAt:         &startedAt,
-		SourceHash:        srcHash,
-		RestartCount:      mi.RestartCount,
-		LastRestartReason: mi.LastReason,
+		StartedAt:          &startedAt,
+		SourceHash:         srcHash,
+		RestartCount:       mi.RestartCount,
+		LastRestartReason:  mi.LastReason,
+		ManualRestartToken: hook.GetAnnotations()[ManualRestartAnnotation],
 	}
 	if err := r.Status().Update(ctx, &hook); err != nil {
 		return ctrl.Result{}, err
