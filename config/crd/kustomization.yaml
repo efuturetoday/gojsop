@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/core.gojsop.io_jshooks.yaml
+- bases/core.gojsop.io_jsadmissions.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

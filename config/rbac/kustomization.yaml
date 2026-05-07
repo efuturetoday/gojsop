@@ -22,6 +22,9 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the gojsop itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- jsadmission_admin_role.yaml
+- jsadmission_editor_role.yaml
+- jsadmission_viewer_role.yaml
 - jshook_admin_role.yaml
 - jshook_editor_role.yaml
 - jshook_viewer_role.yaml

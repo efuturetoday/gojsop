@@ -1,0 +1,28 @@
+apiVersion: core.gojsop.io/v1alpha1
+kind: JSAdmission
+metadata:
+  labels:
+    app.kubernetes.io/name: gojsop
+    app.kubernetes.io/managed-by: kustomize
+  name: prevent-latest-tags
+spec:
+  type: validating
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE", "UPDATE"]
+  failurePolicy: Fail
+  sideEffects: None
+  source:
+    inline: |
+      function validate(req) {
+        const obj = req.object;
+        const containers = (obj.spec && obj.spec.containers) || [];
+        for (const c of containers) {
+          if (c.image && c.image.endsWith(":latest")) {
+            return { allowed: false, message: "image " + c.image + " uses :latest, refusing" };
+          }
+        }
+        return { allowed: true };
+      }

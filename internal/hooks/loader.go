@@ -11,10 +11,10 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 )
 
-// Loader returns the JS module text for a given JSHookSource.
+// Loader returns the JS module text for a given JSSource.
 // Implementations are wired together via Chain.
 type Loader interface {
-	Load(ctx context.Context, src corev1alpha1.JSHookSource) ([]byte, bool, error)
+	Load(ctx context.Context, src corev1alpha1.JSSource) ([]byte, bool, error)
 }
 
 // Chain dispatches to the first loader that claims the source (returns true).
@@ -25,7 +25,7 @@ type Chain struct {
 
 func NewChain(loaders ...Loader) *Chain { return &Chain{loaders: loaders} }
 
-func (c *Chain) Load(ctx context.Context, src corev1alpha1.JSHookSource) ([]byte, error) {
+func (c *Chain) Load(ctx context.Context, src corev1alpha1.JSSource) ([]byte, error) {
 	for _, l := range c.loaders {
 		body, ok, err := l.Load(ctx, src)
 		if err != nil {

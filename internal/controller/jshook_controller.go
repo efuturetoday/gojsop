@@ -127,6 +127,9 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	cfg := mi.Config
+	if cfg == nil {
+		return r.fail(ctx, &hook, "hook does not export a config() function")
+	}
 
 	if r.Dispatcher != nil && (restarted || hook.Status.ObservedGeneration != hook.Generation) {
 		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, mi.Instance, cfg); err != nil {
@@ -140,7 +143,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	hook.Status.Phase = "Ready"
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.Bindings = bindings
-	hook.Status.Instance = &corev1alpha1.JSHookInstanceStatus{
+	hook.Status.Instance = &corev1alpha1.JSInstanceStatus{
 		StartedAt:          &startedAt,
 		SourceHash:         srcHash,
 		RestartCount:       mi.RestartCount,
@@ -157,7 +160,7 @@ func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, 
 	now := metav1.NewTime(time.Now())
 	hook.Status.Phase = "Failed"
 	hook.Status.ObservedGeneration = hook.Generation
-	hook.Status.LastExecution = &corev1alpha1.JSHookExecutionStatus{
+	hook.Status.LastExecution = &corev1alpha1.JSExecutionStatus{
 		Time:  &now,
 		Error: msg,
 	}
@@ -170,7 +173,7 @@ func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, 
 
 // resourcesFromSpec maps the CRD's optional Resources to runtime.Resources.
 // Zero/missing fields fall back to runtime defaults inside New().
-func resourcesFromSpec(r *corev1alpha1.JSHookResources) jsruntime.Resources {
+func resourcesFromSpec(r *corev1alpha1.JSResources) jsruntime.Resources {
 	if r == nil {
 		return jsruntime.Resources{}
 	}

@@ -113,11 +113,11 @@ func TestKubeHost_GetReturnsNullForMissing(t *testing.T) {
 func TestKubeHost_ListReturnsItems(t *testing.T) {
 	cm1 := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata":   map[string]any{"name": "a", "namespace": "default"},
+		"metadata": map[string]any{"name": "a", "namespace": "default"},
 	}}
 	cm2 := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata":   map[string]any{"name": "b", "namespace": "default"},
+		"metadata": map[string]any{"name": "b", "namespace": "default"},
 	}}
 	h := newKubeHost(t, cm1, cm2)
 
@@ -201,7 +201,7 @@ func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
 func TestKubeHost_DeleteRemovesResource(t *testing.T) {
 	cm := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",
-		"metadata":   map[string]any{"name": "doomed", "namespace": "default"},
+		"metadata": map[string]any{"name": "doomed", "namespace": "default"},
 	}}
 	h := newKubeHost(t, cm)
 	inst := runHook(t, h, ``)

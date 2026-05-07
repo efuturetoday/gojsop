@@ -133,17 +133,19 @@ func (i *Instance) Handle(bindingCtx []BindingContext) (string, error) {
 	return out, nil
 }
 
-// LoadConfig calls the hook's exported `config()` function and decodes the
-// returned object as our runtime.Config. The hook MUST export config() —
-// missing or non-function returns an error (we can't subscribe blindly).
-func (i *Instance) LoadConfig() (*Config, error) {
+// TryLoadConfig calls the module's exported `config()` if present and decodes
+// the returned object as runtime.Config. Returns (nil, nil) when the module
+// does not export config() — JSHook reconciles enforce non-nil at their layer
+// (event subscriptions require config), JSAdmission policies don't call this
+// path's result at all.
+func (i *Instance) TryLoadConfig() (*Config, error) {
 	const bridge = `JSON.stringify(typeof config === "function" ? config() : null)`
 	raw, err := i.Eval("__config_bridge__", bridge)
 	if err != nil {
 		return nil, fmt.Errorf("calling config(): %w", err)
 	}
 	if raw == "null" || raw == "" || raw == "undefined" {
-		return nil, fmt.Errorf("hook does not export a config() function")
+		return nil, nil
 	}
 	var cfg Config
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {

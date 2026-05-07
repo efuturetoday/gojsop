@@ -332,6 +332,8 @@ func (s *subscription) invokeHandle(bc jsruntime.BindingContext) (out string, er
 	if !ok {
 		return "", fmt.Errorf("hook %s not in registry", s.key), 0, false
 	}
+	mi.CallMu.Lock()
+	defer mi.CallMu.Unlock()
 	start := time.Now()
 	out, err = mi.Instance.Handle([]jsruntime.BindingContext{bc})
 	elapsed = time.Since(start)

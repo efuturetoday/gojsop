@@ -16,10 +16,10 @@ package runtime
 //	  };
 //	}
 type Config struct {
-	ConfigVersion string                `json:"configVersion,omitempty"`
-	OnStartup     int                   `json:"onStartup,omitempty"`
-	Schedule      []ScheduleBinding     `json:"schedule,omitempty"`
-	Kubernetes    []KubernetesBinding   `json:"kubernetes,omitempty"`
+	ConfigVersion string              `json:"configVersion,omitempty"`
+	OnStartup     int                 `json:"onStartup,omitempty"`
+	Schedule      []ScheduleBinding   `json:"schedule,omitempty"`
+	Kubernetes    []KubernetesBinding `json:"kubernetes,omitempty"`
 }
 
 type ScheduleBinding struct {

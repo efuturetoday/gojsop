@@ -1,0 +1,9 @@
+apiVersion: core.gojsop.io/v1alpha1
+kind: JSAdmission
+metadata:
+  labels:
+    app.kubernetes.io/name: gojsop
+    app.kubernetes.io/managed-by: kustomize
+  name: jsadmission-sample
+spec:
+  # TODO(user): Add fields here

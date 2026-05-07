@@ -9,7 +9,7 @@ import (
 
 func TestChain_InlineMatches(t *testing.T) {
 	c := NewChain(InlineLoader{})
-	body, err := c.Load(context.Background(), corev1alpha1.JSHookSource{Inline: "1+1"})
+	body, err := c.Load(context.Background(), corev1alpha1.JSSource{Inline: "1+1"})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestChain_InlineMatches(t *testing.T) {
 
 func TestChain_NoSourceErrors(t *testing.T) {
 	c := NewChain(InlineLoader{})
-	_, err := c.Load(context.Background(), corev1alpha1.JSHookSource{})
+	_, err := c.Load(context.Background(), corev1alpha1.JSSource{})
 	if err == nil {
 		t.Fatal("expected error for empty source")
 	}

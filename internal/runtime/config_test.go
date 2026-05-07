@@ -27,9 +27,12 @@ func TestLoadConfig_FromHookSource(t *testing.T) {
 	if err := inst.LoadModule("hook.js", src); err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
-	cfg, err := inst.LoadConfig()
+	cfg, err := inst.TryLoadConfig()
 	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+		t.Fatalf("TryLoadConfig: %v", err)
+	}
+	if cfg == nil {
+		t.Fatal("expected config, got nil")
 	}
 
 	if cfg.ConfigVersion != "v1" {
@@ -50,7 +53,7 @@ func TestLoadConfig_FromHookSource(t *testing.T) {
 	}
 }
 
-func TestLoadConfig_MissingFunction(t *testing.T) {
+func TestTryLoadConfig_MissingFunction(t *testing.T) {
 	inst, err := New(Resources{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -60,7 +63,11 @@ func TestLoadConfig_MissingFunction(t *testing.T) {
 	if err := inst.LoadModule("noconfig.js", "var x = 1;"); err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
-	if _, err := inst.LoadConfig(); err == nil {
-		t.Fatal("expected error when hook has no config()")
+	cfg, err := inst.TryLoadConfig()
+	if err != nil {
+		t.Fatalf("TryLoadConfig: %v", err)
+	}
+	if cfg != nil {
+		t.Fatalf("expected nil cfg when config() is missing, got %+v", cfg)
 	}
 }

@@ -175,6 +175,13 @@ deploy: manifests kustomize ## Deploy controller to the K8s cluster specified in
 undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.kube/config. Call with ignore-not-found=true to ignore resource not found errors during deletion.
 	"$(KUSTOMIZE)" build config/default | "$(KUBECTL)" delete --ignore-not-found=$(ignore-not-found) -f -
 
+CERT_MANAGER_VERSION ?= v1.16.1
+
+.PHONY: install-certmanager
+install-certmanager: ## Install cert-manager into the K8s cluster (idempotent). Required by the webhook stack.
+	"$(KUBECTL)" apply -f https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MANAGER_VERSION)/cert-manager.yaml
+	"$(KUBECTL)" -n cert-manager wait --for=condition=Available --timeout=180s deploy/cert-manager deploy/cert-manager-webhook deploy/cert-manager-cainjector
+
 ##@ Dependencies
 
 ## Location to install dependencies to

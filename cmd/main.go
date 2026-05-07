@@ -17,14 +17,18 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
+	"path/filepath"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	admissionregv1 "k8s.io/api/admissionregistration/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/dynamic"
@@ -37,9 +41,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	"github.com/o-haase/gojsop/internal/admission"
 	"github.com/o-haase/gojsop/internal/controller"
 	"github.com/o-haase/gojsop/internal/dispatcher"
+	"github.com/o-haase/gojsop/internal/hooks"
 	jsruntime "github.com/o-haase/gojsop/internal/runtime"
+	webhookv1alpha1 "github.com/o-haase/gojsop/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -50,9 +57,48 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(admissionregv1.AddToScheme(scheme))
 
 	utilruntime.Must(corev1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
+}
+
+// admissionServiceFromEnv reads the cluster-side webhook Service coordinates
+// from env vars (set in the manager Deployment manifest). Falls back to the
+// Kubebuilder-default Service name in the gojsop-system namespace.
+func admissionServiceFromEnv() admissionregv1.ServiceReference {
+	ns := os.Getenv("WEBHOOK_SERVICE_NAMESPACE")
+	if ns == "" {
+		ns = "gojsop-system"
+	}
+	name := os.Getenv("WEBHOOK_SERVICE_NAME")
+	if name == "" {
+		name = "gojsop-webhook-service"
+	}
+	port := int32(443)
+	return admissionregv1.ServiceReference{Namespace: ns, Name: name, Port: &port}
+}
+
+// fileCABundleProvider reads the PEM CA bundle off disk every time it's
+// called so cert-manager rotations propagate within one Sync window.
+func fileCABundleProvider(certDir string) admission.CABundleProvider {
+	if certDir == "" {
+		certDir = "/tmp/k8s-webhook-server/serving-certs"
+	}
+	caPath := filepath.Join(certDir, "ca.crt")
+	tlsCrtPath := filepath.Join(certDir, "tls.crt")
+	return func(ctx context.Context) ([]byte, error) {
+		// Prefer ca.crt — cert-manager-issued Secrets carry the CA there.
+		if data, err := os.ReadFile(caPath); err == nil {
+			return data, nil
+		}
+		// Fallback: serving cert (works when the issuer chain == leaf).
+		data, err := os.ReadFile(tlsCrtPath)
+		if err != nil {
+			return nil, fmt.Errorf("read ca bundle (tried %s and %s): %w", caPath, tlsCrtPath, err)
+		}
+		return data, nil
+	}
 }
 
 // nolint:gocyclo
@@ -203,6 +249,40 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSHook")
 		os.Exit(1)
+	}
+
+	// Admission webhook plumbing. The HTTP handler shares the runtime Registry
+	// with JSHook; the central VWC/MWC are aggregated via the Registrar.
+	admissionLog := ctrl.Log.WithName("admission")
+	admissionServer := admission.NewServer(registry, admissionLog)
+	mgr.GetWebhookServer().Register(admission.PathPrefixValidate, admissionServer.ValidateHandler())
+	mgr.GetWebhookServer().Register(admission.PathPrefixMutate, admissionServer.MutateHandler())
+
+	caProvider := fileCABundleProvider(webhookCertPath)
+	registrar := admission.NewRegistrar(mgr.GetClient(), admissionServiceFromEnv(), caProvider, admissionLog)
+	// Exclude the controller's own namespace from every policy so a broken
+	// admission policy cannot prevent the manager pod from being re-created.
+	// Other infra namespaces are the user's call.
+	registrar.ExcludeNamespaces = []string{admissionServiceFromEnv().Namespace}
+	registrar.Start(managerCtx)
+
+	if err := (&controller.JSAdmissionReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Loader:    hooks.NewChain(hooks.InlineLoader{}),
+		Registry:  registry,
+		Server:    admissionServer,
+		Registrar: registrar,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "JSAdmission")
+		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupJSAdmissionWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "JSAdmission")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

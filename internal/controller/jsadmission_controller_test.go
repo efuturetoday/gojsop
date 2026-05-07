@@ -32,36 +32,33 @@ import (
 	jsruntime "github.com/o-haase/gojsop/internal/runtime"
 )
 
-var _ = Describe("JSHook Controller", func() {
-	Context("When reconciling an inline hook", func() {
-		const resourceName = "test-resource"
+var _ = Describe("JSAdmission Controller", func() {
+	Context("When reconciling a resource", func() {
+		const resourceName = "test-jsadmission"
 
 		ctx := context.Background()
 
-		// JSHook is cluster-scoped, so no Namespace.
 		typeNamespacedName := types.NamespacedName{Name: resourceName}
-		jshook := &corev1alpha1.JSHook{}
+		jsadmission := &corev1alpha1.JSAdmission{}
 
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind JSHook")
-			err := k8sClient.Get(ctx, typeNamespacedName, jshook)
+			By("creating the custom resource for the Kind JSAdmission")
+			err := k8sClient.Get(ctx, typeNamespacedName, jsadmission)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &corev1alpha1.JSHook{
+				resource := &corev1alpha1.JSAdmission{
 					ObjectMeta: metav1.ObjectMeta{Name: resourceName},
-					Spec: corev1alpha1.JSHookSpec{
+					Spec: corev1alpha1.JSAdmissionSpec{
+						Type: "validating",
+						Rules: []corev1alpha1.AdmissionRule{{
+							APIGroups:   []string{""},
+							APIVersions: []string{"v1"},
+							Resources:   []string{"pods"},
+							Operations:  []string{"CREATE"},
+						}},
+						FailurePolicy: "Fail",
+						SideEffects:   "None",
 						Source: corev1alpha1.JSSource{
-							Inline: `function config() {
-								return {
-									configVersion: "v1",
-									onStartup: 5,
-									kubernetes: [{
-										name: "watch-cm",
-										apiVersion: "v1",
-										kind: "ConfigMap",
-										executeHookOnEvent: ["Added"],
-									}],
-								};
-							}`,
+							Inline: "function validate(req) { return { allowed: true }; }",
 						},
 					},
 				}
@@ -70,17 +67,16 @@ var _ = Describe("JSHook Controller", func() {
 		})
 
 		AfterEach(func() {
-			resource := &corev1alpha1.JSHook{}
+			resource := &corev1alpha1.JSAdmission{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance JSHook")
+			By("Cleanup the specific resource instance JSAdmission")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-
-		It("should reconcile and write resolved bindings into status", func() {
+		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			controllerReconciler := &JSHookReconciler{
+			controllerReconciler := &JSAdmissionReconciler{
 				Client:   k8sClient,
 				Scheme:   k8sClient.Scheme(),
 				Loader:   hooks.NewChain(hooks.InlineLoader{}),
@@ -91,14 +87,6 @@ var _ = Describe("JSHook Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-
-			updated := &corev1alpha1.JSHook{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
-			Expect(updated.Status.Phase).To(Equal("Ready"))
-			Expect(updated.Status.Bindings).To(ContainElement("kubernetes:v1/ConfigMap/watch-cm"))
-			Expect(updated.Status.Bindings).To(ContainElement("onStartup:5"))
-			Expect(updated.Status.Instance).NotTo(BeNil())
-			Expect(updated.Status.Instance.SourceHash).NotTo(BeEmpty())
 		})
 	})
 })

@@ -54,6 +54,13 @@ type ManagedInstance struct {
 	// because callers must go through Registry.RestartByKey to mutate them.
 	source    []byte
 	resources Resources
+
+	// CallMu serializes calls into the qjs runtime. qjs is not goroutine-safe,
+	// and a JSHook + JSAdmission can converge on the same instance in phase 2.
+	// Today the dispatcher takes it before Handle and the admission server
+	// takes it before HandleAdmission; with one role per CR contention is
+	// effectively zero.
+	CallMu sync.Mutex
 }
 
 // Registry holds the live JS instance for every JSHook the controller knows
@@ -78,7 +85,8 @@ func NewRegistry() *Registry {
 
 // build constructs and initializes a fresh Instance for key with the given
 // source and resources. On any failure the partially-built instance is closed.
-// Caller holds r.mu.
+// Caller holds r.mu. config() is optional at this layer — JSHook reconciles
+// require it and check Config != nil; JSAdmission ignores it.
 func (r *Registry) build(key types.NamespacedName, source []byte, sourceHash string, res Resources) (*ManagedInstance, error) {
 	inst, err := New(res)
 	if err != nil {
@@ -92,7 +100,7 @@ func (r *Registry) build(key types.NamespacedName, source []byte, sourceHash str
 		inst.Close()
 		return nil, fmt.Errorf("registry: load module: %w", err)
 	}
-	cfg, err := inst.LoadConfig()
+	cfg, err := inst.TryLoadConfig()
 	if err != nil {
 		inst.Close()
 		return nil, fmt.Errorf("registry: load config: %w", err)

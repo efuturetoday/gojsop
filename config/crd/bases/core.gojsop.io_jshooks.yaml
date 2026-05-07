@@ -72,7 +72,7 @@ spec:
                     type: integer
                   timeoutSeconds:
                     description: |-
-                      TimeoutSeconds bounds a single handle() call. Default 30.
+                      TimeoutSeconds bounds a single call into JS. Default 30.
                       On timeout the call is interrupted; the persistent instance survives
                       unless timeouts repeat (see status.instance.lastRestartReason).
                     format: int32
@@ -97,7 +97,7 @@ spec:
                     type: object
                   inline:
                     description: |-
-                      Inline embeds the JS module text directly into the JSHook resource.
+                      Inline embeds the JS module text directly into the resource.
                       Convenient for small hooks and demos.
                     type: string
                   ociRef:
@@ -198,7 +198,7 @@ spec:
                   restartCount:
                     description: |-
                       RestartCount counts how often the persistent instance has been replaced
-                      since the JSHook was created.
+                      since the resource was created.
                     format: int32
                     type: integer
                   sourceHash:
