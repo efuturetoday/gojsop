@@ -42,6 +42,20 @@ import (
 // Limits.TimeoutSeconds before the instance is rescue-restarted.
 const timeoutStreakThreshold = 3
 
+// eventKey identifies a queued BindingContext. All fields are strings, so the
+// struct is hashable and can be used directly as a workqueue key — the queue
+// dedupes by struct equality, collapsing bursts on the same object into one
+// entry while still distinguishing Added/Modified/Deleted and old/new UIDs.
+//
+// For Synchronization-type contexts only `binding` and `event` are populated.
+type eventKey struct {
+	binding   string
+	event     string
+	namespace string
+	name      string
+	uid       string
+}
+
 // Dispatcher routes Kubernetes events into per-hook JS handlers.
 type Dispatcher struct {
 	dyn    dynamic.Interface
@@ -97,11 +111,14 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 
 	ctx, cancel := context.WithCancel(parent)
 	sub := &subscription{
-		key:     key,
-		reg:     d.reg,
-		queue:   workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), key.String()),
+		key: key,
+		reg: d.reg,
+		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[eventKey](),
+			workqueue.TypedRateLimitingQueueConfig[eventKey]{Name: key.String()},
+		),
 		cancel:  cancel,
-		pending: make(map[string]jshook.BindingContext),
+		pending: make(map[eventKey]jshook.BindingContext),
 	}
 
 	for _, b := range cfg.Kubernetes {
@@ -121,6 +138,7 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 		}
 	}
 
+	sub.wg.Add(1)
 	go sub.runWorker(ctx)
 	d.subs[key] = sub
 	return nil
@@ -138,22 +156,21 @@ func (d *Dispatcher) Drop(key types.NamespacedName) {
 
 // subscription is one JSHook's slice of the world.
 //
-// The workqueue holds opaque string keys ("binding|event|ns/name|uid"); the
-// associated BindingContext payload lives in `pending`. Two reasons:
-//
-//   - workqueue dedupes by hashing the queued item, but BindingContext contains
-//     maps/slices and is therefore unhashable.
-//   - keying on the object identity collapses bursts of Modified events for the
-//     same resource into a single queue entry that always carries the freshest
-//     snapshot — which is what hook authors expect.
+// The workqueue holds eventKey structs; the associated BindingContext payload
+// lives in `pending`. The split exists because BindingContext contains
+// map/slice fields and is therefore not hashable, so it cannot itself be a
+// workqueue item. Keying on object identity also collapses bursts of Modified
+// events for the same resource into one queue entry that always carries the
+// freshest snapshot — which is what hook authors expect.
 type subscription struct {
 	key    types.NamespacedName
 	reg    *jsregistry.Registry
-	queue  workqueue.RateLimitingInterface
+	queue  workqueue.TypedRateLimitingInterface[eventKey]
 	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	pendMu  sync.Mutex
-	pending map[string]jshook.BindingContext
+	pending map[eventKey]jshook.BindingContext
 
 	// timeoutStreak counts consecutive Handle() calls that exceeded
 	// Limits.TimeoutSeconds. Reset on a call that finishes inside the
@@ -162,9 +179,14 @@ type subscription struct {
 	timeoutStreak int
 }
 
+// stop signals the worker and watchers to wind down, then blocks until the
+// worker goroutine has actually exited. Subscribe() relies on this so that
+// re-subscribing the same hook can never overlap an in-flight handle() call
+// from the previous subscription.
 func (s *subscription) stop() {
-	s.cancel()
 	s.queue.ShutDown()
+	s.cancel()
+	s.wg.Wait()
 }
 
 func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, b jshook.KubernetesBinding) error {
@@ -214,7 +236,7 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 		ns, _ := md["namespace"].(string)
 		name, _ := md["name"].(string)
 		uid, _ := md["uid"].(string)
-		qkey := bindingName + "|" + eventName + "|" + ns + "/" + name + "|" + uid
+		k := eventKey{binding: bindingName, event: eventName, namespace: ns, name: name, uid: uid}
 		bc := jshook.BindingContext{
 			Binding:    bindingName,
 			Type:       "Event",
@@ -222,41 +244,39 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 			Object:     raw,
 		}
 		s.pendMu.Lock()
-		s.pending[qkey] = bc
+		s.pending[k] = bc
 		s.pendMu.Unlock()
-		s.queue.Add(qkey)
+		s.queue.Add(k)
 	}
 
-	// gate suppresses every handler call until Synchronization is published.
-	// initialUIDs holds objects that were already in the snapshot — the next
-	// AddFunc that fires for any of them is a redelivery from client-go's
-	// sharedProcessor notification buffer (the queue can have pending Adds
-	// at the moment WaitForCacheSync returns) and should be dropped to avoid
-	// shipping the same object as Synchronization + Added.
+	// gate buffers every event handler call until Synchronization is published.
+	// We never drop pre-sync events: between WaitForCacheSync and the gate flip
+	// a Modified or Deleted may legitimately arrive for an object that's about
+	// to ship in the snapshot, and silently dropping it would lose an update.
+	// After the gate opens, the buffer is drained — Added redeliveries for
+	// objects already in the snapshot are filtered out via initialUIDs to keep
+	// shell-operator semantics (Synchronization first, then strict deltas).
+	type bufferedEvent struct {
+		eventName string
+		raw       map[string]any
+	}
 	var (
-		gateMu      sync.Mutex
-		gateOpen    bool
-		initialUIDs = map[string]bool{}
+		gateMu   sync.Mutex
+		gateOpen bool
+		preSync  []bufferedEvent
 	)
 	gated := func(eventName string, obj any) {
 		raw := toRaw(obj)
 		if raw == nil {
 			return
 		}
-		uid := uidOf(raw)
-
 		gateMu.Lock()
 		if !gateOpen {
-			gateMu.Unlock()
-			return
-		}
-		if eventName == "Added" && uid != "" && initialUIDs[uid] {
-			delete(initialUIDs, uid)
+			preSync = append(preSync, bufferedEvent{eventName, raw})
 			gateMu.Unlock()
 			return
 		}
 		gateMu.Unlock()
-
 		enqueueEvent(eventName, raw)
 	}
 
@@ -279,6 +299,7 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 	gateMu.Lock()
 	objs := informer.GetStore().List()
 	syncObjects := make([]jshook.SyncObject, 0, len(objs))
+	initialUIDs := make(map[string]bool, len(objs))
 	for _, o := range objs {
 		raw := toRaw(o)
 		if raw == nil {
@@ -294,15 +315,35 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 	} else {
 		// Sync disabled: replay initial state as Added events so hooks that
 		// opted out of Synchronization still see what existed at startup.
-		// initialUIDs still gets cleared as those replays land, so a real
-		// post-sync Add for the same object isn't dropped.
 		for _, so := range syncObjects {
-			delete(initialUIDs, uidOf(so.Object))
 			enqueueEvent("Added", so.Object)
 		}
+		// initialUIDs is no longer needed for dedupe — pre-sync Added events
+		// in the buffer for those objects are redeliveries of what we just
+		// replayed, but the workqueue's struct-key dedupe collapses them
+		// into one entry already.
+		initialUIDs = nil
 	}
+	buffered := preSync
+	preSync = nil
 	gateOpen = true
 	gateMu.Unlock()
+
+	// Drain pre-sync buffer in arrival order. Added events for objects that
+	// already shipped in the Synchronization snapshot are dropped — those are
+	// redeliveries from client-go's sharedProcessor notification buffer (it
+	// holds pending notifications for a brief window after WaitForCacheSync
+	// returns). Modified/Deleted events flow through unconditionally; they
+	// represent state changes the snapshot can't capture.
+	for _, ev := range buffered {
+		if ev.eventName == "Added" && initialUIDs != nil {
+			if uid := uidOf(ev.raw); uid != "" && initialUIDs[uid] {
+				delete(initialUIDs, uid)
+				continue
+			}
+		}
+		enqueueEvent(ev.eventName, ev.raw)
+	}
 	return nil
 }
 
@@ -329,46 +370,45 @@ func uidOf(raw map[string]any) string {
 // carrying the snapshot of existing objects. shell-operator parity: hooks see
 // this once per (re)Subscribe before any per-object events.
 func (s *subscription) enqueueSynchronization(bindingName string, objs []jshook.SyncObject) {
-	qkey := bindingName + "|Synchronization"
+	k := eventKey{binding: bindingName, event: "Synchronization"}
 	bc := jshook.BindingContext{
 		Binding: bindingName,
 		Type:    "Synchronization",
 		Objects: objs,
 	}
 	s.pendMu.Lock()
-	s.pending[qkey] = bc
+	s.pending[k] = bc
 	s.pendMu.Unlock()
-	s.queue.Add(qkey)
+	s.queue.Add(k)
 }
 
 func (s *subscription) runWorker(ctx context.Context) {
+	defer s.wg.Done()
 	logger := log.FromContext(ctx).WithValues("hook", s.key.String())
 	for {
-		item, shutdown := s.queue.Get()
+		qkey, shutdown := s.queue.Get()
 		if shutdown {
 			return
-		}
-		qkey, ok := item.(string)
-		if !ok {
-			s.queue.Done(item)
-			continue
 		}
 		s.pendMu.Lock()
 		bc, present := s.pending[qkey]
 		delete(s.pending, qkey)
 		s.pendMu.Unlock()
 		if !present {
-			s.queue.Done(item)
+			s.queue.Done(qkey)
 			continue
 		}
 
-		out, err, elapsed, panicked := s.invokeHandle(bc)
+		out, err, elapsed, panicked, stack := s.invokeHandle(bc)
 
 		switch {
 		case panicked:
 			// Panic in qjs glue or a host function escaped recover() inside
-			// JS — instance state is suspect, rebuild it.
-			logger.Error(err, "handle() panicked — restarting instance", "binding", bc.Binding, "event", bc.WatchEvent)
+			// JS — instance state is suspect, rebuild it. The stack trace is
+			// passed as a structured field rather than baked into err so
+			// downstream log sinks can route or drop it independently.
+			logger.Error(err, "handle() panicked — restarting instance",
+				"binding", bc.Binding, "event", bc.WatchEvent, "stack", stack)
 			s.rescue(logger, jsregistry.ReasonPanic)
 			s.requeue(qkey, bc)
 		case err != nil && jsengine.IsOOMError(err):
@@ -410,25 +450,27 @@ func (s *subscription) runWorker(ctx context.Context) {
 }
 
 // invokeHandle calls the live instance's Handle() with panic recovery and
-// timing. The returned panicked flag is true when recover() caught something;
-// in that case err carries the panic value formatted as an error.
-func (s *subscription) invokeHandle(bc jshook.BindingContext) (out string, err error, elapsed time.Duration, panicked bool) {
+// timing. When recover() catches something, panicked is true, err carries
+// the panic value, and stack carries the runtime stack trace as a separate
+// string so log sinks can route it independently of the error message.
+func (s *subscription) invokeHandle(bc jshook.BindingContext) (out string, err error, elapsed time.Duration, panicked bool, stack string) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("panic in handle(): %v\n%s", r, debug.Stack())
+			err = fmt.Errorf("panic in handle(): %v", r)
+			stack = string(debug.Stack())
 			panicked = true
 		}
 	}()
 	mi, ok := s.reg.Get(s.key)
 	if !ok {
-		return "", fmt.Errorf("hook %s not in registry", s.key), 0, false
+		return "", fmt.Errorf("hook %s not in registry", s.key), 0, false, ""
 	}
 	mi.CallMu.Lock()
 	defer mi.CallMu.Unlock()
 	start := time.Now()
 	out, err = jshook.Handle(mi.VM, []jshook.BindingContext{bc})
 	elapsed = time.Since(start)
-	return out, err, elapsed, false
+	return out, err, elapsed, false, ""
 }
 
 // rescue rebuilds the instance via the registry and resets the timeout streak.
@@ -444,7 +486,7 @@ func (s *subscription) rescue(logger logr.Logger, reason string) {
 
 // requeue stashes bc back under qkey (unless a fresher event arrived) and
 // re-enqueues with rate-limited backoff.
-func (s *subscription) requeue(qkey string, bc jshook.BindingContext) {
+func (s *subscription) requeue(qkey eventKey, bc jshook.BindingContext) {
 	s.pendMu.Lock()
 	if _, fresher := s.pending[qkey]; !fresher {
 		s.pending[qkey] = bc
