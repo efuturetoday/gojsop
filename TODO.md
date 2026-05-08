@@ -30,11 +30,13 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
 - **5s hard-coded backoff on every fail path.** `RequeueAfter:
   5*time.Second` regardless of error class — bad source URL and a
   transient API error get the same retry shape.
-- **Admission has no rescue path.** A panicked `validate()`/`mutate()`
-  VM stays panicked; every subsequent request emits `ReviewPanicked`
-  and falls through to FailurePolicy until someone bumps the manual
-  restart annotation. The dispatcher rescues on panic/OOM/timeout
-  streak; admission does not.
+- **Admission rescue is partial.** Panic and OOM in `validate()` /
+  `mutate()` now rebuild the VM via `jslifecycle.Rescue`, symmetric
+  to the dispatcher. Single timeouts still don't rescue: the review
+  goroutine is still alive and still holds `mi.CallMu`, so closing
+  the runtime would race with an active eval. Until JS is
+  interruptible (separate engine-level work) a stuck policy waits
+  for its own call to finish.
   `internal/jsadmission/server.go:review`.
 ## 2. Missing
 

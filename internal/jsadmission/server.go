@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/o-haase/gojsop/internal/conditions"
+	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
@@ -229,21 +230,23 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	}
 
 	type callOutcome struct {
-		result *AdmissionResult
-		err    error
+		result   *AdmissionResult
+		err      error
+		panicked bool
 	}
 	done := make(chan callOutcome, 1)
 	go func() {
 		defer func() {
 			if rec := recover(); rec != nil {
-				// Static event message — the panic value (rec) is wildly
-				// variable per request and would defeat the recorder's
-				// (Reason, Message) dedup. The detail goes to logs and to
-				// the failure-policy reason text downstream.
-				publishEntry(entry, corev1.EventTypeWarning,
-					conditions.EventReviewPanicked,
-					"panic in admission handler")
-				done <- callOutcome{err: fmt.Errorf("panic in admission handler: %v", rec)}
+				// panicked is the typed signal the parent dispatches on —
+				// no string sniffing on the error message. The panic value
+				// (rec) is wildly variable per request and stays out of
+				// the event Message; it goes to logs and the failure
+				// reason instead.
+				done <- callOutcome{
+					err:      fmt.Errorf("panic in admission handler: %v", rec),
+					panicked: true,
+				}
 			}
 		}()
 		mi.CallMu.Lock()
@@ -264,30 +267,57 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 		applyFailurePolicy(resp, entry.FailurePolicy, "client disconnected")
 		return resp
 	case <-timer.C:
+		// The review goroutine is still running and still holds mi.CallMu;
+		// rescuing here would race with an active qjs eval, so we don't.
+		// Until JS execution is interruptible (engine-level work — see
+		// TODO), a stuck VM has to wait for its own call to finish. The
+		// timer fires once per stuck request and dedups to one event per
+		// 10-min window.
 		log.Info("admission JS call exceeded timeout", "timeout", timeout)
-		// Message uses the configured timeout — finite per spec, so dedup
-		// collapses a flood of stuck requests to one event per window.
 		publishEntry(entry, corev1.EventTypeWarning,
 			conditions.EventReviewTimeout,
 			fmt.Sprintf("review exceeded %s", timeout))
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("timeout after %s", timeout))
 		return resp
 	case oc := <-done:
-		if oc.err != nil {
-			log.Error(oc.err, "admission JS call failed")
-			// Don't double-emit when the goroutine's recover already fired
-			// ReviewPanicked. The panic path puts the panic-typed error in
-			// oc.err with the "panic in admission handler" prefix.
-			if !strings.HasPrefix(oc.err.Error(), "panic in admission handler") {
-				publishEntry(entry, corev1.EventTypeWarning,
-					conditions.EventReviewFailed,
-					"review returned an error")
+		switch {
+		case oc.panicked:
+			// Defers in the goroutine ran before sending on done, so
+			// mi.CallMu is released — safe to rebuild the VM. Without
+			// rescue, a single panic poisons every subsequent review
+			// until someone bumps the manual-restart annotation.
+			log.Error(oc.err, "admission JS call panicked — rescuing")
+			publishEntry(entry, corev1.EventTypeWarning,
+				conditions.EventReviewPanicked,
+				"panic in admission handler")
+			if _, err := jslifecycle.Rescue(s.Registry, entry.Key, jsregistry.ReasonPanic, entry.Emit); err != nil {
+				log.Error(err, "admission rescue failed", "reason", jsregistry.ReasonPanic)
 			}
 			applyFailurePolicy(resp, entry.FailurePolicy, oc.err.Error())
 			return resp
+		case oc.err != nil && jsengine.IsOOMError(oc.err):
+			// qjs MemoryLimit reached. The runtime heap is corrupt from
+			// JS's perspective; only a fresh VM gets us back to a known
+			// good state. Symmetric to the dispatcher rescue path.
+			log.Error(oc.err, "admission JS call hit memory limit — rescuing")
+			if _, err := jslifecycle.Rescue(s.Registry, entry.Key, jsregistry.ReasonMemoryLimit, entry.Emit); err != nil {
+				log.Error(err, "admission rescue failed", "reason", jsregistry.ReasonMemoryLimit)
+			}
+			applyFailurePolicy(resp, entry.FailurePolicy, oc.err.Error())
+			return resp
+		case oc.err != nil:
+			// Regular JS Error from validate()/mutate(): the policy author
+			// returned/threw. Don't rescue — the VM is still healthy.
+			log.Error(oc.err, "admission JS call failed")
+			publishEntry(entry, corev1.EventTypeWarning,
+				conditions.EventReviewFailed,
+				"review returned an error")
+			applyFailurePolicy(resp, entry.FailurePolicy, oc.err.Error())
+			return resp
+		default:
+			fillResponse(resp, oc.result, entry, req, log)
+			return resp
 		}
-		fillResponse(resp, oc.result, entry, req, log)
-		return resp
 	}
 }
 
