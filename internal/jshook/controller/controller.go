@@ -158,7 +158,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if r.Dispatcher != nil && (restarted || hook.Status.ObservedGeneration != hook.Generation) {
-		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, mi.VM, cfg); err != nil {
+		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, cfg); err != nil {
 			log.Error(err, "subscribing bindings")
 			return r.fail(ctx, &hook, fmt.Sprintf("subscribe: %v", err))
 		}

@@ -79,12 +79,10 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsregistry.Registry) *Di
 }
 
 // Subscribe (re)wires informers for hook `key`. The worker resolves the live
-// instance via Registry on every dispatch — passing `inst` here is no longer
-// required for that lookup; it is accepted for symmetry with the old API and
-// is unused internally. cfg drives which informers are started.
+// instance via Registry on every dispatch. cfg drives which informers start.
 //
 // If a subscription already exists for key, it is torn down first.
-func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, _ *jsengine.VM, cfg *jshook.Config) error {
+func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, cfg *jshook.Config) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -208,16 +206,9 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 		bindingName = b.Kind
 	}
 
-	enqueue := func(eventName string, obj any) {
+	enqueueEvent := func(eventName string, raw map[string]any) {
 		if !wantedEvents[eventName] {
 			return
-		}
-		raw, ok := obj.(map[string]any)
-		if !ok {
-			// dynamic informer returns *unstructured.Unstructured — extract its map.
-			if u, ok := obj.(interface{ UnstructuredContent() map[string]any }); ok {
-				raw = u.UnstructuredContent()
-			}
 		}
 		md, _ := raw["metadata"].(map[string]any)
 		ns, _ := md["namespace"].(string)
@@ -236,20 +227,118 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 		s.queue.Add(qkey)
 	}
 
+	// gate suppresses every handler call until Synchronization is published.
+	// initialUIDs holds objects that were already in the snapshot — the next
+	// AddFunc that fires for any of them is a redelivery from client-go's
+	// sharedProcessor notification buffer (the queue can have pending Adds
+	// at the moment WaitForCacheSync returns) and should be dropped to avoid
+	// shipping the same object as Synchronization + Added.
+	var (
+		gateMu      sync.Mutex
+		gateOpen    bool
+		initialUIDs = map[string]bool{}
+	)
+	gated := func(eventName string, obj any) {
+		raw := toRaw(obj)
+		if raw == nil {
+			return
+		}
+		uid := uidOf(raw)
+
+		gateMu.Lock()
+		if !gateOpen {
+			gateMu.Unlock()
+			return
+		}
+		if eventName == "Added" && uid != "" && initialUIDs[uid] {
+			delete(initialUIDs, uid)
+			gateMu.Unlock()
+			return
+		}
+		gateMu.Unlock()
+
+		enqueueEvent(eventName, raw)
+	}
+
 	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(o any) { enqueue("Added", o) },
-		UpdateFunc: func(_, n any) { enqueue("Modified", n) },
-		DeleteFunc: func(o any) { enqueue("Deleted", o) },
+		AddFunc:    func(o any) { gated("Added", o) },
+		UpdateFunc: func(_, n any) { gated("Modified", n) },
+		DeleteFunc: func(o any) { gated("Deleted", o) },
 	})
 	if err != nil {
 		return err
 	}
 
 	factory.Start(ctx.Done())
-	// We don't block on cache sync here — events that arrive during sync are
-	// queued anyway. shell-operator handles initial state via "Synchronization"
-	// type contexts, which we can layer in once the dispatcher is stable.
+	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		return fmt.Errorf("binding %q: cache sync canceled", bindingName)
+	}
+
+	syncEnabled := b.ExecuteHookOnSynchronization == nil || *b.ExecuteHookOnSynchronization
+
+	gateMu.Lock()
+	objs := informer.GetStore().List()
+	syncObjects := make([]jshook.SyncObject, 0, len(objs))
+	for _, o := range objs {
+		raw := toRaw(o)
+		if raw == nil {
+			continue
+		}
+		if uid := uidOf(raw); uid != "" {
+			initialUIDs[uid] = true
+		}
+		syncObjects = append(syncObjects, jshook.SyncObject{Object: raw})
+	}
+	if syncEnabled {
+		s.enqueueSynchronization(bindingName, syncObjects)
+	} else {
+		// Sync disabled: replay initial state as Added events so hooks that
+		// opted out of Synchronization still see what existed at startup.
+		// initialUIDs still gets cleared as those replays land, so a real
+		// post-sync Add for the same object isn't dropped.
+		for _, so := range syncObjects {
+			delete(initialUIDs, uidOf(so.Object))
+			enqueueEvent("Added", so.Object)
+		}
+	}
+	gateOpen = true
+	gateMu.Unlock()
 	return nil
+}
+
+// toRaw extracts the map[string]any payload from an informer-emitted object.
+// Dynamic informers ship *unstructured.Unstructured; the worker only ever
+// deals with the underlying map.
+func toRaw(obj any) map[string]any {
+	if raw, ok := obj.(map[string]any); ok {
+		return raw
+	}
+	if u, ok := obj.(interface{ UnstructuredContent() map[string]any }); ok {
+		return u.UnstructuredContent()
+	}
+	return nil
+}
+
+func uidOf(raw map[string]any) string {
+	md, _ := raw["metadata"].(map[string]any)
+	uid, _ := md["uid"].(string)
+	return uid
+}
+
+// enqueueSynchronization ships a single Synchronization-type BindingContext
+// carrying the snapshot of existing objects. shell-operator parity: hooks see
+// this once per (re)Subscribe before any per-object events.
+func (s *subscription) enqueueSynchronization(bindingName string, objs []jshook.SyncObject) {
+	qkey := bindingName + "|Synchronization"
+	bc := jshook.BindingContext{
+		Binding: bindingName,
+		Type:    "Synchronization",
+		Objects: objs,
+	}
+	s.pendMu.Lock()
+	s.pending[qkey] = bc
+	s.pendMu.Unlock()
+	s.queue.Add(qkey)
 }
 
 func (s *subscription) runWorker(ctx context.Context) {
