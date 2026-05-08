@@ -19,14 +19,14 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/o-haase/gojsop/internal/conditions"
+	"github.com/o-haase/gojsop/internal/jslifecycle"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
 
-// EventEmitter publishes a corev1.Event about the JSAdmission this policy
-// entry belongs to. Optional — Server.Register accepts entries with a nil
-// Emit and silently skips publication. The reconciler builds the closure
-// and binds it to the policy's metav1.Object so the recorder has a target.
-type EventEmitter func(eventType, reason, message string)
+// EventEmitter is the shared lifecycle-event callback. Aliased from
+// jslifecycle so existing callers (jsadmission.EventEmitter) keep working
+// while the type lives in one place.
+type EventEmitter = jslifecycle.EventEmitter
 
 // PathPrefixValidate / PathPrefixMutate are the URL prefixes the admission
 // server exposes. Each policy lives at <prefix>{namespace}/{name}; for

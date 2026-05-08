@@ -37,15 +37,14 @@ import (
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jshook"
+	"github.com/o-haase/gojsop/internal/jslifecycle"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
 
-// EventEmitter publishes a corev1.Event about the JSHook this subscription
-// belongs to. Optional — Subscribe accepts nil and the dispatcher silently
-// no-ops emission. The reconciler builds the closure and binds it to the
-// hook's metav1.Object so the recorder has a target. Message stability
-// rules (see internal/conditions) apply.
-type EventEmitter func(eventType, reason, message string)
+// EventEmitter is the shared lifecycle-event callback. Aliased from
+// jslifecycle so existing callers (dispatcher.EventEmitter) keep working
+// while the type lives in one place.
+type EventEmitter = jslifecycle.EventEmitter
 
 // timeoutStreakThreshold is how many consecutive Handle() calls may exceed
 // Limits.TimeoutSeconds before the instance is rescue-restarted.
@@ -498,23 +497,15 @@ func (s *subscription) invokeHandle(bc jshook.BindingContext) (out string, err e
 	return out, err, elapsed, false, ""
 }
 
-// rescue rebuilds the instance via the registry and resets the timeout streak.
+// rescue rebuilds the instance via jslifecycle.Rescue (which publishes the
+// canonical Restarted / RescueFailed events) and resets the timeout streak.
 // On rebuild failure it logs and leaves the dead instance in place — the next
 // reconcile will retry; the queue keeps eating events meanwhile.
-//
-// Emits a Restarted Warning on success and a RescueFailed Warning on
-// failure. Both messages embed only the rescue reason (panic /
-// memory-limit / timeout-streak — finite, low-cardinality) so the
-// recorder's (Reason, Message) dedup collapses bursts cleanly.
 func (s *subscription) rescue(logger logr.Logger, reason string) {
-	if _, err := s.reg.RestartByKey(s.key, reason); err != nil {
+	if _, err := jslifecycle.Rescue(s.reg, s.key, reason, s.emit); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
-		s.publish(corev1.EventTypeWarning, conditions.EventRescueFailed,
-			fmt.Sprintf("rescue %s failed", reason))
 		return
 	}
-	s.publish(corev1.EventTypeWarning, conditions.EventRestarted,
-		fmt.Sprintf("restarted: %s", reason))
 	s.timeoutStreak = 0
 }
 

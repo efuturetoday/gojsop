@@ -36,12 +36,6 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
   restart annotation. The dispatcher rescues on panic/OOM/timeout
   streak; admission does not.
   `internal/jsadmission/server.go:review`.
-- **Event-emission plumbing is two parallel callbacks.** Both
-  `dispatcher.EventEmitter` and `jsadmission.EventEmitter` are the
-  exact same `func(eventType, reason, message string)`. Two declared
-  types so the packages don't depend on each other; if a third
-  caller appears, lift it into a shared package.
-
 ## 2. Missing
 
 - **No source loaders beyond Inline.** CRD shapes `configMapRef` and
