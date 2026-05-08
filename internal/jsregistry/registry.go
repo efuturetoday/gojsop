@@ -28,12 +28,30 @@ const (
 	ReasonManual        = "manual"
 )
 
-// ManagedVM is the registry's view of a per-resource persistent VM. Source and
-// limits are cached so the registry can rebuild the VM after a rescue restart
-// without bouncing through the controller.
+// PostBuildHook is invoked once per fresh VM after the source has loaded. It
+// returns the value to stash on ManagedVM.Extra. JSHook uses it to call
+// jshook.ReadConfig and cache the parsed Config. Returning a non-nil error
+// aborts the load and closes the VM.
+type PostBuildHook func(vm *jsengine.VM) (extra any, err error)
+
+// BuildOptions bundles every input the registry needs to build (or rebuild)
+// a VM. Caching the whole struct on ManagedVM lets RestartByKey rebuild
+// without callers having to re-supply source, limits or the host binder —
+// the dispatcher's rescue path doesn't have those in hand.
+type BuildOptions struct {
+	Source     []byte
+	SourceHash string
+	Limits     jsengine.Limits
+	Binder     jsengine.HostBinder
+	PostBuild  PostBuildHook
+}
+
+// ManagedVM is the registry's view of a per-resource persistent VM. Opts is
+// cached so the registry can rebuild the VM after a rescue restart without
+// bouncing through the controller.
 type ManagedVM struct {
 	VM           *jsengine.VM
-	SourceHash   string
+	Opts         BuildOptions
 	StartedAt    time.Time
 	RestartCount int32
 	LastReason   string
@@ -43,12 +61,6 @@ type ManagedVM struct {
 	// dispatcher handle() calls). The registry never touches it.
 	Extra any
 
-	// source and limits are the inputs needed to rebuild this VM after a
-	// rescue restart (memory/panic/timeout/manual). They are not exported
-	// because callers must go through Registry.RestartByKey to mutate them.
-	source []byte
-	limits jsengine.Limits
-
 	// CallMu serializes calls into the qjs runtime. qjs is not goroutine-safe,
 	// and a JSHook + JSAdmission can converge on the same VM in phase 2.
 	// Today the dispatcher takes it before Handle and the admission server
@@ -56,12 +68,6 @@ type ManagedVM struct {
 	// effectively zero.
 	CallMu sync.Mutex
 }
-
-// PostBuildHook is invoked once per fresh VM after the source has loaded. It
-// returns the value to stash on ManagedVM.Extra. JSHook uses it to call
-// jshook.ReadConfig and cache the parsed Config. Returning a non-nil error
-// aborts the load and closes the VM.
-type PostBuildHook func(vm *jsengine.VM) (extra any, err error)
 
 // Registry holds the live JS VM for every JSHook/JSAdmission the controller
 // knows about. One VM per NamespacedName, owned by the controller's lifetime.
@@ -74,11 +80,6 @@ type PostBuildHook func(vm *jsengine.VM) (extra any, err error)
 // other. This means a slow user config() in one hook does not stall any
 // other hook's reconcile.
 type Registry struct {
-	// Binder, if non-nil, is invoked on every newly created VM before the
-	// user's module is evaluated. Use this to register host functions
-	// (e.g. globalThis.kube) onto the runtime.
-	Binder jsengine.HostBinder
-
 	mu         sync.Mutex
 	vms        map[types.NamespacedName]*ManagedVM
 	buildLocks map[types.NamespacedName]*sync.Mutex
@@ -106,47 +107,45 @@ func (r *Registry) getBuildLock(key types.NamespacedName) *sync.Mutex {
 	return bMu
 }
 
-// build constructs and initializes a fresh VM for key with the given source
-// and limits. On any failure the partially-built VM is closed. The caller
-// must hold the per-key build mutex (see getBuildLock); r.mu MUST NOT be
-// held because LoadModule and postBuild execute user JS that may block or
-// take a long time. The optional postBuild lets the feature attach its own
-// typed payload (e.g. parsed config()) onto ManagedVM.Extra.
-func (r *Registry) build(key types.NamespacedName, source []byte, sourceHash string, lim jsengine.Limits, postBuild PostBuildHook) (*ManagedVM, error) {
-	vm, err := jsengine.New(lim)
+// build constructs and initializes a fresh VM for key with the given options.
+// On any failure the partially-built VM is closed. The caller must hold the
+// per-key build mutex (see getBuildLock); r.mu MUST NOT be held because
+// LoadModule and PostBuild execute user JS that may block or take a long time.
+func (r *Registry) build(key types.NamespacedName, opts BuildOptions) (*ManagedVM, error) {
+	vm, err := jsengine.New(opts.Limits)
 	if err != nil {
 		return nil, fmt.Errorf("registry: new VM: %w", err)
 	}
-	if err := vm.BindHost(r.Binder); err != nil {
-		vm.Close()
-		return nil, fmt.Errorf("registry: bind host: %w", err)
+	if opts.Binder != nil {
+		if err := vm.BindHost(opts.Binder); err != nil {
+			vm.Close()
+			return nil, fmt.Errorf("registry: bind host: %w", err)
+		}
 	}
-	if err := vm.LoadModule(key.Name+".js", string(source)); err != nil {
+	if err := vm.LoadModule(key.Name+".js", string(opts.Source)); err != nil {
 		vm.Close()
 		return nil, fmt.Errorf("registry: load module: %w", err)
 	}
 	var extra any
-	if postBuild != nil {
-		extra, err = postBuild(vm)
+	if opts.PostBuild != nil {
+		extra, err = opts.PostBuild(vm)
 		if err != nil {
 			vm.Close()
 			return nil, fmt.Errorf("registry: post-build: %w", err)
 		}
 	}
 	return &ManagedVM{
-		VM:         vm,
-		SourceHash: sourceHash,
-		StartedAt:  time.Now(),
-		Extra:      extra,
-		source:     source,
-		limits:     lim,
+		VM:        vm,
+		Opts:      opts,
+		StartedAt: time.Now(),
+		Extra:     extra,
 	}, nil
 }
 
 // GetOrLoad returns the live ManagedVM for key. If nothing exists yet, or if
-// sourceHash differs from the last load, a fresh QuickJS runtime is started,
-// the source is evaluated, and the previous VM (if any) is closed. The
-// boolean reports whether a (re)start happened on this call.
+// opts.SourceHash differs from the last load, a fresh QuickJS runtime is
+// started, the source is evaluated, and the previous VM (if any) is closed.
+// The boolean reports whether a (re)start happened on this call.
 //
 // Implements double-checked locking around a per-key build mutex:
 //  1. fast path under r.mu — return existing if hash matches
@@ -155,10 +154,10 @@ func (r *Registry) build(key types.NamespacedName, source []byte, sourceHash str
 //  3. re-check under r.mu in case a peer just finished building
 //  4. run build() with no global lock held — user JS executes here
 //  5. install the new VM under r.mu (microseconds)
-func (r *Registry) GetOrLoad(key types.NamespacedName, source []byte, sourceHash string, lim jsengine.Limits, postBuild PostBuildHook) (*ManagedVM, bool, error) {
+func (r *Registry) GetOrLoad(key types.NamespacedName, opts BuildOptions) (*ManagedVM, bool, error) {
 	// 1. fast path
 	r.mu.Lock()
-	if existing, ok := r.vms[key]; ok && existing.SourceHash == sourceHash {
+	if existing, ok := r.vms[key]; ok && existing.Opts.SourceHash == opts.SourceHash {
 		r.mu.Unlock()
 		return existing, false, nil
 	}
@@ -171,14 +170,14 @@ func (r *Registry) GetOrLoad(key types.NamespacedName, source []byte, sourceHash
 
 	// 3. double-check after acquiring the build lock
 	r.mu.Lock()
-	if existing, ok := r.vms[key]; ok && existing.SourceHash == sourceHash {
+	if existing, ok := r.vms[key]; ok && existing.Opts.SourceHash == opts.SourceHash {
 		r.mu.Unlock()
 		return existing, false, nil
 	}
 	r.mu.Unlock()
 
 	// 4. heavy lifting — runs user JS, no global lock held
-	mi, err := r.build(key, source, sourceHash, lim, postBuild)
+	mi, err := r.build(key, opts)
 	if err != nil {
 		return nil, false, err
 	}
@@ -221,14 +220,14 @@ func (r *Registry) Drop(key types.NamespacedName) {
 }
 
 // RestartByKey force-replaces the VM for key with a fresh runtime, reusing the
-// cached source/limits from the last successful load. Used by rescue paths
-// (memory/panic/timeout/manual) that don't have the source bytes in hand.
+// cached BuildOptions from the last successful load. Used by rescue paths
+// (memory/panic/timeout/manual) that don't have the build inputs in hand.
 // Returns an error if the resource is unknown to the registry.
 //
 // Holds the per-key build mutex across the rebuild so a concurrent
 // GetOrLoad for the same key serializes behind it; r.mu is only held for
 // the brief read of the existing entry and the install at the end.
-func (r *Registry) RestartByKey(key types.NamespacedName, reason string, postBuild PostBuildHook) (*ManagedVM, error) {
+func (r *Registry) RestartByKey(key types.NamespacedName, reason string) (*ManagedVM, error) {
 	bMu := r.getBuildLock(key)
 	bMu.Lock()
 	defer bMu.Unlock()
@@ -240,7 +239,7 @@ func (r *Registry) RestartByKey(key types.NamespacedName, reason string, postBui
 		return nil, fmt.Errorf("registry: restart called for unknown key %s", key)
 	}
 
-	mi, err := r.build(key, old.source, old.SourceHash, old.limits, postBuild)
+	mi, err := r.build(key, old.Opts)
 	if err != nil {
 		return nil, err
 	}

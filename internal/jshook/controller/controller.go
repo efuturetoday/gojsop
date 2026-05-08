@@ -61,6 +61,12 @@ type JSHookReconciler struct {
 	// Defaults to a fresh registry via SetupWithManager when nil.
 	Registry *jsregistry.Registry
 
+	// Binder is the host-function surface installed on every JSHook VM.
+	// Typically a *kubehost.KubeHost (full read+write kube.* surface).
+	// Cached on the ManagedVM so dispatcher rescue restarts don't have
+	// to re-acquire it.
+	Binder jsengine.HostBinder
+
 	// Dispatcher subscribes hooks to Kubernetes events. Optional in tests.
 	Dispatcher *dispatcher.Dispatcher
 
@@ -122,7 +128,13 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	srcHash := jssource.Hash(source)
 	lim := limitsFromSpec(hook.Spec.Limits)
 
-	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, source, srcHash, lim, readConfig)
+	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, jsregistry.BuildOptions{
+		Source:     source,
+		SourceHash: srcHash,
+		Limits:     lim,
+		Binder:     r.Binder,
+		PostBuild:  readConfig,
+	})
 	if err != nil {
 		log.Error(err, "registry GetOrLoad")
 		return r.fail(ctx, &hook, fmt.Sprintf("instance: %v", err))
@@ -141,7 +153,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			prev = hook.Status.Instance.ManualRestartToken
 		}
 		if token != prev {
-			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsregistry.ReasonManual, readConfig)
+			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsregistry.ReasonManual)
 			if err != nil {
 				log.Error(err, "manual restart")
 				return r.fail(ctx, &hook, fmt.Sprintf("manual restart: %v", err))

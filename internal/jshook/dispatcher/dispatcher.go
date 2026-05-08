@@ -477,7 +477,7 @@ func (s *subscription) invokeHandle(bc jshook.BindingContext) (out string, err e
 // On rebuild failure it logs and leaves the dead instance in place — the next
 // reconcile will retry; the queue keeps eating events meanwhile.
 func (s *subscription) rescue(logger logr.Logger, reason string) {
-	if _, err := s.reg.RestartByKey(s.key, reason, nil); err != nil {
+	if _, err := s.reg.RestartByKey(s.key, reason); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
 		return
 	}

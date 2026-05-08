@@ -236,7 +236,10 @@ func main() {
 	}
 	managerCtx := ctrl.SetupSignalHandler()
 	registry := jsregistry.NewRegistry()
-	registry.Binder = &kubehost.KubeHost{
+	// JSHook VMs get the full read+write kube.* surface; JSAdmission VMs get
+	// a read-only view because the central VWC/MWC declare sideEffects: None
+	// and the apiserver is allowed to retry/replay admission requests.
+	kubeFull := &kubehost.KubeHost{
 		Ctx:    managerCtx,
 		Dyn:    dyn,
 		Mapper: mgr.GetRESTMapper(),
@@ -246,6 +249,7 @@ func main() {
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Registry:     registry,
+		Binder:       kubeFull,
 		Dispatcher:   disp,
 		SubscribeCtx: managerCtx,
 	}).SetupWithManager(mgr); err != nil {
@@ -273,6 +277,7 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		Loader:    jssource.NewChain(jssource.InlineLoader{}),
 		Registry:  registry,
+		Binder:    &kubehost.ReadOnlyKubeHost{KubeHost: kubeFull},
 		Server:    admissionServer,
 		Registrar: registrar,
 	}).SetupWithManager(mgr); err != nil {

@@ -47,7 +47,8 @@ type kubeListSpec struct {
 	FieldSelector string `json:"fieldSelector"`
 }
 
-// Bind installs the kube.* functions on globalThis. Implements HostBinder.
+// Bind installs the full kube.{apply,get,list,delete} surface on globalThis.
+// Implements HostBinder. Used for JSHook VMs.
 func (h *KubeHost) Bind(ctx *qjs.Context) error {
 	if h.Dyn == nil || h.Mapper == nil {
 		return fmt.Errorf("KubeHost: Dyn and Mapper must be set")
@@ -57,6 +58,32 @@ func (h *KubeHost) Bind(ctx *qjs.Context) error {
 	kube.SetPropertyStr("get", ctx.Function(h.get))
 	kube.SetPropertyStr("list", ctx.Function(h.list))
 	kube.SetPropertyStr("delete", ctx.Function(h.del))
+	ctx.Global().SetPropertyStr("kube", kube)
+	return nil
+}
+
+// ReadOnlyKubeHost is a HostBinder that exposes only kube.get and kube.list
+// to JS. kube.apply and kube.delete are not bound at all, so JS sees them
+// as undefined. Intended for JSAdmission VMs where the CRD declares
+// sideEffects: None and any cluster write from the request path is a
+// contract violation.
+//
+// The embedded *KubeHost is the source of the dynamic client and mapper;
+// this type is intentionally a thin wrapper so the read-only and full
+// binders share zero state divergence — they're literally the same client,
+// with a different surface bound into JS.
+type ReadOnlyKubeHost struct {
+	*KubeHost
+}
+
+// Bind installs only the read-only subset on globalThis. Implements HostBinder.
+func (h *ReadOnlyKubeHost) Bind(ctx *qjs.Context) error {
+	if h.KubeHost == nil || h.Dyn == nil || h.Mapper == nil {
+		return fmt.Errorf("ReadOnlyKubeHost: embedded KubeHost must be set")
+	}
+	kube := ctx.NewObject()
+	kube.SetPropertyStr("get", ctx.Function(h.get))
+	kube.SetPropertyStr("list", ctx.Function(h.list))
 	ctx.Global().SetPropertyStr("kube", kube)
 	return nil
 }

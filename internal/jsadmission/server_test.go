@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
 
@@ -31,7 +30,7 @@ func loadPolicy(t *testing.T, src string, key types.NamespacedName) *jsregistry.
 	if !strings.Contains(src, "function config(") {
 		source = append([]byte("function config(){return {configVersion:'v1'}}\n"), source...)
 	}
-	if _, _, err := reg.GetOrLoad(key, source, "h1", jsengine.Limits{}, nil); err != nil {
+	if _, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: source, SourceHash: "h1"}); err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
 	return reg

@@ -51,6 +51,11 @@ type JSAdmissionReconciler struct {
 	Loader *jssource.Chain
 	// Registry owns the per-policy persistent JS instances.
 	Registry *jsregistry.Registry
+	// Binder is the host-function surface installed on every JSAdmission VM.
+	// Typically a *kubehost.ReadOnlyKubeHost — admission policies must not
+	// write to the cluster from the apiserver request path (sideEffects:
+	// None contract), so apply/delete are intentionally not bound.
+	Binder jsengine.HostBinder
 	// Server holds the live policy table the HTTP webhook handler consults.
 	Server *jsadmission.Server
 	// Registrar maintains the central VWC/MWC.
@@ -88,7 +93,12 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	srcHash := jssource.Hash(source)
 	lim := admissionLimitsFromSpec(pol.Spec.Limits)
 
-	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, source, srcHash, lim, nil)
+	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, jsregistry.BuildOptions{
+		Source:     source,
+		SourceHash: srcHash,
+		Limits:     lim,
+		Binder:     r.Binder,
+	})
 	if err != nil {
 		log.Error(err, "registry GetOrLoad")
 		return r.failAdmission(ctx, &pol, fmt.Sprintf("instance: %v", err))
@@ -104,7 +114,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			prev = pol.Status.Instance.ManualRestartToken
 		}
 		if token != prev {
-			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsregistry.ReasonManual, nil)
+			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsregistry.ReasonManual)
 			if err != nil {
 				log.Error(err, "manual restart")
 				return r.failAdmission(ctx, &pol, fmt.Sprintf("manual restart: %v", err))

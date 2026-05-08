@@ -14,10 +14,10 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	t.Cleanup(func() { reg.Drop(types.NamespacedName{Name: "h1"}) })
 
 	src := []byte(`globalThis.counter = (globalThis.counter || 0); function config(){return {configVersion:"v1"}}`)
-	hash := "abc123"
 	key := types.NamespacedName{Name: "h1"}
+	opts := jsregistry.BuildOptions{Source: src, SourceHash: "abc123"}
 
-	mi, restarted, err := reg.GetOrLoad(key, src, hash, jsengine.Limits{}, nil)
+	mi, restarted, err := reg.GetOrLoad(key, opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 		t.Fatalf("Eval: %v", err)
 	}
 
-	mi2, restarted2, err := reg.GetOrLoad(key, src, hash, jsengine.Limits{}, nil)
+	mi2, restarted2, err := reg.GetOrLoad(key, opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad #2: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 	src1 := []byte(`globalThis.tag = "v1"; function config(){return {}}`)
 	src2 := []byte(`globalThis.tag = "v2"; function config(){return {}}`)
 
-	mi, _, err := reg.GetOrLoad(key, src1, "h1", jsengine.Limits{}, nil)
+	mi, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src1, SourceHash: "h1"})
 	if err != nil {
 		t.Fatalf("load v1: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 		t.Fatalf("v1 tag: got %q", got)
 	}
 
-	mi2, restarted, err := reg.GetOrLoad(key, src2, "h2", jsengine.Limits{}, nil)
+	mi2, restarted, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src2, SourceHash: "h2"})
 	if err != nil {
 		t.Fatalf("load v2: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 }
 
 // TestRegistry_RestartByKey_RebuildsFromCachedSource proves that the registry
-// can rescue-rebuild an instance using the cached source/limits, without the
+// can rescue-rebuild an instance using the cached BuildOptions, without the
 // caller passing them again. This is the path the dispatcher takes on
 // memory/panic/timeout — it doesn't have the source bytes in hand.
 func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
@@ -97,7 +97,11 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	t.Cleanup(func() { reg.Drop(key) })
 
 	src := []byte(`globalThis.counter = 0; function config(){return {}}`)
-	mi, _, err := reg.GetOrLoad(key, src, "h1", jsengine.Limits{MemoryMB: 8}, nil)
+	mi, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{
+		Source:     src,
+		SourceHash: "h1",
+		Limits:     jsengine.Limits{MemoryMB: 8},
+	})
 	if err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
@@ -105,7 +109,7 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 		t.Fatalf("dirty eval: %v", err)
 	}
 
-	mi2, err := reg.RestartByKey(key, jsregistry.ReasonPanic, nil)
+	mi2, err := reg.RestartByKey(key, jsregistry.ReasonPanic)
 	if err != nil {
 		t.Fatalf("RestartByKey: %v", err)
 	}
@@ -132,7 +136,7 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 
 func TestRegistry_RestartByKey_UnknownHook(t *testing.T) {
 	reg := jsregistry.NewRegistry()
-	if _, err := reg.RestartByKey(types.NamespacedName{Name: "ghost"}, jsregistry.ReasonManual, nil); err == nil {
+	if _, err := reg.RestartByKey(types.NamespacedName{Name: "ghost"}, jsregistry.ReasonManual); err == nil {
 		t.Fatal("expected error for unknown hook")
 	}
 }
@@ -146,7 +150,7 @@ func TestRegistry_Get(t *testing.T) {
 		t.Fatal("Get must return false for unknown key")
 	}
 	src := []byte(`function config(){return {}}`)
-	mi, _, err := reg.GetOrLoad(key, src, "x", jsengine.Limits{}, nil)
+	mi, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src, SourceHash: "x"})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -161,7 +165,7 @@ func TestRegistry_Drop(t *testing.T) {
 	key := types.NamespacedName{Name: "h3"}
 
 	src := []byte(`function config(){return {}}`)
-	if _, _, err := reg.GetOrLoad(key, src, "x", jsengine.Limits{}, nil); err != nil {
+	if _, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if reg.Len() != 1 {
