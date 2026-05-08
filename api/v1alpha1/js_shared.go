@@ -88,8 +88,8 @@ type OCISource struct {
 	Digest string `json:"digest,omitempty"`
 }
 
-// JSResources caps what the persistent JS instance is allowed to consume.
-type JSResources struct {
+// JSLimits caps what the persistent JS instance is allowed to consume.
+type JSLimits struct {
 	// MemoryMB is the hard limit on the QuickJS heap in megabytes.
 	// +kubebuilder:default=32
 	// +kubebuilder:validation:Minimum=1

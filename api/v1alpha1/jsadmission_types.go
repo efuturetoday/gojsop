@@ -58,9 +58,9 @@ type JSAdmissionSpec struct {
 	// +required
 	Source JSSource `json:"source"`
 
-	// Resources caps memory and per-call execution time of the JS instance.
+	// Limits caps memory and per-call execution time of the JS instance.
 	// +optional
-	Resources *JSResources `json:"resources,omitempty"`
+	Limits *JSLimits `json:"limits,omitempty"`
 
 	// Type selects the webhook flavour. validating policies must export
 	// validate(req); mutating policies must export mutate(req) and may

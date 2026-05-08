@@ -26,9 +26,9 @@ type JSHookSpec struct {
 	// +required
 	Source JSSource `json:"source"`
 
-	// Resources caps memory and per-call execution time of the JS instance.
+	// Limits caps memory and per-call execution time of the JS instance.
 	// +optional
-	Resources *JSResources `json:"resources,omitempty"`
+	Limits *JSLimits `json:"limits,omitempty"`
 }
 
 // JSHookStatus defines the observed state of JSHook.

@@ -15,7 +15,7 @@ import (
 
 // Limits caps what a single VM may consume. Zero fields fall back to the
 // defaults in DefaultLimits(); callers are encouraged to pass explicit values
-// plumbed from spec.resources on the JSHook/JSAdmission CRDs.
+// plumbed from spec.limits on the JSHook/JSAdmission CRDs.
 type Limits struct {
 	// MemoryMB caps the QuickJS heap in megabytes. Translated to bytes for
 	// JS_SetMemoryLimit. Zero means "use default".

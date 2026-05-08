@@ -51,6 +51,6 @@ spec:
           }
         }
       }
-  resources:
+  limits:
     memoryMB: 32
     timeoutSeconds: 30

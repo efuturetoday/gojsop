@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	jsonpatch "gomodules.xyz/jsonpatch/v2"
+	"gomodules.xyz/jsonpatch/v2"
 )
 
 // immutablePatchPrefixes are paths the apiserver rejects when present in a

@@ -120,7 +120,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.fail(ctx, &hook, fmt.Sprintf("source: %v", err))
 	}
 	srcHash := jssource.Hash(source)
-	lim := limitsFromSpec(hook.Spec.Resources)
+	lim := limitsFromSpec(hook.Spec.Limits)
 
 	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, source, srcHash, lim, readConfig)
 	if err != nil {
@@ -209,9 +209,9 @@ func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-// limitsFromSpec maps the CRD's optional Resources to jsengine.Limits.
+// limitsFromSpec maps the CRD's optional Limits to jsengine.Limits.
 // Zero/missing fields fall back to engine defaults inside New().
-func limitsFromSpec(r *corev1alpha1.JSResources) jsengine.Limits {
+func limitsFromSpec(r *corev1alpha1.JSLimits) jsengine.Limits {
 	if r == nil {
 		return jsengine.Limits{}
 	}

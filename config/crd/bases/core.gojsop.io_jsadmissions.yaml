@@ -73,6 +73,29 @@ spec:
                 - Fail
                 - Ignore
                 type: string
+              limits:
+                description: Limits caps memory and per-call execution time of the
+                  JS instance.
+                properties:
+                  memoryMB:
+                    default: 32
+                    description: MemoryMB is the hard limit on the QuickJS heap in
+                      megabytes.
+                    format: int32
+                    maximum: 512
+                    minimum: 1
+                    type: integer
+                  timeoutSeconds:
+                    default: 30
+                    description: |-
+                      TimeoutSeconds bounds a single call into JS.
+                      On timeout the call is interrupted; the persistent instance survives
+                      unless timeouts repeat (see status.instance.lastRestartReason).
+                    format: int32
+                    maximum: 300
+                    minimum: 1
+                    type: integer
+                type: object
               matchPolicy:
                 default: Equivalent
                 description: MatchPolicy is forwarded to admissionregistration.k8s.io/v1.
@@ -175,29 +198,6 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-map-type: atomic
-              resources:
-                description: Resources caps memory and per-call execution time of
-                  the JS instance.
-                properties:
-                  memoryMB:
-                    default: 32
-                    description: MemoryMB is the hard limit on the QuickJS heap in
-                      megabytes.
-                    format: int32
-                    maximum: 512
-                    minimum: 1
-                    type: integer
-                  timeoutSeconds:
-                    default: 30
-                    description: |-
-                      TimeoutSeconds bounds a single call into JS.
-                      On timeout the call is interrupted; the persistent instance survives
-                      unless timeouts repeat (see status.instance.lastRestartReason).
-                    format: int32
-                    maximum: 300
-                    minimum: 1
-                    type: integer
-                type: object
               rules:
                 description: |-
                   Rules tell the apiserver which resources to forward to this policy.

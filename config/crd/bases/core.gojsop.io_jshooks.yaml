@@ -61,9 +61,9 @@ spec:
           spec:
             description: spec defines the desired state of JSHook
             properties:
-              resources:
-                description: Resources caps memory and per-call execution time of
-                  the JS instance.
+              limits:
+                description: Limits caps memory and per-call execution time of the
+                  JS instance.
                 properties:
                   memoryMB:
                     default: 32

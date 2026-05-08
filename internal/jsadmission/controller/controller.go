@@ -86,7 +86,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.failAdmission(ctx, &pol, fmt.Sprintf("source: %v", err))
 	}
 	srcHash := jssource.Hash(source)
-	lim := admissionLimitsFromSpec(pol.Spec.Resources)
+	lim := admissionLimitsFromSpec(pol.Spec.Limits)
 
 	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, source, srcHash, lim, nil)
 	if err != nil {
@@ -199,8 +199,8 @@ func (r *JSAdmissionReconciler) failAdmission(ctx context.Context, pol *corev1al
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-// admissionLimitsFromSpec maps the CRD's optional Resources to jsengine.Limits.
-func admissionLimitsFromSpec(r *corev1alpha1.JSResources) jsengine.Limits {
+// admissionLimitsFromSpec maps the CRD's optional Limits to jsengine.Limits.
+func admissionLimitsFromSpec(r *corev1alpha1.JSLimits) jsengine.Limits {
 	if r == nil {
 		return jsengine.Limits{}
 	}
