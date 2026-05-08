@@ -16,12 +16,6 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
 
 ## 1. Smells
 
-- **`PostBuildHook` re-enters the VM under the registry lock.**
-  `jshook.ReadConfig` runs while `jsregistry` holds the per-instance
-  build lock; the "stash in `Extra`" handshake is a side-channel
-  documented only in code.
-  `internal/jshook/controller/controller.go:79-89`,
-  `internal/jsregistry/registry.go` (PostBuildHook hook).
 - **Manual restart annotation has no audit trail.** Token comparison
   triggers a rebuild but nothing emits an Event or records who/when.
   `internal/jshook/controller/controller.go:138-153`.

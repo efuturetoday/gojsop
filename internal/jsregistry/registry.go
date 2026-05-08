@@ -66,27 +66,52 @@ type PostBuildHook func(vm *jsengine.VM) (extra any, err error)
 // Registry holds the live JS VM for every JSHook/JSAdmission the controller
 // knows about. One VM per NamespacedName, owned by the controller's lifetime.
 //
-// All methods are safe for concurrent use. The expectation is that the
-// reconciler holds the per-hook lock implicitly via controller-runtime's
-// per-key serialization, so contention here is rare.
+// Concurrency model: r.mu protects map structural integrity only — it is
+// never held while user JS executes (LoadModule, postBuild). Per-key build
+// serialization is done via buildLocks: a goroutine holds the per-key lock
+// while running the expensive VM construction, so two reconciles for the
+// same key can't race, but reconciles for different keys never block each
+// other. This means a slow user config() in one hook does not stall any
+// other hook's reconcile.
 type Registry struct {
 	// Binder, if non-nil, is invoked on every newly created VM before the
 	// user's module is evaluated. Use this to register host functions
 	// (e.g. globalThis.kube) onto the runtime.
 	Binder jsengine.HostBinder
 
-	mu  sync.Mutex
-	vms map[types.NamespacedName]*ManagedVM
+	mu         sync.Mutex
+	vms        map[types.NamespacedName]*ManagedVM
+	buildLocks map[types.NamespacedName]*sync.Mutex
 }
 
 func NewRegistry() *Registry {
-	return &Registry{vms: make(map[types.NamespacedName]*ManagedVM)}
+	return &Registry{
+		vms:        make(map[types.NamespacedName]*ManagedVM),
+		buildLocks: make(map[types.NamespacedName]*sync.Mutex),
+	}
+}
+
+// getBuildLock returns the per-key build mutex, creating it on first use.
+// The map of build locks is itself protected by r.mu, but the returned
+// mutex is acquired by the caller without holding r.mu — that is the whole
+// point of the split.
+func (r *Registry) getBuildLock(key types.NamespacedName) *sync.Mutex {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	bMu, ok := r.buildLocks[key]
+	if !ok {
+		bMu = &sync.Mutex{}
+		r.buildLocks[key] = bMu
+	}
+	return bMu
 }
 
 // build constructs and initializes a fresh VM for key with the given source
-// and limits. On any failure the partially-built VM is closed. Caller holds
-// r.mu. The optional postBuild lets the feature attach its own typed payload
-// (e.g. parsed config()) onto ManagedVM.Extra.
+// and limits. On any failure the partially-built VM is closed. The caller
+// must hold the per-key build mutex (see getBuildLock); r.mu MUST NOT be
+// held because LoadModule and postBuild execute user JS that may block or
+// take a long time. The optional postBuild lets the feature attach its own
+// typed payload (e.g. parsed config()) onto ManagedVM.Extra.
 func (r *Registry) build(key types.NamespacedName, source []byte, sourceHash string, lim jsengine.Limits, postBuild PostBuildHook) (*ManagedVM, error) {
 	vm, err := jsengine.New(lim)
 	if err != nil {
@@ -122,20 +147,46 @@ func (r *Registry) build(key types.NamespacedName, source []byte, sourceHash str
 // sourceHash differs from the last load, a fresh QuickJS runtime is started,
 // the source is evaluated, and the previous VM (if any) is closed. The
 // boolean reports whether a (re)start happened on this call.
+//
+// Implements double-checked locking around a per-key build mutex:
+//  1. fast path under r.mu — return existing if hash matches
+//  2. acquire per-key build mutex (no r.mu held); concurrent reconciles for
+//     other keys race straight through
+//  3. re-check under r.mu in case a peer just finished building
+//  4. run build() with no global lock held — user JS executes here
+//  5. install the new VM under r.mu (microseconds)
 func (r *Registry) GetOrLoad(key types.NamespacedName, source []byte, sourceHash string, lim jsengine.Limits, postBuild PostBuildHook) (*ManagedVM, bool, error) {
+	// 1. fast path
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	existing, ok := r.vms[key]
-	if ok && existing.SourceHash == sourceHash {
+	if existing, ok := r.vms[key]; ok && existing.SourceHash == sourceHash {
+		r.mu.Unlock()
 		return existing, false, nil
 	}
+	r.mu.Unlock()
 
+	// 2. serialize builds for this key only
+	bMu := r.getBuildLock(key)
+	bMu.Lock()
+	defer bMu.Unlock()
+
+	// 3. double-check after acquiring the build lock
+	r.mu.Lock()
+	if existing, ok := r.vms[key]; ok && existing.SourceHash == sourceHash {
+		r.mu.Unlock()
+		return existing, false, nil
+	}
+	r.mu.Unlock()
+
+	// 4. heavy lifting — runs user JS, no global lock held
 	mi, err := r.build(key, source, sourceHash, lim, postBuild)
 	if err != nil {
 		return nil, false, err
 	}
-	if ok {
+
+	// 5. install
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.vms[key]; ok {
 		existing.VM.Close()
 		mi.RestartCount = existing.RestartCount + 1
 		mi.LastReason = ReasonSourceChanged
@@ -155,7 +206,10 @@ func (r *Registry) Get(key types.NamespacedName) (*ManagedVM, bool) {
 }
 
 // Drop closes and forgets the VM for key. Idempotent; called from the
-// reconciler when the resource is deleted.
+// reconciler when the resource is deleted. The build lock is dropped too;
+// in the unlikely case a concurrent GetOrLoad is mid-build for the same
+// key it will finish and install a zombie VM, which the next reconcile
+// (NotFound → Drop) cleans up.
 func (r *Registry) Drop(key types.NamespacedName) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -163,24 +217,36 @@ func (r *Registry) Drop(key types.NamespacedName) {
 		mi.VM.Close()
 		delete(r.vms, key)
 	}
+	delete(r.buildLocks, key)
 }
 
 // RestartByKey force-replaces the VM for key with a fresh runtime, reusing the
 // cached source/limits from the last successful load. Used by rescue paths
 // (memory/panic/timeout/manual) that don't have the source bytes in hand.
 // Returns an error if the resource is unknown to the registry.
+//
+// Holds the per-key build mutex across the rebuild so a concurrent
+// GetOrLoad for the same key serializes behind it; r.mu is only held for
+// the brief read of the existing entry and the install at the end.
 func (r *Registry) RestartByKey(key types.NamespacedName, reason string, postBuild PostBuildHook) (*ManagedVM, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	bMu := r.getBuildLock(key)
+	bMu.Lock()
+	defer bMu.Unlock()
 
+	r.mu.Lock()
 	old, ok := r.vms[key]
+	r.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("registry: restart called for unknown key %s", key)
 	}
+
 	mi, err := r.build(key, old.source, old.SourceHash, old.limits, postBuild)
 	if err != nil {
 		return nil, err
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	old.VM.Close()
 	mi.RestartCount = old.RestartCount + 1
 	mi.LastReason = reason
