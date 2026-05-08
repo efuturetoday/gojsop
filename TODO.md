@@ -16,9 +16,6 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
 
 ## 1. Smells
 
-- **Manual restart annotation has no audit trail.** Token comparison
-  triggers a rebuild but nothing emits an Event or records who/when.
-  `internal/jshook/controller/controller.go:138-153`.
 - **Restart bookkeeping is shallow.** `ManagedVM` keeps only
   `RestartCount` + `LastReason`; no per-trigger counters (OOM vs
   panic vs timeout streak vs manual), no history ring.
@@ -28,12 +25,22 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
   `internal/jsengine/kubehost/kubehost.go:24-31`.
 - **Failure path overwrites `LastExecution`.** `controller.fail()`
   writes both Conditions and `LastExecution.Error`, mixing reconcile
-  failures with hook-execution telemetry.
-  `internal/jshook/controller/controller.go:191-210`.
+  failures with hook-execution telemetry. Same shape on the admission
+  side via `failAdmission`.
 - **5s hard-coded backoff on every fail path.** `RequeueAfter:
   5*time.Second` regardless of error class — bad source URL and a
   transient API error get the same retry shape.
-  `internal/jshook/controller/controller.go:209`.
+- **Admission has no rescue path.** A panicked `validate()`/`mutate()`
+  VM stays panicked; every subsequent request emits `ReviewPanicked`
+  and falls through to FailurePolicy until someone bumps the manual
+  restart annotation. The dispatcher rescues on panic/OOM/timeout
+  streak; admission does not.
+  `internal/jsadmission/server.go:review`.
+- **Event-emission plumbing is two parallel callbacks.** Both
+  `dispatcher.EventEmitter` and `jsadmission.EventEmitter` are the
+  exact same `func(eventType, reason, message string)`. Two declared
+  types so the packages don't depend on each other; if a third
+  caller appears, lift it into a shared package.
 
 ## 2. Missing
 
@@ -52,15 +59,19 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
   `--metrics-bind-address` but neither dispatcher nor admission
   server registers anything (handle count/duration/restart counters,
   review latency, allow/deny counts). flant/shell-operator publishes
-  all of these.
-- **No `corev1.Event` emission.** Reconcile failures land only in
-  `status.conditions`; no `EventRecorder` on the reconcilers, so
-  `kubectl describe` shows nothing useful.
+  all of these. With events landed, this is the natural counterpart:
+  events answer "did something interesting happen", metrics answer
+  "how often, how slow".
 - **JS execution is not interruptible.** `Limits.TimeoutSeconds` is a
   Go-side context deadline; the QuickJS instance keeps running an
   infinite loop and the worker goroutine is held until it returns.
   Three timeouts trigger a hard restart but the in-flight goroutine
-  leaks until QuickJS returns.
+  leaks until QuickJS returns. Same shape on the admission server's
+  review goroutine — `ReviewTimeout` fires, but the qjs call leaks
+  until it finishes. Build-time hangs (`while(true)` at module top
+  level or inside `config()`) hold the per-key build mutex with no
+  event ever fired, since the build never returns. Engine-level
+  fix (qjs interrupt callback or runtime-close from a watchdog).
 - **No leader-election awareness in the dispatcher.** Informers spin
   up locally on the leader; on failover the new leader rebuilds them
   with a fresh Synchronization. Events arriving in the gap are lost.
@@ -72,9 +83,12 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
 - **No per-hook RBAC narrowing.** Wildcard
   `groups=*,resources=*` in `controller.go:77`; a misbehaving JS
   policy can touch anything.
-- **JSAdmission status has no `lastReview`/duration.** Users can't
-  tell if the policy is being called or how long it takes.
-  `api/v1alpha1/jsadmission_types.go`.
+- **JSAdmission `lastReview` only populated on failure.**
+  `failAdmission` writes `status.lastReview.error`; the success path
+  doesn't write a `time` or duration, so users still can't tell if a
+  policy is being called or how long the happy path takes.
+  `api/v1alpha1/jsadmission_types.go`,
+  `internal/jsadmission/server.go:review`.
 - **`samples/core_v1alpha1_jshook.yaml` likely doesn't fully run.**
   Schedule/jqFilter/queue/allowFailure fields wouldn't have any
   effect; samples should match what's implemented.
@@ -120,9 +134,11 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
   user-facing. No `spec.restartPolicy` to opt out, tighten the
   streak threshold, or freeze the VM after N restarts.
 - **JS error surface is a string.** `Status.Condition.Message` is
-  the only feedback path. JS authors need stack traces, line
-  numbers, the failing export name; today they get a single
-  truncated line.
+  the main feedback path. Build-time gets a small assist now —
+  `EntrypointMissing` events name the missing export, and typed
+  build errors classify load-module / post-build / bind-host /
+  new-vm cleanly — but `handle()`/`validate()` runtime errors still
+  flatten to one truncated line with no stack/line-number/export.
 - **Inline source ergonomics.** Multi-line JS in YAML is painful,
   and there's no `kubectl gojsop validate hook.yaml` or syntax check
   on admission of the CR itself.
