@@ -41,12 +41,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/admission"
-	"github.com/o-haase/gojsop/internal/controller"
-	"github.com/o-haase/gojsop/internal/dispatcher"
-	"github.com/o-haase/gojsop/internal/hooks"
-	jsruntime "github.com/o-haase/gojsop/internal/runtime"
-	webhookv1alpha1 "github.com/o-haase/gojsop/internal/webhook/v1alpha1"
+	"github.com/o-haase/gojsop/internal/jsadmission"
+	jsadmissionctrl "github.com/o-haase/gojsop/internal/jsadmission/controller"
+	webhookv1alpha1 "github.com/o-haase/gojsop/internal/jsadmission/webhook/v1alpha1"
+	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
+	jshookctrl "github.com/o-haase/gojsop/internal/jshook/controller"
+	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
+	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jssource"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -81,7 +83,7 @@ func admissionServiceFromEnv() admissionregv1.ServiceReference {
 
 // fileCABundleProvider reads the PEM CA bundle off disk every time it's
 // called so cert-manager rotations propagate within one Sync window.
-func fileCABundleProvider(certDir string) admission.CABundleProvider {
+func fileCABundleProvider(certDir string) jsadmission.CABundleProvider {
 	if certDir == "" {
 		certDir = "/tmp/k8s-webhook-server/serving-certs"
 	}
@@ -233,14 +235,14 @@ func main() {
 		os.Exit(1)
 	}
 	managerCtx := ctrl.SetupSignalHandler()
-	registry := jsruntime.NewRegistry()
-	registry.Binder = &jsruntime.KubeHost{
+	registry := jsregistry.NewRegistry()
+	registry.Binder = &kubehost.KubeHost{
 		Ctx:    managerCtx,
 		Dyn:    dyn,
 		Mapper: mgr.GetRESTMapper(),
 	}
 	disp := dispatcher.New(dyn, dispatcher.FromMetaMapper(mgr.GetRESTMapper()), registry)
-	if err := (&controller.JSHookReconciler{
+	if err := (&jshookctrl.JSHookReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Registry:     registry,
@@ -254,22 +256,22 @@ func main() {
 	// Admission webhook plumbing. The HTTP handler shares the runtime Registry
 	// with JSHook; the central VWC/MWC are aggregated via the Registrar.
 	admissionLog := ctrl.Log.WithName("admission")
-	admissionServer := admission.NewServer(registry, admissionLog)
-	mgr.GetWebhookServer().Register(admission.PathPrefixValidate, admissionServer.ValidateHandler())
-	mgr.GetWebhookServer().Register(admission.PathPrefixMutate, admissionServer.MutateHandler())
+	admissionServer := jsadmission.NewServer(registry, admissionLog)
+	mgr.GetWebhookServer().Register(jsadmission.PathPrefixValidate, admissionServer.ValidateHandler())
+	mgr.GetWebhookServer().Register(jsadmission.PathPrefixMutate, admissionServer.MutateHandler())
 
 	caProvider := fileCABundleProvider(webhookCertPath)
-	registrar := admission.NewRegistrar(mgr.GetClient(), admissionServiceFromEnv(), caProvider, admissionLog)
+	registrar := jsadmission.NewRegistrar(mgr.GetClient(), admissionServiceFromEnv(), caProvider, admissionLog)
 	// Exclude the controller's own namespace from every policy so a broken
 	// admission policy cannot prevent the manager pod from being re-created.
 	// Other infra namespaces are the user's call.
 	registrar.ExcludeNamespaces = []string{admissionServiceFromEnv().Namespace}
 	registrar.Start(managerCtx)
 
-	if err := (&controller.JSAdmissionReconciler{
+	if err := (&jsadmissionctrl.JSAdmissionReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
-		Loader:    hooks.NewChain(hooks.InlineLoader{}),
+		Loader:    jssource.NewChain(jssource.InlineLoader{}),
 		Registry:  registry,
 		Server:    admissionServer,
 		Registrar: registrar,
