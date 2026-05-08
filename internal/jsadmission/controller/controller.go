@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
@@ -81,6 +82,7 @@ func (r *JSAdmissionReconciler) event(obj runtime.Object, eventType, reason, mes
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jsadmissions/finalizers,verbs=update
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingwebhookconfigurations;mutatingwebhookconfigurations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 // admissionPostBuild returns a PostBuild closure that asserts the loaded
 // module exposes the entrypoint required by the policy's spec.type
@@ -294,6 +296,9 @@ func orInt32(v, def int32) int32 {
 }
 
 // SetupWithManager sets up the controller with the Manager.
+//
+// Watches ConfigMaps so spec.source.configMapRef edits trigger a reconcile;
+// the mapper picks every JSAdmission whose ref matches the changed CM.
 func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Loader == nil {
 		r.Loader = jssource.NewChain(jssource.InlineLoader{})
@@ -303,6 +308,10 @@ func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSAdmission{}).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(jssource.JSAdmissionConfigMapMapper(mgr.GetClient())),
+		).
 		Named("jsadmission").
 		Complete(r)
 }

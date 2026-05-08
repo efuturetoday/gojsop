@@ -38,11 +38,13 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
   interruptible (separate engine-level work) a stuck policy waits
   for its own call to finish.
   `internal/jsadmission/server.go:review`.
+
 ## 2. Missing
 
-- **No source loaders beyond Inline.** CRD shapes `configMapRef` and
-  `oci` exist but only `InlineLoader` is registered; users referencing
-  a ConfigMap silently get nothing.
+- **No OCI source loader.** `InlineLoader` and `ConfigMapLoader` are
+  wired (the latter watches ConfigMaps so edits trigger a reconcile);
+  `oci` is still typed-only — applying a hook with `spec.source.oci`
+  surfaces "no loader matched" via SourceLoadFailed.
   `internal/jssource/`, `cmd/main.go`.
 - **Schedule bindings never fire.** `Config.Schedule`,
   `ScheduleBinding`, `OnStartup` are decoded and surfaced in

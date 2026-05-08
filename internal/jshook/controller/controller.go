@@ -29,6 +29,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
@@ -95,6 +96,7 @@ func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message 
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // MVP: hooks can watch and mutate any resource. Phase 2 will narrow this
 // based on the bindings each hook actually declares (per-hook ServiceAccount).
 // +kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch;create;update;patch;delete
@@ -312,6 +314,10 @@ func (r *JSHookReconciler) subscribeCtx() context.Context {
 }
 
 // SetupWithManager sets up the controller with the Manager.
+//
+// Watches ConfigMaps too: when a ConfigMap changes the mapper finds every
+// JSHook whose spec.source.configMapRef points at it and enqueues a
+// reconcile. That's how source-from-ConfigMap stays live without polling.
 func (r *JSHookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Loader == nil {
 		r.Loader = jssource.NewChain(jssource.InlineLoader{})
@@ -321,6 +327,10 @@ func (r *JSHookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSHook{}).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(jssource.JSHookConfigMapMapper(mgr.GetClient())),
+		).
 		Named("jshook").
 		Complete(r)
 }

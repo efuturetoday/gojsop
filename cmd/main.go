@@ -245,9 +245,17 @@ func main() {
 		Mapper: mgr.GetRESTMapper(),
 	}
 	disp := dispatcher.New(dyn, dispatcher.FromMetaMapper(mgr.GetRESTMapper()), registry)
+	// Loader chain is shared between JSHook and JSAdmission so configMapRef
+	// resolves the same way on both surfaces. The cache-backed manager
+	// client gives us hot reads + watch-driven invalidation.
+	loaderChain := jssource.NewChain(
+		jssource.InlineLoader{},
+		jssource.ConfigMapLoader{Reader: mgr.GetClient()},
+	)
 	if err := (&jshookctrl.JSHookReconciler{
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
+		Loader:       loaderChain,
 		Registry:     registry,
 		Binder:       kubeFull,
 		Dispatcher:   disp,
@@ -276,7 +284,7 @@ func main() {
 	if err := (&jsadmissionctrl.JSAdmissionReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
-		Loader:    jssource.NewChain(jssource.InlineLoader{}),
+		Loader:    loaderChain,
 		Registry:  registry,
 		Binder:    &kubehost.ReadOnlyKubeHost{KubeHost: kubeFull},
 		Server:    admissionServer,
