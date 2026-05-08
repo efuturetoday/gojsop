@@ -14,19 +14,22 @@ import (
 	"github.com/o-haase/gojsop/internal/jsengine"
 )
 
-// Restart reasons recorded into JSHook.status.instance.lastRestartReason.
-// This is the CRD's documented enum — every value is wired to a real trigger:
+// RestartReason is the documented enum of triggers that cause a managed VM to
+// be rebuilt. Recorded into JSHook.status.instance.lastRestartReason.
+type RestartReason string
+
+// Restart reasons. Every value is wired to a real trigger:
 //   - ReasonSourceChanged: spec.source's hash differs on Reconcile (Registry.GetOrLoad)
 //   - ReasonMemoryLimit:   handle() returned an "out of memory" error (dispatcher worker)
 //   - ReasonPanic:         handle() panicked (dispatcher worker recover)
 //   - ReasonTimeoutStreak: handle() exceeded TimeoutSeconds N times in a row (dispatcher worker)
 //   - ReasonManual:        gojsop.io/restart annotation changed on the JSHook (reconciler)
 const (
-	ReasonSourceChanged = "source-changed"
-	ReasonMemoryLimit   = "memory-limit"
-	ReasonPanic         = "panic"
-	ReasonTimeoutStreak = "timeout-streak"
-	ReasonManual        = "manual"
+	ReasonSourceChanged RestartReason = "source-changed"
+	ReasonMemoryLimit   RestartReason = "memory-limit"
+	ReasonPanic         RestartReason = "panic"
+	ReasonTimeoutStreak RestartReason = "timeout-streak"
+	ReasonManual        RestartReason = "manual"
 )
 
 // PostBuildHook is invoked once per fresh VM after the source has loaded. It
@@ -55,7 +58,7 @@ type ManagedVM struct {
 	Opts         BuildOptions
 	StartedAt    time.Time
 	RestartCount int32
-	LastReason   string
+	LastReason   RestartReason
 	// Extra is an opaque feature-specific payload the loader can stash on
 	// the ManagedVM at build time (e.g. JSHook caches its parsed Config
 	// here so reconciles don't re-enter the JS runtime concurrently with
@@ -235,7 +238,7 @@ func (r *Registry) Drop(key types.NamespacedName) {
 // Holds the per-key build mutex across the rebuild so a concurrent
 // GetOrLoad for the same key serializes behind it; r.mu is only held for
 // the brief read of the existing entry and the install at the end.
-func (r *Registry) RestartByKey(key types.NamespacedName, reason string) (*ManagedVM, error) {
+func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) (*ManagedVM, error) {
 	bMu := r.getBuildLock(key)
 	bMu.Lock()
 	defer bMu.Unlock()

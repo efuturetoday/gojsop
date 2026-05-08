@@ -3,6 +3,7 @@ package jsadmission
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -422,20 +423,7 @@ const maxBodyBytes = 3 << 20
 func readBody(r *http.Request, max int64) ([]byte, error) {
 	r.Body = http.MaxBytesReader(nil, r.Body, max)
 	defer r.Body.Close()
-	buf := make([]byte, 0, 16*1024)
-	chunk := make([]byte, 16*1024)
-	for {
-		n, err := r.Body.Read(chunk)
-		if n > 0 {
-			buf = append(buf, chunk[:n]...)
-		}
-		if err != nil {
-			if err.Error() == "EOF" {
-				return buf, nil
-			}
-			return nil, err
-		}
-	}
+	return io.ReadAll(r.Body)
 }
 
 // decodeReview parses the AdmissionReview from the request body. The

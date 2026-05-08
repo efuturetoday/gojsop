@@ -43,9 +43,9 @@ type PolicyMeta struct {
 	ReinvocationPolicy *admissionregv1.ReinvocationPolicyType
 }
 
-// Registrar pflegt zwei zentrale *WebhookConfigurations
-// (`gojsop-validating`, `gojsop-mutating`). Pro JSAdmission ein Eintrag im
-// passenden `.webhooks[]`. Sync() schreibt den aktuellen Zustand atomar.
+// Registrar maintains the two central *WebhookConfigurations
+// (`gojsop-validating`, `gojsop-mutating`). Each JSAdmission becomes one
+// entry in the matching `.webhooks[]`. Sync writes the current state atomically.
 //
 // Calls to Upsert/Remove are debounced — Sync runs at most once per debounce
 // window so a controller startup that reconciles N policies issues just one
@@ -127,12 +127,6 @@ func (r *Registrar) scheduleSyncLocked() {
 			r.Log.Error(err, "registrar Sync failed")
 		}
 	})
-}
-
-// SyncNow forces an immediate sync. Used by reconcilers that want to assert
-// the central object is current before declaring Phase=Ready.
-func (r *Registrar) SyncNow(ctx context.Context) error {
-	return r.Sync(ctx)
 }
 
 // Sync rewrites both central WebhookConfigurations from the live policy map.

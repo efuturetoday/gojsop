@@ -237,7 +237,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		StartedAt:          &startedAt,
 		SourceHash:         srcHash,
 		RestartCount:       mi.RestartCount,
-		LastRestartReason:  mi.LastReason,
+		LastRestartReason:  string(mi.LastReason),
 		ManualRestartToken: hook.GetAnnotations()[ManualRestartAnnotation],
 	}
 	if err := r.Status().Update(ctx, &hook); err != nil {

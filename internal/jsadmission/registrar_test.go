@@ -57,7 +57,7 @@ func TestRegistrar_TwoValidating_OneVWC_TwoEntries(t *testing.T) {
 	ctx := context.Background()
 	r.Upsert(samplePolicy("a", false))
 	r.Upsert(samplePolicy("b", false))
-	if err := r.SyncNow(ctx); err != nil {
+	if err := r.Sync(ctx); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
@@ -88,7 +88,7 @@ func TestRegistrar_MixedValidatingAndMutating(t *testing.T) {
 	ctx := context.Background()
 	r.Upsert(samplePolicy("v1", false))
 	r.Upsert(samplePolicy("m1", true))
-	if err := r.SyncNow(ctx); err != nil {
+	if err := r.Sync(ctx); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	var vwc admissionregv1.ValidatingWebhookConfiguration
@@ -111,11 +111,11 @@ func TestRegistrar_RemoveLastEntry_DeletesConfig(t *testing.T) {
 	r, c := newFakeRegistrar(t)
 	ctx := context.Background()
 	r.Upsert(samplePolicy("solo", false))
-	if err := r.SyncNow(ctx); err != nil {
+	if err := r.Sync(ctx); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	r.Remove(types.NamespacedName{Name: "solo"})
-	if err := r.SyncNow(ctx); err != nil {
+	if err := r.Sync(ctx); err != nil {
 		t.Fatalf("Sync remove: %v", err)
 	}
 	var vwc admissionregv1.ValidatingWebhookConfiguration
@@ -128,14 +128,14 @@ func TestRegistrar_Update_OverwritesEntry(t *testing.T) {
 	r, c := newFakeRegistrar(t)
 	ctx := context.Background()
 	r.Upsert(samplePolicy("p", false))
-	if err := r.SyncNow(ctx); err != nil {
+	if err := r.Sync(ctx); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	// Mutate the rules.
 	updated := samplePolicy("p", false)
 	updated.Rules[0].Resources = []string{"deployments"}
 	r.Upsert(updated)
-	if err := r.SyncNow(ctx); err != nil {
+	if err := r.Sync(ctx); err != nil {
 		t.Fatalf("Sync update: %v", err)
 	}
 	var vwc admissionregv1.ValidatingWebhookConfiguration

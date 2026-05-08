@@ -501,7 +501,7 @@ func (s *subscription) invokeHandle(bc jshook.BindingContext) (out string, err e
 // canonical Restarted / RescueFailed events) and resets the timeout streak.
 // On rebuild failure it logs and leaves the dead instance in place — the next
 // reconcile will retry; the queue keeps eating events meanwhile.
-func (s *subscription) rescue(logger logr.Logger, reason string) {
+func (s *subscription) rescue(logger logr.Logger, reason jsregistry.RestartReason) {
 	if _, err := jslifecycle.Rescue(s.reg, s.key, reason, s.emit); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
 		return

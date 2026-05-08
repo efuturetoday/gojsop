@@ -49,7 +49,7 @@ type EventEmitter func(eventType, reason, message string)
 // defeat dedup. Callers should log it through their own logger.
 //
 // The emitter is optional; passing nil is supported.
-func Rescue(reg *jsregistry.Registry, key types.NamespacedName, reason string, emit EventEmitter) (*jsregistry.ManagedVM, error) {
+func Rescue(reg *jsregistry.Registry, key types.NamespacedName, reason jsregistry.RestartReason, emit EventEmitter) (*jsregistry.ManagedVM, error) {
 	mi, err := reg.RestartByKey(key, reason)
 	if err != nil {
 		publish(emit, corev1.EventTypeWarning, conditions.EventRescueFailed,

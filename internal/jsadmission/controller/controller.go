@@ -239,7 +239,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		StartedAt:          &startedAt,
 		SourceHash:         srcHash,
 		RestartCount:       mi.RestartCount,
-		LastRestartReason:  mi.LastReason,
+		LastRestartReason:  string(mi.LastReason),
 		ManualRestartToken: pol.GetAnnotations()[conditions.ManualRestartAnnotation],
 	}
 	if err := r.Status().Update(ctx, &pol); err != nil {
