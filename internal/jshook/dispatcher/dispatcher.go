@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -33,10 +34,18 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
+
+// EventEmitter publishes a corev1.Event about the JSHook this subscription
+// belongs to. Optional — Subscribe accepts nil and the dispatcher silently
+// no-ops emission. The reconciler builds the closure and binds it to the
+// hook's metav1.Object so the recorder has a target. Message stability
+// rules (see internal/conditions) apply.
+type EventEmitter func(eventType, reason, message string)
 
 // timeoutStreakThreshold is how many consecutive Handle() calls may exceed
 // Limits.TimeoutSeconds before the instance is rescue-restarted.
@@ -94,9 +103,10 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsregistry.Registry) *Di
 
 // Subscribe (re)wires informers for hook `key`. The worker resolves the live
 // instance via Registry on every dispatch. cfg drives which informers start.
+// emit (optional) publishes lifecycle events; pass nil in tests.
 //
 // If a subscription already exists for key, it is torn down first.
-func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, cfg *jshook.Config) error {
+func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, cfg *jshook.Config, emit EventEmitter) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -119,6 +129,7 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 		),
 		cancel:  cancel,
 		pending: make(map[eventKey]jshook.BindingContext),
+		emit:    emit,
 	}
 
 	for _, b := range cfg.Kubernetes {
@@ -171,6 +182,10 @@ type subscription struct {
 
 	pendMu  sync.Mutex
 	pending map[eventKey]jshook.BindingContext
+
+	// emit publishes corev1.Events about this subscription's hook. Nil when
+	// the reconciler did not configure a recorder (test default).
+	emit EventEmitter
 
 	// timeoutStreak counts consecutive Handle() calls that exceeded
 	// Limits.TimeoutSeconds. Reset on a call that finishes inside the
@@ -419,6 +434,11 @@ func (s *subscription) runWorker(ctx context.Context) {
 			s.requeue(qkey, bc)
 		case err != nil:
 			logger.Error(err, "handle() failed", "binding", bc.Binding, "event", bc.WatchEvent)
+			// Static message — the JS error string would explode dedup
+			// cardinality at admission/event-loop volume. The verbose error
+			// goes to logs and to status.lastExecution.error.
+			s.publish(corev1.EventTypeWarning, conditions.EventHandleFailed,
+				"handle() returned an error")
 			s.requeue(qkey, bc)
 		default:
 			if out != "" {
@@ -435,6 +455,11 @@ func (s *subscription) runWorker(ctx context.Context) {
 			budget := time.Duration(mi.VM.Limits().TimeoutSeconds) * time.Second
 			if budget > 0 && elapsed > budget {
 				s.timeoutStreak++
+				// Single-timeout event uses the configured budget — stable
+				// per spec, so the recorder dedupes a flood of slow calls
+				// to one event per 10-min window.
+				s.publish(corev1.EventTypeWarning, conditions.EventHandleTimeout,
+					fmt.Sprintf("handle() exceeded %s", budget))
 				if s.timeoutStreak >= timeoutStreakThreshold {
 					logger.Info("handle() exceeded timeout for streak threshold — restarting instance",
 						"streak", s.timeoutStreak, "budget", budget, "elapsed", elapsed)
@@ -476,12 +501,29 @@ func (s *subscription) invokeHandle(bc jshook.BindingContext) (out string, err e
 // rescue rebuilds the instance via the registry and resets the timeout streak.
 // On rebuild failure it logs and leaves the dead instance in place — the next
 // reconcile will retry; the queue keeps eating events meanwhile.
+//
+// Emits a Restarted Warning on success and a RescueFailed Warning on
+// failure. Both messages embed only the rescue reason (panic /
+// memory-limit / timeout-streak — finite, low-cardinality) so the
+// recorder's (Reason, Message) dedup collapses bursts cleanly.
 func (s *subscription) rescue(logger logr.Logger, reason string) {
 	if _, err := s.reg.RestartByKey(s.key, reason); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
+		s.publish(corev1.EventTypeWarning, conditions.EventRescueFailed,
+			fmt.Sprintf("rescue %s failed", reason))
 		return
 	}
+	s.publish(corev1.EventTypeWarning, conditions.EventRestarted,
+		fmt.Sprintf("restarted: %s", reason))
 	s.timeoutStreak = 0
+}
+
+// publish forwards to the EventEmitter the reconciler installed at
+// Subscribe time. Nil-safe.
+func (s *subscription) publish(eventType, reason, message string) {
+	if s.emit != nil {
+		s.emit(eventType, reason, message)
+	}
 }
 
 // requeue stashes bc back under qkey (unless a fresher event arrived) and

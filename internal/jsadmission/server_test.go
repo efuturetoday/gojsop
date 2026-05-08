@@ -153,6 +153,45 @@ func TestServer_UnknownPolicy_Returns404(t *testing.T) {
 	}
 }
 
+// captureEvents builds an EventEmitter that pushes (reason, message) tuples
+// onto a channel. Bigger buffer than strictly needed so a panic-then-failure
+// path that emits twice doesn't deadlock the test goroutine.
+func captureEvents(buf int) (chan [2]string, EventEmitter) {
+	ch := make(chan [2]string, buf)
+	return ch, func(_, reason, message string) {
+		ch <- [2]string{reason, message}
+	}
+}
+
+// TestServer_Emits_ReviewFailed_OnJSThrow asserts that when validate() throws
+// a regular JS Error, the server publishes ReviewFailed with the static
+// message — never the JS error string (which would defeat dedup at scale).
+func TestServer_Emits_ReviewFailed_OnJSThrow(t *testing.T) {
+	key := types.NamespacedName{Namespace: "default", Name: "policy-evt-fail"}
+	reg := loadPolicy(t, `function validate(req){ throw new Error("very specific message"); }`, key)
+	srv := NewServer(reg, logr.Log)
+
+	events, emit := captureEvents(4)
+	srv.Register(PolicyEntry{Key: key, FailurePolicy: admissionregv1.Fail, Timeout: 2 * time.Second, Emit: emit})
+
+	postReview(t, srv.ValidateHandler(), PathFor(key, false), &admissionv1.AdmissionRequest{UID: "u"})
+
+	select {
+	case ev := <-events:
+		if ev[0] != "ReviewFailed" {
+			t.Fatalf("event reason: got %q want ReviewFailed", ev[0])
+		}
+		if ev[1] != "review returned an error" {
+			t.Fatalf("event message must be the static template, got %q (the JS error string would explode dedup cardinality)", ev[1])
+		}
+		if strings.Contains(ev[1], "very specific message") {
+			t.Fatal("JS error string leaked into event message — must stay in conditions/logs only")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected a ReviewFailed event, none arrived")
+	}
+}
+
 func TestPathFor_RoundTrip(t *testing.T) {
 	cases := []types.NamespacedName{
 		{Namespace: "default", Name: "p"},

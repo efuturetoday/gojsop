@@ -90,7 +90,7 @@ func (vm *VM) Eval(name, source string) (string, error) {
 	ctx := vm.rt.Context()
 	res, err := ctx.Eval(name, qjs.Code(source))
 	if err != nil {
-		return "", fmt.Errorf("eval %s: %w", name, err)
+		return "", fmt.Errorf("eval %s: %w", name, wrapOOM(err))
 	}
 	defer res.Free()
 	return res.String(), nil
@@ -108,6 +108,16 @@ func (vm *VM) LoadModule(name, source string) error {
 	return err
 }
 
+// HasExport reports whether the loaded module exposes a callable global
+// named name. Used by feature packages to fail builds early with a clear
+// "missing required export" error instead of letting the first invocation
+// blow up minutes or hours later.
+func (vm *VM) HasExport(name string) bool {
+	fn := vm.rt.Context().Global().GetPropertyStr(name)
+	defer fn.Free()
+	return fn.IsFunction()
+}
+
 // CallExport invokes a named global export with the given Go args (converted
 // to JS via qjs.ToJsValue) and returns the JSON-encoded return value (or ""
 // when the function returned undefined).
@@ -123,7 +133,7 @@ func (vm *VM) CallExport(name string, args ...any) (string, error) {
 	}
 	out, err := global.Invoke(name, args...)
 	if err != nil {
-		return "", fmt.Errorf("calling %s(): %w", name, err)
+		return "", fmt.Errorf("calling %s(): %w", name, wrapOOM(err))
 	}
 	defer out.Free()
 	if out.IsUndefined() {

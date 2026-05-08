@@ -26,13 +26,6 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
   shared across all hooks; per-hook ServiceAccount scoping (Phase 2)
   will require touching every call site.
   `internal/jsengine/kubehost/kubehost.go:24-31`.
-- **JSAdmission `kube.*` is allowed but unflagged.** Admission policies
-  share the registry, so `validate()` can mutate cluster state with
-  no warning vs the CRD's `sideEffects: None`. `cmd/main.go:238-275`.
-- **Defaults live in two places.** `jsengine.DefaultLimits()` and
-  `+kubebuilder:default` tags on `JSLimits` can drift silently;
-  nothing asserts agreement.
-  `internal/jsengine/vm.go`, `api/v1alpha1/js_shared.go:91-108`.
 - **Failure path overwrites `LastExecution`.** `controller.fail()`
   writes both Conditions and `LastExecution.Error`, mixing reconcile
   failures with hook-execution telemetry.

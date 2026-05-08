@@ -252,6 +252,7 @@ func main() {
 		Binder:       kubeFull,
 		Dispatcher:   disp,
 		SubscribeCtx: managerCtx,
+		Recorder:     mgr.GetEventRecorderFor("jshook-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSHook")
 		os.Exit(1)
@@ -280,6 +281,7 @@ func main() {
 		Binder:    &kubehost.ReadOnlyKubeHost{KubeHost: kubeFull},
 		Server:    admissionServer,
 		Registrar: registrar,
+		Recorder:  mgr.GetEventRecorderFor("jsadmission-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSAdmission")
 		os.Exit(1)

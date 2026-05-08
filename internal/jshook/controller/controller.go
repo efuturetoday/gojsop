@@ -21,10 +21,12 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -73,11 +75,26 @@ type JSHookReconciler struct {
 	// SubscribeCtx is the parent context handed to dispatcher.Subscribe so
 	// that informer goroutines tear down when the manager stops.
 	SubscribeCtx context.Context
+
+	// Recorder publishes corev1.Event entries describing lifecycle moments
+	// (build/restart/dispatcher rescue/handle errors). Optional — nil-safe
+	// so unit tests that build the reconciler bare keep working. In
+	// production cmd/main.go injects mgr.GetEventRecorderFor(...).
+	Recorder record.EventRecorder
+}
+
+// event records a corev1.Event about obj. Nil-safe: a Reconciler built
+// without a Recorder (the test default) silently no-ops.
+func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(obj, eventType, reason, message)
+	}
 }
 
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // MVP: hooks can watch and mutate any resource. Phase 2 will narrow this
 // based on the bindings each hook actually declares (per-hook ServiceAccount).
 // +kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch;create;update;patch;delete
@@ -87,6 +104,12 @@ type JSHookReconciler struct {
 // reconciler reads it back via configFromExtra. This keeps the config off the
 // engine and inside the feature package.
 func readConfig(vm *jsengine.VM) (any, error) {
+	if !vm.HasExport("config") {
+		return nil, &jsregistry.MissingExportError{Name: "config"}
+	}
+	if !vm.HasExport("handle") {
+		return nil, &jsregistry.MissingExportError{Name: "handle"}
+	}
 	cfg, err := jshook.ReadConfig(vm)
 	if err != nil {
 		return nil, err
@@ -119,11 +142,14 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		return ctrl.Result{}, err
 	}
+	priorObservedGen := hook.Status.ObservedGeneration
 
 	source, err := r.Loader.Load(ctx, hook.Spec.Source)
 	if err != nil {
 		log.Error(err, "loading hook source")
-		return r.fail(ctx, &hook, fmt.Sprintf("source: %v", err))
+		return r.fail(ctx, &hook, conditions.EventSourceLoadFailed,
+			"source loader failed",
+			fmt.Sprintf("source: %v", err))
 	}
 	srcHash := jssource.Hash(source)
 	lim := limitsFromSpec(hook.Spec.Limits)
@@ -137,10 +163,13 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	})
 	if err != nil {
 		log.Error(err, "registry GetOrLoad")
-		return r.fail(ctx, &hook, fmt.Sprintf("instance: %v", err))
+		eventReason, eventMsg := conditions.ClassifyBuildError(err)
+		return r.fail(ctx, &hook, eventReason, eventMsg, fmt.Sprintf("instance: %v", err))
 	}
 	if restarted {
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", mi.RestartCount, "reason", mi.LastReason)
+		r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
+			fmt.Sprintf("restarted: %s (hash %s)", mi.LastReason, srcHash[:12]))
 	}
 
 	// Manual-restart annotation: a new value of gojsop.io/restart triggers
@@ -156,9 +185,13 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsregistry.ReasonManual)
 			if err != nil {
 				log.Error(err, "manual restart")
-				return r.fail(ctx, &hook, fmt.Sprintf("manual restart: %v", err))
+				return r.fail(ctx, &hook, conditions.EventBuildFailed,
+					"build failed: manual restart",
+					fmt.Sprintf("manual restart: %v", err))
 			}
 			log.Info("manual restart applied", "token", token, "restarts", newMI.RestartCount)
+			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
+				fmt.Sprintf("restarted: %s (hash %s)", newMI.LastReason, srcHash[:12]))
 			mi = newMI
 			restarted = true
 		}
@@ -166,13 +199,24 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	cfg := configFromExtra(mi.Extra)
 	if cfg == nil {
-		return r.fail(ctx, &hook, "hook does not export a config() function")
+		return r.fail(ctx, &hook, conditions.EventConfigInvalid,
+			"config() returned non-object",
+			"hook does not export a config() function")
 	}
 
 	if r.Dispatcher != nil && (restarted || hook.Status.ObservedGeneration != hook.Generation) {
-		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, cfg); err != nil {
+		// Bind a copy of the hook into the emitter closure so the recorder
+		// has a target with stable UID/ObjectMeta for the lifetime of the
+		// subscription. The closure is replaced on every (re)Subscribe.
+		hookForEvents := hook.DeepCopy()
+		emit := func(eventType, reason, message string) {
+			r.event(hookForEvents, eventType, reason, message)
+		}
+		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, cfg, emit); err != nil {
 			log.Error(err, "subscribing bindings")
-			return r.fail(ctx, &hook, fmt.Sprintf("subscribe: %v", err))
+			return r.fail(ctx, &hook, conditions.EventSubscribeFailed,
+				"subscribe failed",
+				fmt.Sprintf("subscribe: %v", err))
 		}
 	}
 
@@ -197,22 +241,35 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err := r.Status().Update(ctx, &hook); err != nil {
 		return ctrl.Result{}, err
 	}
+	if priorObservedGen != hook.Generation && !restarted {
+		// One Reconciled event per spec edit. A restart already implies a
+		// transition (and emitted its own Restarted event), so suppress the
+		// duplicate here.
+		r.event(&hook, corev1.EventTypeNormal, conditions.EventReconciled,
+			fmt.Sprintf("reconciled generation %d", hook.Generation))
+	}
 	return ctrl.Result{}, nil
 }
 
-func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, msg string) (ctrl.Result, error) {
+// fail records a Warning Event and writes a Failed condition. eventReason is
+// one of the EventXxxFailed reasons in the conditions package; eventMsg is
+// the static, low-cardinality template (see plan's "Message stability"
+// section). conditionMsg may carry the verbose error string — that is
+// per-CR and not subject to the recorder's dedup window.
+func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, eventReason, eventMsg, conditionMsg string) (ctrl.Result, error) {
+	r.event(hook, corev1.EventTypeWarning, eventReason, eventMsg)
 	now := metav1.NewTime(time.Now())
 	apimeta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
 		Type:               conditions.Ready,
 		Status:             metav1.ConditionFalse,
 		Reason:             conditions.ReasonFailed,
-		Message:            msg,
+		Message:            conditionMsg,
 		ObservedGeneration: hook.Generation,
 	})
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.LastExecution = &corev1alpha1.JSExecutionStatus{
 		Time:  &now,
-		Error: msg,
+		Error: conditionMsg,
 	}
 	if err := r.Status().Update(ctx, hook); err != nil {
 		return ctrl.Result{}, err

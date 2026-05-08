@@ -4,6 +4,7 @@
 package jsregistry
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -114,24 +115,31 @@ func (r *Registry) getBuildLock(key types.NamespacedName) *sync.Mutex {
 func (r *Registry) build(key types.NamespacedName, opts BuildOptions) (*ManagedVM, error) {
 	vm, err := jsengine.New(opts.Limits)
 	if err != nil {
-		return nil, fmt.Errorf("registry: new VM: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrNewVM, err)
 	}
 	if opts.Binder != nil {
 		if err := vm.BindHost(opts.Binder); err != nil {
 			vm.Close()
-			return nil, fmt.Errorf("registry: bind host: %w", err)
+			return nil, fmt.Errorf("%w: %v", ErrBindHost, err)
 		}
 	}
 	if err := vm.LoadModule(key.Name+".js", string(opts.Source)); err != nil {
 		vm.Close()
-		return nil, fmt.Errorf("registry: load module: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrLoadModule, err)
 	}
 	var extra any
 	if opts.PostBuild != nil {
 		extra, err = opts.PostBuild(vm)
 		if err != nil {
 			vm.Close()
-			return nil, fmt.Errorf("registry: post-build: %w", err)
+			// Pass MissingExportError through unchanged so errors.As works at
+			// the reconciler. Other PostBuild errors (config() threw, bad
+			// shape, ...) get tagged with ErrPostBuild for classification.
+			var miss *MissingExportError
+			if errors.As(err, &miss) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w: %v", ErrPostBuild, err)
 		}
 	}
 	return &ManagedVM{

@@ -11,14 +11,22 @@ import (
 	"github.com/go-logr/logr"
 	admissionv1 "k8s.io/api/admission/v1"
 	admissionregv1 "k8s.io/api/admissionregistration/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
+
+// EventEmitter publishes a corev1.Event about the JSAdmission this policy
+// entry belongs to. Optional — Server.Register accepts entries with a nil
+// Emit and silently skips publication. The reconciler builds the closure
+// and binds it to the policy's metav1.Object so the recorder has a target.
+type EventEmitter func(eventType, reason, message string)
 
 // PathPrefixValidate / PathPrefixMutate are the URL prefixes the admission
 // server exposes. Each policy lives at <prefix>{namespace}/{name}; for
@@ -41,6 +49,11 @@ type PolicyEntry struct {
 	Mutating      bool
 	Timeout       time.Duration
 	FailurePolicy admissionregv1.FailurePolicyType
+
+	// Emit publishes lifecycle events about this policy (panic/timeout/JS
+	// error during a review). Nil-safe; Register accepts entries without
+	// an emitter and the review path no-ops emission.
+	Emit EventEmitter
 }
 
 // Server is the HTTP-level admission dispatcher. It holds the live policy
@@ -187,6 +200,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, prefix string, mu
 	}
 }
 
+// publishEntry forwards a Warning/Normal event to the emitter on entry, if
+// any. Static, low-cardinality messages only — see plan/Message stability.
+func publishEntry(entry PolicyEntry, eventType, reason, message string) {
+	if entry.Emit != nil {
+		entry.Emit(eventType, reason, message)
+	}
+}
+
 // review runs the policy and produces an AdmissionResponse. UID is always
 // echoed from the request. failurePolicy decides Allowed on JS errors.
 func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
@@ -215,6 +236,13 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	go func() {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// Static event message — the panic value (rec) is wildly
+				// variable per request and would defeat the recorder's
+				// (Reason, Message) dedup. The detail goes to logs and to
+				// the failure-policy reason text downstream.
+				publishEntry(entry, corev1.EventTypeWarning,
+					conditions.EventReviewPanicked,
+					"panic in admission handler")
 				done <- callOutcome{err: fmt.Errorf("panic in admission handler: %v", rec)}
 			}
 		}()
@@ -237,11 +265,24 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 		return resp
 	case <-timer.C:
 		log.Info("admission JS call exceeded timeout", "timeout", timeout)
+		// Message uses the configured timeout — finite per spec, so dedup
+		// collapses a flood of stuck requests to one event per window.
+		publishEntry(entry, corev1.EventTypeWarning,
+			conditions.EventReviewTimeout,
+			fmt.Sprintf("review exceeded %s", timeout))
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("timeout after %s", timeout))
 		return resp
 	case oc := <-done:
 		if oc.err != nil {
 			log.Error(oc.err, "admission JS call failed")
+			// Don't double-emit when the goroutine's recover already fired
+			// ReviewPanicked. The panic path puts the panic-typed error in
+			// oc.err with the "panic in admission handler" prefix.
+			if !strings.HasPrefix(oc.err.Error(), "panic in admission handler") {
+				publishEntry(entry, corev1.EventTypeWarning,
+					conditions.EventReviewFailed,
+					"review returned an error")
+			}
 			applyFailurePolicy(resp, entry.FailurePolicy, oc.err.Error())
 			return resp
 		}

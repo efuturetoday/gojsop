@@ -22,10 +22,12 @@ import (
 	"time"
 
 	admissionregv1 "k8s.io/api/admissionregistration/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -60,12 +62,43 @@ type JSAdmissionReconciler struct {
 	Server *jsadmission.Server
 	// Registrar maintains the central VWC/MWC.
 	Registrar *jsadmission.Registrar
+
+	// Recorder publishes corev1.Event entries describing lifecycle moments
+	// (build/restart/admission review crashes). Optional — nil-safe so unit
+	// tests that build the reconciler bare keep working.
+	Recorder record.EventRecorder
+}
+
+// event records a corev1.Event about obj. Nil-safe.
+func (r *JSAdmissionReconciler) event(obj runtime.Object, eventType, reason, message string) {
+	if r.Recorder != nil {
+		r.Recorder.Event(obj, eventType, reason, message)
+	}
 }
 
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jsadmissions,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jsadmissions/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jsadmissions/finalizers,verbs=update
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingwebhookconfigurations;mutatingwebhookconfigurations,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+
+// admissionPostBuild returns a PostBuild closure that asserts the loaded
+// module exposes the entrypoint required by the policy's spec.type
+// (validate for validating, mutate for mutating). A missing entrypoint is
+// surfaced as a typed MissingExportError so the reconciler can map it to
+// the EntrypointMissing event reason without sniffing message strings.
+func admissionPostBuild(mutating bool) jsregistry.PostBuildHook {
+	entry := "validate"
+	if mutating {
+		entry = "mutate"
+	}
+	return func(vm *jsengine.VM) (any, error) {
+		if !vm.HasExport(entry) {
+			return nil, &jsregistry.MissingExportError{Name: entry}
+		}
+		return nil, nil
+	}
+}
 
 func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).WithValues("jsadmission", req.Name)
@@ -84,27 +117,36 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		return ctrl.Result{}, err
 	}
+	priorObservedGen := pol.Status.ObservedGeneration
+	priorWebhookConfig := pol.Status.WebhookConfigName
 
 	source, err := r.Loader.Load(ctx, pol.Spec.Source)
 	if err != nil {
 		log.Error(err, "loading admission source")
-		return r.failAdmission(ctx, &pol, fmt.Sprintf("source: %v", err))
+		return r.failAdmission(ctx, &pol, conditions.EventSourceLoadFailed,
+			"source loader failed",
+			fmt.Sprintf("source: %v", err))
 	}
 	srcHash := jssource.Hash(source)
 	lim := admissionLimitsFromSpec(pol.Spec.Limits)
+	mutating := pol.Spec.Type == "mutating"
 
 	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, jsregistry.BuildOptions{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
 		Binder:     r.Binder,
+		PostBuild:  admissionPostBuild(mutating),
 	})
 	if err != nil {
 		log.Error(err, "registry GetOrLoad")
-		return r.failAdmission(ctx, &pol, fmt.Sprintf("instance: %v", err))
+		eventReason, eventMsg := conditions.ClassifyBuildError(err)
+		return r.failAdmission(ctx, &pol, eventReason, eventMsg, fmt.Sprintf("instance: %v", err))
 	}
 	if restarted {
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", mi.RestartCount, "reason", mi.LastReason)
+		r.event(&pol, corev1.EventTypeNormal, conditions.EventRestarted,
+			fmt.Sprintf("restarted: %s (hash %s)", mi.LastReason, srcHash[:12]))
 	}
 
 	// Manual-restart annotation, mirrors the JSHook flow.
@@ -117,25 +159,37 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsregistry.ReasonManual)
 			if err != nil {
 				log.Error(err, "manual restart")
-				return r.failAdmission(ctx, &pol, fmt.Sprintf("manual restart: %v", err))
+				return r.failAdmission(ctx, &pol, conditions.EventBuildFailed,
+					"build failed: manual restart",
+					fmt.Sprintf("manual restart: %v", err))
 			}
 			log.Info("manual restart applied", "token", token, "restarts", newMI.RestartCount)
+			r.event(&pol, corev1.EventTypeNormal, conditions.EventRestarted,
+				fmt.Sprintf("restarted: %s (hash %s)", newMI.LastReason, srcHash[:12]))
 			mi = newMI
+			restarted = true
 		}
 	}
 
-	mutating := pol.Spec.Type == "mutating"
 	path := jsadmission.PathFor(req.NamespacedName, mutating)
 	timeout := time.Duration(orInt32(pol.Spec.TimeoutSeconds, 5)) * time.Second
 
 	// Publish to the HTTP server first — once the central VWC/MWC points at us,
 	// requests start arriving and a missing entry would 404 under FailurePolicy.
 	if r.Server != nil {
+		// Snapshot the policy meta into the closure so the recorder has a
+		// stable target for the lifetime of this server registration. The
+		// closure is replaced on every reconcile that re-Registers.
+		polForEvents := pol.DeepCopy()
+		emit := func(eventType, reason, message string) {
+			r.event(polForEvents, eventType, reason, message)
+		}
 		r.Server.Register(jsadmission.PolicyEntry{
 			Key:           req.NamespacedName,
 			Mutating:      mutating,
 			Timeout:       timeout,
 			FailurePolicy: admissionregv1.FailurePolicyType(pol.Spec.FailurePolicy),
+			Emit:          emit,
 		})
 	}
 
@@ -189,20 +243,35 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Status().Update(ctx, &pol); err != nil {
 		return ctrl.Result{}, err
 	}
+	if priorWebhookConfig == "" && pol.Status.WebhookConfigName != "" {
+		// First publish to the central VWC/MWC. Two stable values
+		// (validating vs mutating config name), so the dedup window
+		// collapses identical events safely.
+		r.event(&pol, corev1.EventTypeNormal, conditions.EventWebhookRegistered,
+			fmt.Sprintf("published to %s", pol.Status.WebhookConfigName))
+	}
+	if priorObservedGen != pol.Generation && !restarted {
+		r.event(&pol, corev1.EventTypeNormal, conditions.EventReconciled,
+			fmt.Sprintf("reconciled generation %d", pol.Generation))
+	}
 	return ctrl.Result{}, nil
 }
 
-func (r *JSAdmissionReconciler) failAdmission(ctx context.Context, pol *corev1alpha1.JSAdmission, msg string) (ctrl.Result, error) {
+// failAdmission emits a Warning event with the stable eventMsg template,
+// then writes a Failed condition carrying the verbose conditionMsg. Mirrors
+// JSHookReconciler.fail.
+func (r *JSAdmissionReconciler) failAdmission(ctx context.Context, pol *corev1alpha1.JSAdmission, eventReason, eventMsg, conditionMsg string) (ctrl.Result, error) {
+	r.event(pol, corev1.EventTypeWarning, eventReason, eventMsg)
 	now := metav1.NewTime(time.Now())
 	apimeta.SetStatusCondition(&pol.Status.Conditions, metav1.Condition{
 		Type:               conditions.Ready,
 		Status:             metav1.ConditionFalse,
 		Reason:             conditions.ReasonFailed,
-		Message:            msg,
+		Message:            conditionMsg,
 		ObservedGeneration: pol.Generation,
 	})
 	pol.Status.ObservedGeneration = pol.Generation
-	pol.Status.LastReview = &corev1alpha1.JSExecutionStatus{Time: &now, Error: msg}
+	pol.Status.LastReview = &corev1alpha1.JSExecutionStatus{Time: &now, Error: conditionMsg}
 	if err := r.Status().Update(ctx, pol); err != nil {
 		return ctrl.Result{}, err
 	}

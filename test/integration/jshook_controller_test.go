@@ -64,7 +64,8 @@ var _ = Describe("JSHook Controller", func() {
 										executeHookOnEvent: ["Added"],
 									}],
 								};
-							}`,
+							}
+							function handle() {}`,
 						},
 					},
 				}
