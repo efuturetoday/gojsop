@@ -35,7 +35,7 @@ func (c *Chain) Load(ctx context.Context, src corev1alpha1.JSSource) ([]byte, er
 			return body, nil
 		}
 	}
-	return nil, fmt.Errorf("no loader matched source: must set one of spec.source.inline, configMapRef, or ociRef")
+	return nil, fmt.Errorf("no loader matched source: must set one of spec.source.inline, configMapRef, or oci")
 }
 
 // Hash returns a stable sha256 of the JS source. Used as the instance restart

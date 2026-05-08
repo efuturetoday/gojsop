@@ -33,17 +33,15 @@ type JSHookSpec struct {
 
 // JSHookStatus defines the observed state of JSHook.
 type JSHookStatus struct {
-	// Phase is a coarse rollup: Pending, Ready, Failed.
-	// +optional
-	Phase string `json:"phase,omitempty"`
-
 	// ObservedGeneration is the generation last reconciled by the controller.
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Bindings are the resolved bindings the hook declared in its config()
 	// call (kubernetes/schedule/onStartup), echoed here so users can see what
 	// the hook is subscribed to.
+	// +listType=set
 	// +optional
 	Bindings []string `json:"bindings,omitempty"`
 
@@ -65,8 +63,8 @@ type JSHookStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=jshook
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="Bindings",type=integer,JSONPath=`.status.bindings[*]`,priority=1
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].reason`,priority=1
 // +kubebuilder:printcolumn:name="Restarts",type=integer,JSONPath=`.status.instance.restartCount`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

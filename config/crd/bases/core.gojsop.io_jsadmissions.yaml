@@ -20,8 +20,12 @@ spec:
     - jsonPath: .spec.type
       name: Type
       type: string
-    - jsonPath: .status.phase
-      name: Phase
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
+      name: Reason
+      priority: 1
       type: string
     - jsonPath: .status.instance.restartCount
       name: Restarts
@@ -176,16 +180,22 @@ spec:
                   the JS instance.
                 properties:
                   memoryMB:
+                    default: 32
                     description: MemoryMB is the hard limit on the QuickJS heap in
-                      megabytes. Default 32.
+                      megabytes.
                     format: int32
+                    maximum: 512
+                    minimum: 1
                     type: integer
                   timeoutSeconds:
+                    default: 30
                     description: |-
-                      TimeoutSeconds bounds a single call into JS. Default 30.
+                      TimeoutSeconds bounds a single call into JS.
                       On timeout the call is interrupted; the persistent instance survives
                       unless timeouts repeat (see status.instance.lastRestartReason).
                     format: int32
+                    maximum: 300
+                    minimum: 1
                     type: integer
                 type: object
               rules:
@@ -201,24 +211,40 @@ spec:
                     apiGroups:
                       items:
                         type: string
+                      minItems: 1
                       type: array
+                      x-kubernetes-list-type: set
                     apiVersions:
                       items:
                         type: string
+                      minItems: 1
                       type: array
+                      x-kubernetes-list-type: set
                     operations:
-                      description: |-
-                        Operations the apiserver should send. Valid values: CREATE, UPDATE,
-                        DELETE, CONNECT, *.
+                      description: Operations the apiserver should send.
                       items:
+                        enum:
+                        - CREATE
+                        - UPDATE
+                        - DELETE
+                        - CONNECT
+                        - '*'
                         type: string
+                      minItems: 1
                       type: array
+                      x-kubernetes-list-type: set
                     resources:
                       items:
                         type: string
+                      minItems: 1
                       type: array
+                      x-kubernetes-list-type: set
                     scope:
                       description: Scope is one of "*" (default), "Namespaced", "Cluster".
+                      enum:
+                      - '*'
+                      - Namespaced
+                      - Cluster
                       type: string
                   required:
                   - apiGroups
@@ -247,26 +273,64 @@ spec:
                       in a ConfigMap.
                     properties:
                       key:
-                        description: Key inside the ConfigMap. Defaults to "hook.js".
+                        default: hook.js
+                        description: Key inside the ConfigMap.
+                        minLength: 1
                         type: string
                       name:
+                        description: Name is the name of the referenced ConfigMap.
+                        minLength: 1
                         type: string
                       namespace:
+                        description: Namespace is the namespace of the referenced
+                          ConfigMap.
+                        minLength: 1
                         type: string
                     required:
                     - name
+                    - namespace
                     type: object
                   inline:
                     description: |-
                       Inline embeds the JS module text directly into the resource.
                       Convenient for small hooks and demos.
+                    minLength: 1
                     type: string
-                  ociRef:
+                  oci:
                     description: |-
-                      OCIRef pulls the JS module from an OCI artifact (e.g. ghcr.io/foo/hook:v1).
+                      OCI pulls the JS module from an OCI artifact (e.g. ghcr.io/foo/hook).
                       The artifact must contain a single layer whose body is the JS source.
-                    type: string
+                    properties:
+                      digest:
+                        description: Digest pins a specific manifest digest (e.g.
+                          "sha256:abcd..."). Immutable.
+                        pattern: ^sha256:[A-Fa-f0-9]{64}$
+                        type: string
+                      repository:
+                        description: |-
+                          Repository is the registry + repository path, without a tag or digest
+                          (e.g. "ghcr.io/foo/hook").
+                        minLength: 1
+                        pattern: ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$
+                        type: string
+                      tag:
+                        description: |-
+                          Tag selects a tagged version (e.g. "v1.2.3"). Mutable; for production
+                          pinning prefer Digest.
+                        minLength: 1
+                        pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
+                        type: string
+                    required:
+                    - repository
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of tag or digest must be set
+                      rule: (has(self.tag)?1:0) + (has(self.digest)?1:0) == 1
                 type: object
+                x-kubernetes-validations:
+                - message: exactly one of inline, configMapRef, or oci must be set
+                  rule: (has(self.inline)?1:0) + (has(self.configMapRef)?1:0) + (has(self.oci)?1:0)
+                    == 1
               timeoutSeconds:
                 default: 5
                 description: |-
@@ -290,7 +354,6 @@ spec:
             required:
             - rules
             - source
-            - type
             type: object
           status:
             description: status defines the observed state of JSAdmission
@@ -375,6 +438,7 @@ spec:
                       RestartCount counts how often the persistent instance has been replaced
                       since the resource was created.
                     format: int32
+                    minimum: 0
                     type: integer
                   sourceHash:
                     description: |-
@@ -393,6 +457,7 @@ spec:
                 properties:
                   durationMs:
                     format: int64
+                    minimum: 0
                     type: integer
                   error:
                     description: Error is non-empty if the last call failed.
@@ -405,10 +470,8 @@ spec:
                 description: ObservedGeneration is the generation last reconciled
                   by the controller.
                 format: int64
+                minimum: 0
                 type: integer
-              phase:
-                description: 'Phase is a coarse rollup: Pending, Ready, Failed.'
-                type: string
               webhookConfigName:
                 description: |-
                   WebhookConfigName is the name of the central *WebhookConfiguration

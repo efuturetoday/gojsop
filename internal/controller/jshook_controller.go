@@ -22,6 +22,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -38,6 +39,13 @@ import (
 // instance restart. Any new value (typically a timestamp) forces exactly one
 // rebuild; the same value on later reconciles is a no-op.
 const ManualRestartAnnotation = "gojsop.io/restart"
+
+// Status condition vocabulary shared by JSHook and JSAdmission.
+const (
+	ConditionReady   = "Ready"
+	ReasonReconciled = "Reconciled"
+	ReasonFailed     = "Failed"
+)
 
 // JSHookReconciler reconciles a JSHook object.
 //
@@ -140,7 +148,13 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	bindings := summarizeBindings(cfg)
 	startedAt := metav1.NewTime(mi.StartedAt)
-	hook.Status.Phase = "Ready"
+	apimeta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
+		Type:               ConditionReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             ReasonReconciled,
+		Message:            "JS instance running",
+		ObservedGeneration: hook.Generation,
+	})
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.Bindings = bindings
 	hook.Status.Instance = &corev1alpha1.JSInstanceStatus{
@@ -158,7 +172,13 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, msg string) (ctrl.Result, error) {
 	now := metav1.NewTime(time.Now())
-	hook.Status.Phase = "Failed"
+	apimeta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
+		Type:               ConditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             ReasonFailed,
+		Message:            msg,
+		ObservedGeneration: hook.Generation,
+	})
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.LastExecution = &corev1alpha1.JSExecutionStatus{
 		Time:  &now,

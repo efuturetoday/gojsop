@@ -23,6 +23,7 @@ import (
 
 	admissionregv1 "k8s.io/api/admissionregistration/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -152,7 +153,13 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	startedAt := metav1.NewTime(mi.StartedAt)
-	pol.Status.Phase = "Ready"
+	apimeta.SetStatusCondition(&pol.Status.Conditions, metav1.Condition{
+		Type:               ConditionReady,
+		Status:             metav1.ConditionTrue,
+		Reason:             ReasonReconciled,
+		Message:            "policy registered",
+		ObservedGeneration: pol.Generation,
+	})
 	pol.Status.ObservedGeneration = pol.Generation
 	pol.Status.WebhookPath = path
 	if mutating {
@@ -175,7 +182,13 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 func (r *JSAdmissionReconciler) failAdmission(ctx context.Context, pol *corev1alpha1.JSAdmission, msg string) (ctrl.Result, error) {
 	now := metav1.NewTime(time.Now())
-	pol.Status.Phase = "Failed"
+	apimeta.SetStatusCondition(&pol.Status.Conditions, metav1.Condition{
+		Type:               ConditionReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             ReasonFailed,
+		Message:            msg,
+		ObservedGeneration: pol.Generation,
+	})
 	pol.Status.ObservedGeneration = pol.Generation
 	pol.Status.LastReview = &corev1alpha1.JSExecutionStatus{Time: &now, Error: msg}
 	if err := r.Status().Update(ctx, pol); err != nil {

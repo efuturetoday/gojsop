@@ -25,17 +25,30 @@ import (
 // aggregated central VWC/MWC.
 type AdmissionRule struct {
 	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
 	APIGroups []string `json:"apiGroups"`
+
 	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
 	APIVersions []string `json:"apiVersions"`
+
 	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
 	Resources []string `json:"resources"`
-	// Operations the apiserver should send. Valid values: CREATE, UPDATE,
-	// DELETE, CONNECT, *.
+
+	// Operations the apiserver should send.
 	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:items:Enum=CREATE;UPDATE;DELETE;CONNECT;*
 	Operations []string `json:"operations"`
+
 	// Scope is one of "*" (default), "Namespaced", "Cluster".
 	// +optional
+	// +kubebuilder:validation:Enum="*";Namespaced;Cluster
 	Scope string `json:"scope,omitempty"`
 }
 
@@ -54,7 +67,8 @@ type JSAdmissionSpec struct {
 	// return a modifiedObject from which the controller computes a JSONPatch.
 	// +kubebuilder:validation:Enum=validating;mutating
 	// +kubebuilder:default=validating
-	Type string `json:"type"`
+	// +optional
+	Type string `json:"type,omitempty"`
 
 	// Rules tell the apiserver which resources to forward to this policy.
 	// At least one rule is required.
@@ -103,12 +117,9 @@ type JSAdmissionSpec struct {
 
 // JSAdmissionStatus reports the observed state of a JSAdmission policy.
 type JSAdmissionStatus struct {
-	// Phase is a coarse rollup: Pending, Ready, Failed.
-	// +optional
-	Phase string `json:"phase,omitempty"`
-
 	// ObservedGeneration is the generation last reconciled by the controller.
 	// +optional
+	// +kubebuilder:validation:Minimum=0
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// WebhookPath is the HTTP path the operator's webhook server registered
@@ -141,7 +152,8 @@ type JSAdmissionStatus struct {
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=jsadm
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].reason`,priority=1
 // +kubebuilder:printcolumn:name="Restarts",type=integer,JSONPath=`.status.instance.restartCount`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
