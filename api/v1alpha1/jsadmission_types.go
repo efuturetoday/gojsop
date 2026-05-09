@@ -157,7 +157,8 @@ type JSAdmissionStatus struct {
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].reason`,priority=1
-// +kubebuilder:printcolumn:name="Restarts",type=integer,JSONPath=`.status.instance.restartCount`
+// +kubebuilder:printcolumn:name="LastRestart",type=string,JSONPath=`.status.instance.recentRestarts[0].reason`
+// +kubebuilder:printcolumn:name="RestartedAt",type=date,JSONPath=`.status.instance.recentRestarts[0].time`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // JSAdmission declares a JavaScript-backed admission webhook policy. The

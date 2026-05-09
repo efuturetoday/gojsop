@@ -41,8 +41,11 @@ func TestRescue_Success_EmitsRestarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rescue: unexpected error: %v", err)
 	}
-	if mi == nil || mi.LastReason != jsregistry.ReasonPanic {
-		t.Fatalf("Rescue: ManagedVM.LastReason=%q want %q", mi.LastReason, jsregistry.ReasonPanic)
+	if mi == nil {
+		t.Fatal("Rescue: ManagedVM is nil")
+	}
+	if last := mi.LastRestart(); last.Reason != jsregistry.ReasonPanic {
+		t.Fatalf("Rescue: LastRestart.Reason=%q want %q", last.Reason, jsregistry.ReasonPanic)
 	}
 
 	select {

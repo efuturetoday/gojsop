@@ -107,6 +107,25 @@ type JSLimits struct {
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 }
 
+// JSRestartEvent records one transition from old VM to new for a hook or
+// admission policy. Mirrored from the registry's internal log so users can
+// see the recent restart trail without `kubectl logs` on the operator.
+type JSRestartEvent struct {
+	// Time is when the new instance was installed.
+	// +optional
+	Time *metav1.Time `json:"time,omitempty"`
+
+	// Reason is one of: source-changed, memory-limit, panic, timeout,
+	// timeout-streak, manual.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Error is the diagnostic that triggered a rescue restart (panic / OOM /
+	// timeout). Empty for source-changed and manual.
+	// +optional
+	Error string `json:"error,omitempty"`
+}
+
 // JSInstanceStatus reports the lifecycle state of the persistent JS instance
 // backing a hook or admission policy. Identical shape for both kinds — the
 // same Registry produces it. Users rely on this to know whether their
@@ -121,16 +140,18 @@ type JSInstanceStatus struct {
 	// +optional
 	SourceHash string `json:"sourceHash,omitempty"`
 
-	// RestartCount counts how often the persistent instance has been replaced
-	// since the resource was created.
+	// RestartsByReason aggregates RecentRestarts. Keys are restart reasons
+	// (source-changed, memory-limit, panic, timeout, timeout-streak,
+	// manual); values are counts since the resource was created.
 	// +optional
-	// +kubebuilder:validation:Minimum=0
-	RestartCount int32 `json:"restartCount,omitempty"`
+	RestartsByReason map[string]int32 `json:"restartsByReason,omitempty"`
 
-	// LastRestartReason is one of: source-changed, memory-limit, panic,
-	// timeout-streak, manual.
+	// RecentRestarts is the most-recent-first restart log, capped at 20
+	// entries. recentRestarts[0] is the newest event so JSONPath print
+	// columns can show the latest reason without index-from-end gymnastics.
 	// +optional
-	LastRestartReason string `json:"lastRestartReason,omitempty"`
+	// +listType=atomic
+	RecentRestarts []JSRestartEvent `json:"recentRestarts,omitempty"`
 
 	// ManualRestartToken echoes the value of the gojsop.io/restart annotation
 	// that produced the most recent manual restart. Setting the annotation to

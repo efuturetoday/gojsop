@@ -24,9 +24,13 @@ spec:
       name: Reason
       priority: 1
       type: string
-    - jsonPath: .status.instance.restartCount
-      name: Restarts
-      type: integer
+    - jsonPath: .status.instance.recentRestarts[0].reason
+      name: LastRestart
+      type: string
+    - jsonPath: .status.instance.recentRestarts[0].time
+      name: RestartedAt
+      priority: 1
+      type: date
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -228,11 +232,6 @@ spec:
               instance:
                 description: Instance reports the lifecycle of the persistent JS runtime.
                 properties:
-                  lastRestartReason:
-                    description: |-
-                      LastRestartReason is one of: source-changed, memory-limit, panic,
-                      timeout-streak, manual.
-                    type: string
                   manualRestartToken:
                     description: |-
                       ManualRestartToken echoes the value of the gojsop.io/restart annotation
@@ -240,13 +239,43 @@ spec:
                       a new value triggers exactly one restart; re-reconciles with the same
                       value are no-ops.
                     type: string
-                  restartCount:
+                  recentRestarts:
                     description: |-
-                      RestartCount counts how often the persistent instance has been replaced
-                      since the resource was created.
-                    format: int32
-                    minimum: 0
-                    type: integer
+                      RecentRestarts is the most-recent-first restart log, capped at 20
+                      entries. recentRestarts[0] is the newest event so JSONPath print
+                      columns can show the latest reason without index-from-end gymnastics.
+                    items:
+                      description: |-
+                        JSRestartEvent records one transition from old VM to new for a hook or
+                        admission policy. Mirrored from the registry's internal log so users can
+                        see the recent restart trail without `kubectl logs` on the operator.
+                      properties:
+                        error:
+                          description: |-
+                            Error is the diagnostic that triggered a rescue restart (panic / OOM /
+                            timeout). Empty for source-changed and manual.
+                          type: string
+                        reason:
+                          description: |-
+                            Reason is one of: source-changed, memory-limit, panic, timeout,
+                            timeout-streak, manual.
+                          type: string
+                        time:
+                          description: Time is when the new instance was installed.
+                          format: date-time
+                          type: string
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  restartsByReason:
+                    additionalProperties:
+                      format: int32
+                      type: integer
+                    description: |-
+                      RestartsByReason aggregates RecentRestarts. Keys are restart reasons
+                      (source-changed, memory-limit, panic, timeout, timeout-streak,
+                      manual); values are counts since the resource was created.
+                    type: object
                   sourceHash:
                     description: |-
                       SourceHash is a sha256 of the loaded JS source. A change here triggers

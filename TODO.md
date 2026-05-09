@@ -16,10 +16,6 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
 
 ## 1. Smells
 
-- **Restart bookkeeping is shallow.** `ManagedVM` keeps only
-  `RestartCount` + `LastReason`; no per-trigger counters (six now —
-  OOM / panic / timeout / timeout-streak / manual / source-changed),
-  no history ring.
 - **`KubeHost` is a process-wide singleton.** One `Ctx`/`Dyn`/`Mapper`
   shared across all hooks; per-hook ServiceAccount scoping (Phase 2)
   will require touching every call site.

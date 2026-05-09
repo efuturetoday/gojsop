@@ -37,6 +37,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
+	"github.com/o-haase/gojsop/internal/jslifecycle"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jssource"
 )
@@ -169,9 +170,10 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.fail(ctx, &hook, eventReason, eventMsg, fmt.Sprintf("instance: %v", err))
 	}
 	if restarted {
-		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", mi.RestartCount, "reason", mi.LastReason)
+		last := mi.LastRestart()
+		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(mi.History), "reason", last.Reason)
 		r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
-			fmt.Sprintf("restarted: %s (hash %s)", mi.LastReason, srcHash[:12]))
+			fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
 	}
 
 	// Manual-restart annotation: a new value of gojsop.io/restart triggers
@@ -191,9 +193,10 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 					"build failed: manual restart",
 					fmt.Sprintf("manual restart: %v", err))
 			}
-			log.Info("manual restart applied", "token", token, "restarts", newMI.RestartCount)
+			last := newMI.LastRestart()
+			log.Info("manual restart applied", "token", token, "restarts", len(newMI.History))
 			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
-				fmt.Sprintf("restarted: %s (hash %s)", newMI.LastReason, srcHash[:12]))
+				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
 			mi = newMI
 			restarted = true
 		}
@@ -233,11 +236,12 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	})
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.Bindings = bindings
+	byReason, recent := jslifecycle.RestartHistoryFor(mi)
 	hook.Status.Instance = &corev1alpha1.JSInstanceStatus{
 		StartedAt:          &startedAt,
 		SourceHash:         srcHash,
-		RestartCount:       mi.RestartCount,
-		LastRestartReason:  string(mi.LastReason),
+		RestartsByReason:   byReason,
+		RecentRestarts:     recent,
 		ManualRestartToken: hook.GetAnnotations()[ManualRestartAnnotation],
 	}
 	if err := r.Status().Update(ctx, &hook); err != nil {

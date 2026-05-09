@@ -56,15 +56,35 @@ type BuildOptions struct {
 	PostBuild  PostBuildHook
 }
 
+// historyCap bounds ManagedVM.History so a flapping VM can't drive registry
+// memory unboundedly. 20 lines up roughly with what an operator can read in
+// `kubectl describe` and matches RecentRestarts on the CRD status.
+const historyCap = 20
+
+// RestartEvent records one transition from old VM to new for a key. The slice
+// of these on ManagedVM is the authoritative restart log; per-reason counters
+// are an aggregate cache.
+type RestartEvent struct {
+	Time   time.Time
+	Reason RestartReason
+	// Err carries the diagnostic for rescue-driven restarts (panic / OOM /
+	// timeout / timeout-streak). Empty for source-changed and manual.
+	Err string
+}
+
 // ManagedVM is the registry's view of a per-resource persistent VM. Opts is
 // cached so the registry can rebuild the VM after a rescue restart without
 // bouncing through the controller.
 type ManagedVM struct {
-	VM           *jsengine.VM
-	Opts         BuildOptions
-	StartedAt    time.Time
-	RestartCount int32
-	LastReason   RestartReason
+	VM        *jsengine.VM
+	Opts      BuildOptions
+	StartedAt time.Time
+	// RestartsByReason aggregates History so callers don't recompute it; the
+	// two are kept in sync by installNew.
+	RestartsByReason map[RestartReason]int32
+	// History is the restart log (oldest first), capped at historyCap. Empty
+	// on the very first build of a key.
+	History []RestartEvent
 	// Extra is an opaque feature-specific payload the loader can stash on
 	// the ManagedVM at build time (e.g. JSHook caches its parsed Config
 	// here so reconciles don't re-enter the JS runtime concurrently with
@@ -76,6 +96,15 @@ type ManagedVM struct {
 	// phase. Today the dispatcher and the admission server both go through
 	// Registry.Call, which acquires this mutex.
 	CallMu sync.Mutex
+}
+
+// LastRestart returns the most recent RestartEvent, or the zero value if the
+// VM has never been restarted (first build).
+func (m *ManagedVM) LastRestart() RestartEvent {
+	if len(m.History) == 0 {
+		return RestartEvent{}
+	}
+	return m.History[len(m.History)-1]
 }
 
 // CallOutcome classifies how a Registry.Call ran. The classification owns the
@@ -227,21 +256,46 @@ func (r *Registry) GetOrLoad(ctx context.Context, key types.NamespacedName, opts
 
 	// 5. install. Swap under r.mu, then drain the old VM's CallMu before
 	//    Close so we don't race active wasm.
-	r.mu.Lock()
-	old := r.vms[key]
-	if old != nil {
-		mi.RestartCount = old.RestartCount + 1
-		mi.LastReason = ReasonSourceChanged
-	}
-	r.vms[key] = mi
-	r.mu.Unlock()
-
+	old := r.installNew(key, mi, ReasonSourceChanged, nil)
 	if old != nil {
 		old.CallMu.Lock()
 		old.VM.Close()
 		old.CallMu.Unlock()
 	}
 	return mi, true, nil
+}
+
+// installNew swaps mi in for key, propagates the previous restart log, and
+// appends a new RestartEvent if old != nil (the very first build of a key
+// has no event — there's no transition to record). Returns the displaced
+// ManagedVM (or nil) so the caller can drain CallMu before Close.
+//
+// reason / err are the trigger for *this* transition; they are appended to
+// History and bump RestartsByReason[reason] by one.
+func (r *Registry) installNew(key types.NamespacedName, mi *ManagedVM, reason RestartReason, err error) *ManagedVM {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	old := r.vms[key]
+	if old != nil {
+		mi.RestartsByReason = make(map[RestartReason]int32, len(old.RestartsByReason)+1)
+		for k, v := range old.RestartsByReason {
+			mi.RestartsByReason[k] = v
+		}
+		mi.RestartsByReason[reason]++
+
+		ev := RestartEvent{Time: time.Now(), Reason: reason}
+		if err != nil {
+			ev.Err = err.Error()
+		}
+		hist := old.History
+		if len(hist) >= historyCap {
+			hist = hist[len(hist)-historyCap+1:]
+		}
+		mi.History = append(append([]RestartEvent(nil), hist...), ev)
+	}
+	r.vms[key] = mi
+	return old
 }
 
 // Get returns the current ManagedVM for key without modifying anything. The
@@ -296,26 +350,23 @@ func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) 
 	defer bMu.Unlock()
 
 	r.mu.Lock()
-	old, ok := r.vms[key]
+	existing, ok := r.vms[key]
 	r.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
 	}
 
-	mi, err := r.build(context.Background(), key, old.Opts)
+	mi, err := r.build(context.Background(), key, existing.Opts)
 	if err != nil {
 		return nil, err
 	}
 
-	r.mu.Lock()
-	mi.RestartCount = old.RestartCount + 1
-	mi.LastReason = reason
-	r.vms[key] = mi
-	r.mu.Unlock()
-
-	old.CallMu.Lock()
-	old.VM.Close()
-	old.CallMu.Unlock()
+	old := r.installNew(key, mi, reason, nil)
+	if old != nil {
+		old.CallMu.Lock()
+		old.VM.Close()
+		old.CallMu.Unlock()
+	}
 	return mi, nil
 }
 

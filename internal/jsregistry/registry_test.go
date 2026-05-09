@@ -25,8 +25,8 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	if !restarted {
 		t.Fatal("expected restarted=true on first load")
 	}
-	if mi.RestartCount != 0 {
-		t.Errorf("RestartCount: got %d, want 0", mi.RestartCount)
+	if got := len(mi.History); got != 0 {
+		t.Errorf("History length: got %d, want 0", got)
 	}
 
 	if _, err := mi.VM.Eval(context.Background(), "inc.js", "globalThis.counter = 42"); err != nil {
@@ -76,11 +76,14 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 	if !restarted {
 		t.Fatal("expected restarted=true on source change")
 	}
-	if mi2.RestartCount != 1 {
-		t.Errorf("RestartCount: got %d, want 1", mi2.RestartCount)
+	if got := len(mi2.History); got != 1 {
+		t.Errorf("History length: got %d, want 1", got)
 	}
-	if mi2.LastReason != jsregistry.ReasonSourceChanged {
-		t.Errorf("LastReason: got %q", mi2.LastReason)
+	if last := mi2.LastRestart(); last.Reason != jsregistry.ReasonSourceChanged {
+		t.Errorf("LastRestart.Reason: got %q", last.Reason)
+	}
+	if got := mi2.RestartsByReason[jsregistry.ReasonSourceChanged]; got != 1 {
+		t.Errorf("RestartsByReason[source-changed]: got %d, want 1", got)
 	}
 	got2, _ := mi2.VM.Eval(context.Background(), "t.js", "globalThis.tag")
 	if got2 != "v2" {
@@ -117,11 +120,14 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	if mi2 == mi {
 		t.Fatal("RestartByKey must return a fresh ManagedVM pointer")
 	}
-	if mi2.LastReason != jsregistry.ReasonPanic {
-		t.Errorf("LastReason: got %q, want %q", mi2.LastReason, jsregistry.ReasonPanic)
+	if last := mi2.LastRestart(); last.Reason != jsregistry.ReasonPanic {
+		t.Errorf("LastRestart.Reason: got %q, want %q", last.Reason, jsregistry.ReasonPanic)
 	}
-	if mi2.RestartCount != 1 {
-		t.Errorf("RestartCount: got %d, want 1", mi2.RestartCount)
+	if got := len(mi2.History); got != 1 {
+		t.Errorf("History length: got %d, want 1", got)
+	}
+	if got := mi2.RestartsByReason[jsregistry.ReasonPanic]; got != 1 {
+		t.Errorf("RestartsByReason[panic]: got %d, want 1", got)
 	}
 	if mi2.VM.Limits().MemoryMB != 8 {
 		t.Errorf("limits not preserved: got MemoryMB=%d", mi2.VM.Limits().MemoryMB)
@@ -132,6 +138,62 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	}
 	if got != "0" {
 		t.Fatalf("globalThis.counter survived rescue: got %q (want 0)", got)
+	}
+}
+
+// TestRegistry_RestartHistory_RingAndCounters proves the per-reason counter
+// increments correctly across many restarts and that History is capped at
+// historyCap (20) with the oldest event evicted on overflow.
+func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
+	reg := jsregistry.NewRegistry()
+	key := types.NamespacedName{Name: "ring"}
+	t.Cleanup(func() { reg.Drop(key) })
+
+	src := []byte(`function config(){return {}}`)
+	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
+		t.Fatalf("initial load: %v", err)
+	}
+
+	// Three manual restarts → counter == 3, history == 3.
+	for i := 0; i < 3; i++ {
+		if _, err := reg.RestartByKey(key, jsregistry.ReasonManual); err != nil {
+			t.Fatalf("restart #%d: %v", i, err)
+		}
+	}
+	mi, _ := reg.Get(key)
+	if got := mi.RestartsByReason[jsregistry.ReasonManual]; got != 3 {
+		t.Errorf("RestartsByReason[manual] after 3: got %d, want 3", got)
+	}
+	if got := len(mi.History); got != 3 {
+		t.Errorf("History length after 3: got %d, want 3", got)
+	}
+
+	// Push another 22 (total 25) — ring should cap at 20, oldest evicted,
+	// counter keeps climbing.
+	for i := 0; i < 22; i++ {
+		if _, err := reg.RestartByKey(key, jsregistry.ReasonPanic); err != nil {
+			t.Fatalf("restart panic #%d: %v", i, err)
+		}
+	}
+	mi, _ = reg.Get(key)
+	if got := len(mi.History); got != 20 {
+		t.Errorf("History length capped: got %d, want 20", got)
+	}
+	if got := mi.RestartsByReason[jsregistry.ReasonManual]; got != 3 {
+		t.Errorf("RestartsByReason[manual] preserved: got %d, want 3", got)
+	}
+	if got := mi.RestartsByReason[jsregistry.ReasonPanic]; got != 22 {
+		t.Errorf("RestartsByReason[panic]: got %d, want 22", got)
+	}
+	// Newest event sits at the tail (oldest-first storage); first three manual
+	// events should have been evicted.
+	if last := mi.LastRestart(); last.Reason != jsregistry.ReasonPanic {
+		t.Errorf("LastRestart.Reason: got %q, want panic", last.Reason)
+	}
+	for i, ev := range mi.History {
+		if ev.Reason != jsregistry.ReasonPanic {
+			t.Errorf("History[%d]: got %q, want panic (manual entries should be evicted)", i, ev.Reason)
+		}
 	}
 }
 

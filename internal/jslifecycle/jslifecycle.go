@@ -17,8 +17,10 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
@@ -59,6 +61,37 @@ func Rescue(reg *jsregistry.Registry, key types.NamespacedName, reason jsregistr
 	publish(emit, corev1.EventTypeWarning, conditions.EventRestarted,
 		fmt.Sprintf("restarted: %s", reason))
 	return mi, nil
+}
+
+// RestartHistoryFor projects the registry's internal restart log onto the CRD
+// status shape: RestartsByReason as string-keyed counters and RecentRestarts
+// newest-first (so JSONPath print columns can read [0] without index-from-end
+// gymnastics). The registry stores history oldest-first; we reverse here so
+// the storage order stays the natural "append on transition" shape.
+func RestartHistoryFor(mi *jsregistry.ManagedVM) (map[string]int32, []corev1alpha1.JSRestartEvent) {
+	if mi == nil {
+		return nil, nil
+	}
+	var byReason map[string]int32
+	if len(mi.RestartsByReason) > 0 {
+		byReason = make(map[string]int32, len(mi.RestartsByReason))
+		for k, v := range mi.RestartsByReason {
+			byReason[string(k)] = v
+		}
+	}
+	var recent []corev1alpha1.JSRestartEvent
+	if n := len(mi.History); n > 0 {
+		recent = make([]corev1alpha1.JSRestartEvent, n)
+		for i, ev := range mi.History {
+			t := metav1.NewTime(ev.Time)
+			recent[n-1-i] = corev1alpha1.JSRestartEvent{
+				Time:   &t,
+				Reason: string(ev.Reason),
+				Error:  ev.Err,
+			}
+		}
+	}
+	return byReason, recent
 }
 
 func publish(emit EventEmitter, eventType, reason, message string) {
