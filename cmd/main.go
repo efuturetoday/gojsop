@@ -239,14 +239,12 @@ func main() {
 	}
 	managerCtx := ctrl.SetupSignalHandler()
 	registry := jsregistry.NewRegistry()
-	// JSHook VMs get the full read+write kube.* surface; JSAdmission VMs get
-	// a read-only view because the central VWC/MWC declare sideEffects: None
-	// and the apiserver is allowed to retry/replay admission requests.
-	kubeFull := &kubehost.KubeHost{
-		Ctx:    managerCtx,
-		Dyn:    dyn,
-		Mapper: mgr.GetRESTMapper(),
-	}
+	// One factory per process. SharedFactory hands every reconcile a binder
+	// over the same dynamic client + RESTMapper; ForHook returns the full
+	// read+write kube.* surface, ForAdmission returns a read-only view (the
+	// central VWC/MWC declare sideEffects: None and the apiserver is allowed
+	// to retry/replay admission requests).
+	kubeFactory := kubehost.NewSharedFactory(managerCtx, dyn, mgr.GetRESTMapper())
 	disp := dispatcher.New(dyn, dispatcher.FromMetaMapper(mgr.GetRESTMapper()), registry)
 	// Loader chain is shared between JSHook and JSAdmission so configMapRef
 	// resolves the same way on both surfaces. The cache-backed manager
@@ -260,7 +258,7 @@ func main() {
 		Scheme:       mgr.GetScheme(),
 		Loader:       loaderChain,
 		Registry:     registry,
-		Binder:       kubeFull,
+		KubeHost:     kubeFactory,
 		Dispatcher:   disp,
 		SubscribeCtx: managerCtx,
 		Recorder:     mgr.GetEventRecorderFor("jshook-controller"),
@@ -289,7 +287,7 @@ func main() {
 		Scheme:    mgr.GetScheme(),
 		Loader:    loaderChain,
 		Registry:  registry,
-		Binder:    &kubehost.ReadOnlyKubeHost{KubeHost: kubeFull},
+		KubeHost:  kubeFactory,
 		Server:    admissionServer,
 		Registrar: registrar,
 		Recorder:  mgr.GetEventRecorderFor("jsadmission-controller"),

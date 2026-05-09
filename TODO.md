@@ -16,10 +16,6 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
 
 ## 1. Smells
 
-- **`KubeHost` is a process-wide singleton.** One `Ctx`/`Dyn`/`Mapper`
-  shared across all hooks; per-hook ServiceAccount scoping (Phase 2)
-  will require touching every call site.
-  `internal/jsengine/kubehost/kubehost.go:24-31`.
 - **5s hard-coded backoff on every fail path.** `RequeueAfter:
   5*time.Second` regardless of error class — bad source URL and a
   transient API error get the same retry shape.

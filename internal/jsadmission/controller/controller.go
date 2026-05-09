@@ -37,6 +37,7 @@ import (
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsadmission"
 	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jssource"
@@ -55,11 +56,11 @@ type JSAdmissionReconciler struct {
 	Loader *jssource.Chain
 	// Registry owns the per-policy persistent JS instances.
 	Registry *jsregistry.Registry
-	// Binder is the host-function surface installed on every JSAdmission VM.
-	// Typically a *kubehost.ReadOnlyKubeHost — admission policies must not
+	// KubeHost mints the host-function surface installed on every JSAdmission VM.
+	// ForAdmission returns a read-only binder — admission policies must not
 	// write to the cluster from the apiserver request path (sideEffects:
 	// None contract), so apply/delete are intentionally not bound.
-	Binder jsengine.HostBinder
+	KubeHost kubehost.Factory
 	// Server holds the live policy table the HTTP webhook handler consults.
 	Server *jsadmission.Server
 	// Registrar maintains the central VWC/MWC.
@@ -135,11 +136,22 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	lim := admissionLimitsFromSpec(pol.Spec.Limits)
 	mutating := pol.Spec.Type == "mutating"
 
+	var binder jsengine.HostBinder
+	if r.KubeHost != nil {
+		binder, err = r.KubeHost.ForAdmission(ctx, req.NamespacedName, "")
+		if err != nil {
+			log.Error(err, "minting kube host binder")
+			return r.failAdmission(ctx, &pol, conditions.EventBuildFailed,
+				"build failed: kube host",
+				fmt.Sprintf("kube host: %v", err))
+		}
+	}
+
 	mi, restarted, err := r.Registry.GetOrLoad(ctx, req.NamespacedName, jsregistry.BuildOptions{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
-		Binder:     r.Binder,
+		Binder:     binder,
 		PostBuild:  admissionPostBuild(mutating),
 	})
 	if err != nil {

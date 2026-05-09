@@ -35,6 +35,7 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
@@ -65,11 +66,10 @@ type JSHookReconciler struct {
 	// Defaults to a fresh registry via SetupWithManager when nil.
 	Registry *jsregistry.Registry
 
-	// Binder is the host-function surface installed on every JSHook VM.
-	// Typically a *kubehost.KubeHost (full read+write kube.* surface).
-	// Cached on the ManagedVM so dispatcher rescue restarts don't have
-	// to re-acquire it.
-	Binder jsengine.HostBinder
+	// KubeHost mints the host-function surface installed on every JSHook VM.
+	// SharedFactory hands out the same client to all hooks; Phase 2 swaps in
+	// a per-ServiceAccount factory without touching this call site.
+	KubeHost kubehost.Factory
 
 	// Dispatcher subscribes hooks to Kubernetes events. Optional in tests.
 	Dispatcher *dispatcher.Dispatcher
@@ -157,11 +157,22 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	srcHash := jssource.Hash(source)
 	lim := limitsFromSpec(hook.Spec.Limits)
 
+	var binder jsengine.HostBinder
+	if r.KubeHost != nil {
+		binder, err = r.KubeHost.ForHook(ctx, req.NamespacedName, "")
+		if err != nil {
+			log.Error(err, "minting kube host binder")
+			return r.fail(ctx, &hook, conditions.EventBuildFailed,
+				"build failed: kube host",
+				fmt.Sprintf("kube host: %v", err))
+		}
+	}
+
 	mi, restarted, err := r.Registry.GetOrLoad(ctx, req.NamespacedName, jsregistry.BuildOptions{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
-		Binder:     r.Binder,
+		Binder:     binder,
 		PostBuild:  readConfig,
 	})
 	if err != nil {
