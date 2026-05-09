@@ -94,7 +94,8 @@ func admissionPostBuild(mutating bool) jsregistry.PostBuildHook {
 	if mutating {
 		entry = "mutate"
 	}
-	return func(vm *jsengine.VM) (any, error) {
+	return func(ctx context.Context, vm *jsengine.VM) (any, error) {
+		_ = ctx
 		if !vm.HasExport(entry) {
 			return nil, &jsregistry.MissingExportError{Name: entry}
 		}
@@ -133,7 +134,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	lim := admissionLimitsFromSpec(pol.Spec.Limits)
 	mutating := pol.Spec.Type == "mutating"
 
-	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, jsregistry.BuildOptions{
+	mi, restarted, err := r.Registry.GetOrLoad(ctx, req.NamespacedName, jsregistry.BuildOptions{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,

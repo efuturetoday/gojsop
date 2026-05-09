@@ -2,6 +2,7 @@ package jsadmission
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,7 @@ func loadPolicy(t *testing.T, src string, key types.NamespacedName) *jsregistry.
 	if !strings.Contains(src, "function config(") {
 		source = append([]byte("function config(){return {configVersion:'v1'}}\n"), source...)
 	}
-	if _, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: source, SourceHash: "h1"}); err != nil {
+	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: source, SourceHash: "h1"}); err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
 	return reg

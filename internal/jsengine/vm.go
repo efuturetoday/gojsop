@@ -8,6 +8,7 @@
 package jsengine
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/fastschema/qjs"
@@ -20,11 +21,11 @@ type Limits struct {
 	// MemoryMB caps the QuickJS heap in megabytes. Translated to bytes for
 	// JS_SetMemoryLimit. Zero means "use default".
 	MemoryMB int32
-	// TimeoutSeconds bounds a single handle() call. Currently advisory —
-	// dispatcher logs a warning when exceeded but does not yet interrupt the
-	// running call (qjs's MaxExecutionTime is a no-op in v0.0.6, and the
-	// per-op CloseOnContextDone path has significant overhead per the qjs
-	// docs). Phase 2: real interruption.
+	// TimeoutSeconds bounds a single handle() call. Enforced by passing a
+	// context with deadline into Eval/CallExport/LoadModule: wazero exits the
+	// in-flight wasm call when the context is cancelled, surfacing as
+	// ErrCancelled. The qjs MaxExecutionTime field is a no-op in v0.0.6, so
+	// CloseOnContextDone is the actual enforcement mechanism.
 	TimeoutSeconds int32
 }
 
@@ -59,12 +60,16 @@ type VM struct {
 }
 
 // New starts a fresh JS VM with the given Limits. Zero fields fall back to
-// DefaultLimits().
+// DefaultLimits(). The runtime is created with CloseOnContextDone so calls
+// can be cancelled by passing a context with deadline into the Eval/Call
+// methods below.
 func New(lim Limits) (*VM, error) {
 	lim = lim.applyDefaults()
 	rt, err := qjs.New(qjs.Option{
-		MemoryLimit:  int(lim.MemoryMB) * 1024 * 1024,
-		MaxStackSize: maxStackSizeBytes,
+		MemoryLimit:        int(lim.MemoryMB) * 1024 * 1024,
+		MaxStackSize:       maxStackSizeBytes,
+		Context:            context.Background(),
+		CloseOnContextDone: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("qjs.New: %w", err)
@@ -80,20 +85,69 @@ func (vm *VM) Limits() Limits {
 // Context exposes the underlying qjs context for feature packages that need
 // raw qjs bindings (e.g. jsadmission.Handle uses qjs.ToJsValue to stage a
 // real JS object instead of a JSON roundtrip).
+//
+// The returned *qjs.Context embeds a context.Context that wazero observes
+// for cancellation. Callers MUST NOT mutate that field — use the
+// ctx-accepting methods (Eval/CallExport/Invoke) so the per-call swap is
+// safe under CallMu.
 func (vm *VM) Context() *qjs.Context {
 	return vm.rt.Context()
 }
 
+// withContext swaps the qjs runtime's embedded Go context for ctx, runs fn,
+// and restores the previous context. This is how we plumb a per-call
+// deadline into wazero: every wazero invocation reads the embedded context
+// (qjs.Context.Context) for cancellation, so swapping it under our CallMu
+// gives us per-call cancellation without any qjs-level patching.
+//
+// The caller is responsible for serialization (in the registry: mi.CallMu).
+func (vm *VM) withContext(ctx context.Context, fn func() error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	qctx := vm.rt.Context()
+	prev := qctx.Context
+	qctx.Context = ctx
+	defer func() { qctx.Context = prev }()
+	return fn()
+}
+
+// WithContext runs fn with the qjs runtime's embedded Go context swapped
+// for ctx, so any wazero call fn issues (directly, or via qjs primitives
+// like Global().Invoke) sees ctx for cancellation. Use this when CallExport
+// is too coarse — e.g. jsadmission.Handle decodes a *qjs.Value into a
+// Go struct via JsObjectOrMapToGoStruct, which CallExport can't do.
+//
+// Caller must hold the serialization lock for this VM.
+func (vm *VM) WithContext(ctx context.Context, fn func(*qjs.Context) error) error {
+	return vm.withContext(ctx, func() error { return fn(vm.rt.Context()) })
+}
+
+// WrapEngineErr is the engine's stringly-typed error classifier exported
+// for feature wrappers that drive qjs through Context() directly (see
+// jsadmission.Handle). Lifts wazero/qjs raw errors into ErrCancelled or
+// ErrOOM as appropriate; ctx tells it whether to prefer cancellation.
+func WrapEngineErr(ctx context.Context, err error) error {
+	return wrapEngineErr(ctx, err)
+}
+
 // Eval runs source on the underlying runtime and returns the last expression's
 // string form. Used for smoke tests and for evaluating the hook's module body.
-func (vm *VM) Eval(name, source string) (string, error) {
-	ctx := vm.rt.Context()
-	res, err := ctx.Eval(name, qjs.Code(source))
-	if err != nil {
-		return "", fmt.Errorf("eval %s: %w", name, wrapOOM(err))
-	}
-	defer res.Free()
-	return res.String(), nil
+//
+// ctx is plumbed into wazero via CloseOnContextDone — passing a context with
+// deadline gives the call a real timeout (returns ErrCancelled).
+func (vm *VM) Eval(ctx context.Context, name, source string) (string, error) {
+	var out string
+	err := vm.withContext(ctx, func() error {
+		res, err := vm.rt.Context().Eval(name, qjs.Code(source))
+		if err != nil {
+			return fmt.Errorf("eval %s: %w", name, wrapEngineErr(ctx, err))
+		}
+		defer res.Free()
+		out = res.String()
+		return nil
+	})
+	return out, err
 }
 
 // LoadModule evaluates the user's hook source on the persistent runtime.
@@ -103,8 +157,8 @@ func (vm *VM) Eval(name, source string) (string, error) {
 //
 // Module-top-level state (var declarations, globalThis assignments) survives
 // across subsequent calls — that's the persistent-VM contract.
-func (vm *VM) LoadModule(name, source string) error {
-	_, err := vm.Eval(name, source)
+func (vm *VM) LoadModule(ctx context.Context, name, source string) error {
+	_, err := vm.Eval(ctx, name, source)
 	return err
 }
 
@@ -112,6 +166,9 @@ func (vm *VM) LoadModule(name, source string) error {
 // named name. Used by feature packages to fail builds early with a clear
 // "missing required export" error instead of letting the first invocation
 // blow up minutes or hours later.
+//
+// HasExport does not run user JS — it inspects globalThis — so it does not
+// take a context.
 func (vm *VM) HasExport(name string) bool {
 	fn := vm.rt.Context().Global().GetPropertyStr(name)
 	defer fn.Free()
@@ -124,30 +181,37 @@ func (vm *VM) HasExport(name string) bool {
 //
 // CallExport is the feature-agnostic primitive that JSHook and JSAdmission
 // build their own typed Handle/ReadConfig wrappers on top of.
-func (vm *VM) CallExport(name string, args ...any) (string, error) {
-	global := vm.rt.Context().Global()
-	fn := global.GetPropertyStr(name)
-	defer fn.Free()
-	if !fn.IsFunction() {
-		return "", fmt.Errorf("module does not export a %s() function", name)
-	}
-	out, err := global.Invoke(name, args...)
-	if err != nil {
-		return "", fmt.Errorf("calling %s(): %w", name, wrapOOM(err))
-	}
-	defer out.Free()
-	if out.IsUndefined() {
-		return "", nil
-	}
-	s, err := out.JSONStringify()
-	if err != nil {
-		return "", fmt.Errorf("JSON.stringify %s() result: %w", name, err)
-	}
-	return s, nil
+func (vm *VM) CallExport(ctx context.Context, name string, args ...any) (string, error) {
+	var out string
+	err := vm.withContext(ctx, func() error {
+		global := vm.rt.Context().Global()
+		fn := global.GetPropertyStr(name)
+		defer fn.Free()
+		if !fn.IsFunction() {
+			return fmt.Errorf("module does not export a %s() function", name)
+		}
+		res, err := global.Invoke(name, args...)
+		if err != nil {
+			return fmt.Errorf("calling %s(): %w", name, wrapEngineErr(ctx, err))
+		}
+		defer res.Free()
+		if res.IsUndefined() {
+			return nil
+		}
+		s, err := res.JSONStringify()
+		if err != nil {
+			return fmt.Errorf("JSON.stringify %s() result: %w", name, err)
+		}
+		out = s
+		return nil
+	})
+	return out, err
 }
 
 // Close releases the underlying QuickJS runtime. Always call this when the
-// owning resource is removed or being restarted.
+// owning resource is removed or being restarted. The caller MUST hold the
+// per-VM serialization lock (or otherwise guarantee no in-flight call) —
+// closing while a wasm call is mid-flight races inside wazero.
 func (vm *VM) Close() {
 	vm.rt.Close()
 }

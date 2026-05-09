@@ -1,6 +1,7 @@
 package jshook_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/o-haase/gojsop/internal/jsengine"
@@ -29,10 +30,10 @@ func TestReadConfig_FromHookSource(t *testing.T) {
 	}
 	t.Cleanup(inst.Close)
 
-	if err := inst.LoadModule("hook.js", src); err != nil {
+	if err := inst.LoadModule(context.Background(), "hook.js", src); err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
-	cfg, err := jshook.ReadConfig(inst)
+	cfg, err := jshook.ReadConfig(context.Background(), inst)
 	if err != nil {
 		t.Fatalf("ReadConfig: %v", err)
 	}
@@ -65,10 +66,10 @@ func TestReadConfig_MissingFunction(t *testing.T) {
 	}
 	t.Cleanup(inst.Close)
 
-	if err := inst.LoadModule("noconfig.js", "var x = 1;"); err != nil {
+	if err := inst.LoadModule(context.Background(), "noconfig.js", "var x = 1;"); err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
-	cfg, err := jshook.ReadConfig(inst)
+	cfg, err := jshook.ReadConfig(context.Background(), inst)
 	if err != nil {
 		t.Fatalf("ReadConfig: %v", err)
 	}

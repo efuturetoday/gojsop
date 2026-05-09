@@ -105,14 +105,14 @@ func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message 
 // freshly built VM and stashes the *jshook.Config in ManagedVM.Extra. The
 // reconciler reads it back via configFromExtra. This keeps the config off the
 // engine and inside the feature package.
-func readConfig(vm *jsengine.VM) (any, error) {
+func readConfig(ctx context.Context, vm *jsengine.VM) (any, error) {
 	if !vm.HasExport("config") {
 		return nil, &jsregistry.MissingExportError{Name: "config"}
 	}
 	if !vm.HasExport("handle") {
 		return nil, &jsregistry.MissingExportError{Name: "handle"}
 	}
-	cfg, err := jshook.ReadConfig(vm)
+	cfg, err := jshook.ReadConfig(ctx, vm)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	srcHash := jssource.Hash(source)
 	lim := limitsFromSpec(hook.Spec.Limits)
 
-	mi, restarted, err := r.Registry.GetOrLoad(req.NamespacedName, jsregistry.BuildOptions{
+	mi, restarted, err := r.Registry.GetOrLoad(ctx, req.NamespacedName, jsregistry.BuildOptions{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,

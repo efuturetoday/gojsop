@@ -13,6 +13,7 @@ var (
 	ErrBindHost   = errors.New("registry: bind host")
 	ErrLoadModule = errors.New("registry: load module")
 	ErrPostBuild  = errors.New("registry: post-build")
+	ErrUnknownKey = errors.New("registry: unknown key")
 )
 
 // MissingExportError is returned from a PostBuild hook when the loaded JS

@@ -412,89 +412,108 @@ func (s *subscription) runWorker(ctx context.Context) {
 			s.queue.Done(qkey)
 			continue
 		}
-
-		out, err, elapsed, panicked, stack := s.invokeHandle(bc)
-
-		switch {
-		case panicked:
-			// Panic in qjs glue or a host function escaped recover() inside
-			// JS — instance state is suspect, rebuild it. The stack trace is
-			// passed as a structured field rather than baked into err so
-			// downstream log sinks can route or drop it independently.
-			logger.Error(err, "handle() panicked — restarting instance",
-				"binding", bc.Binding, "event", bc.WatchEvent, "stack", stack)
-			s.rescue(logger, jsregistry.ReasonPanic)
-			s.requeue(qkey, bc)
-		case err != nil && jsengine.IsOOMError(err):
-			// qjs MemoryLimit reached. The instance heap is corrupt from JS's
-			// perspective; only a fresh runtime gets us back to a known good state.
-			logger.Error(err, "handle() hit memory limit — restarting instance", "binding", bc.Binding, "event", bc.WatchEvent)
-			s.rescue(logger, jsregistry.ReasonMemoryLimit)
-			s.requeue(qkey, bc)
-		case err != nil:
-			logger.Error(err, "handle() failed", "binding", bc.Binding, "event", bc.WatchEvent)
-			// Static message — the JS error string would explode dedup
-			// cardinality at admission/event-loop volume. The verbose error
-			// goes to logs and to status.lastExecution.error.
-			s.publish(corev1.EventTypeWarning, conditions.EventHandleFailed,
-				"handle() returned an error")
-			s.requeue(qkey, bc)
-		default:
-			if out != "" {
-				logger.V(1).Info("handle() returned", "value", out)
-			}
-			s.queue.Forget(qkey)
-		}
-
-		// Timeout-streak tracking runs regardless of err — a hook that always
-		// finishes overdue still deserves a kick eventually. We only consult
-		// timeoutStreak after a successful or non-fatal failure path; rescue
-		// paths above already rebuilt the instance and reset streak below.
-		if mi, ok := s.reg.Get(s.key); ok {
-			budget := time.Duration(mi.VM.Limits().TimeoutSeconds) * time.Second
-			if budget > 0 && elapsed > budget {
-				s.timeoutStreak++
-				// Single-timeout event uses the configured budget — stable
-				// per spec, so the recorder dedupes a flood of slow calls
-				// to one event per 10-min window.
-				s.publish(corev1.EventTypeWarning, conditions.EventHandleTimeout,
-					fmt.Sprintf("handle() exceeded %s", budget))
-				if s.timeoutStreak >= timeoutStreakThreshold {
-					logger.Info("handle() exceeded timeout for streak threshold — restarting instance",
-						"streak", s.timeoutStreak, "budget", budget, "elapsed", elapsed)
-					s.rescue(logger, jsregistry.ReasonTimeoutStreak)
-				}
-			} else {
-				s.timeoutStreak = 0
-			}
-		}
-
+		s.handleEvent(ctx, logger, qkey, bc)
 		s.queue.Done(qkey)
 	}
 }
 
-// invokeHandle calls the live instance's Handle() with panic recovery and
-// timing. When recover() catches something, panicked is true, err carries
-// the panic value, and stack carries the runtime stack trace as a separate
-// string so log sinks can route it independently of the error message.
-func (s *subscription) invokeHandle(bc jshook.BindingContext) (out string, err error, elapsed time.Duration, panicked bool, stack string) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("panic in handle(): %v", r)
-			stack = string(debug.Stack())
-			panicked = true
-		}
-	}()
+// handleEvent runs one BindingContext through the live VM and dispatches on
+// the outcome. The locking + recover + OOM/cancel classification lives in
+// jsregistry.Registry.Call; the dispatcher only owns the policy table:
+//
+//   - panic / OOM / cancelled (timeout) → rescue + requeue
+//   - other error → log + emit Warning + requeue
+//   - ok → forget
+//
+// Timeout handling has two layers. The wazero deadline (carried by
+// callCtx) bounds wall-clock at the spec'd budget and surfaces as
+// OutcomeCancelled. The dispatcher then keeps the legacy timeoutStreak
+// counter as a noise filter: a single overdue call emits an Event but
+// does not rescue; reaching timeoutStreakThreshold consecutive timeouts
+// rescues the VM. Rationale: with hard cancellation the call may be
+// killed mid-write or mid-IO and a one-off slow path shouldn't kill a
+// healthy VM, but a *streak* signals genuine breakage.
+func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
 	mi, ok := s.reg.Get(s.key)
 	if !ok {
-		return "", fmt.Errorf("hook %s not in registry", s.key), 0, false, ""
+		logger.Error(nil, "hook not in registry — dropping event",
+			"binding", bc.Binding, "event", bc.WatchEvent)
+		s.queue.Forget(qkey)
+		return
 	}
-	mi.CallMu.Lock()
-	defer mi.CallMu.Unlock()
-	start := time.Now()
-	out, err = jshook.Handle(mi.VM, []jshook.BindingContext{bc})
-	elapsed = time.Since(start)
-	return out, err, elapsed, false, ""
+
+	budget := time.Duration(mi.VM.Limits().TimeoutSeconds) * time.Second
+	callCtx, cancel := contextWithOptionalTimeout(parent, budget)
+	defer cancel()
+
+	var out string
+	res, _, err := s.reg.Call(callCtx, s.key, func(ctx context.Context, vm *jsengine.VM) error {
+		var herr error
+		out, herr = jshook.Handle(ctx, vm, []jshook.BindingContext{bc})
+		return herr
+	})
+	if err != nil {
+		// ErrUnknownKey: VM was dropped between Get and Call (race with reconciler delete).
+		logger.Info("hook vanished mid-call", "binding", bc.Binding, "event", bc.WatchEvent)
+		s.queue.Forget(qkey)
+		return
+	}
+
+	switch res.Outcome {
+	case jsregistry.OutcomePanic:
+		logger.Error(fmt.Errorf("panic in handle(): %v", res.Panic),
+			"handle() panicked — restarting instance",
+			"binding", bc.Binding, "event", bc.WatchEvent, "stack", string(debug.Stack()))
+		s.rescue(logger, jsregistry.ReasonPanic)
+		s.requeue(qkey, bc)
+
+	case jsregistry.OutcomeMemoryLimit:
+		logger.Error(res.Err, "handle() hit memory limit — restarting instance",
+			"binding", bc.Binding, "event", bc.WatchEvent)
+		s.rescue(logger, jsregistry.ReasonMemoryLimit)
+		s.requeue(qkey, bc)
+
+	case jsregistry.OutcomeCancelled:
+		// Per-call deadline tripped. Bump the streak; emit a single
+		// Warning per overdue call (recorder dedupes within its window).
+		// Rescue only when the streak threshold is reached — see the
+		// rationale on handleEvent above.
+		s.timeoutStreak++
+		s.publish(corev1.EventTypeWarning, conditions.EventHandleTimeout,
+			fmt.Sprintf("handle() exceeded %s", budget))
+		if s.timeoutStreak >= timeoutStreakThreshold {
+			logger.Info("handle() exceeded timeout for streak threshold — restarting instance",
+				"streak", s.timeoutStreak, "budget", budget, "elapsed", res.Duration)
+			s.rescue(logger, jsregistry.ReasonTimeoutStreak)
+		}
+		s.requeue(qkey, bc)
+
+	case jsregistry.OutcomeError:
+		logger.Error(res.Err, "handle() failed", "binding", bc.Binding, "event", bc.WatchEvent)
+		// Static message — the JS error string would explode dedup
+		// cardinality at admission/event-loop volume. The verbose error
+		// goes to logs and to status.lastExecution.error.
+		s.publish(corev1.EventTypeWarning, conditions.EventHandleFailed,
+			"handle() returned an error")
+		s.timeoutStreak = 0
+		s.requeue(qkey, bc)
+
+	default: // OutcomeOK
+		if out != "" {
+			logger.V(1).Info("handle() returned", "value", out)
+		}
+		s.timeoutStreak = 0
+		s.queue.Forget(qkey)
+	}
+}
+
+// contextWithOptionalTimeout returns a derived context with the given
+// timeout, or the parent unchanged (with a no-op cancel) when timeout <= 0.
+func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return parent, func() {}
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 // rescue rebuilds the instance via jslifecycle.Rescue (which publishes the

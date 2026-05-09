@@ -1,6 +1,7 @@
 package jslifecycle
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,7 +25,7 @@ func captureEmitter(buf int) (chan [3]string, EventEmitter) {
 func loadInstance(t *testing.T, reg *jsregistry.Registry, key types.NamespacedName) {
 	t.Helper()
 	src := []byte(`function config(){return {configVersion:'v1'}} function handle(){}`)
-	if _, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src, SourceHash: "h1"}); err != nil {
+	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src, SourceHash: "h1"}); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	t.Cleanup(func() { reg.Drop(key) })

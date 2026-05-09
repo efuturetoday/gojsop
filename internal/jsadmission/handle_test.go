@@ -1,6 +1,7 @@
 package jsadmission_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -15,7 +16,7 @@ func newVMWithSource(t *testing.T, src string) *jsengine.VM {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(inst.Close)
-	if err := inst.LoadModule("policy.js", src); err != nil {
+	if err := inst.LoadModule(context.Background(), "policy.js", src); err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
 	return inst
@@ -28,7 +29,7 @@ func TestHandle_Validate_Allow(t *testing.T) {
 			return { allowed: true };
 		}
 	`)
-	res, err := jsadmission.Handle(inst, &jsadmission.AdmissionRequest{
+	res, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{
 		UID:       "abc",
 		Operation: "CREATE",
 		Object:    map[string]any{"kind": "Pod"},
@@ -47,7 +48,7 @@ func TestHandle_Validate_Deny(t *testing.T) {
 			return { allowed: false, message: "no", code: 403, warnings: ["w1"] };
 		}
 	`)
-	res, err := jsadmission.Handle(inst, &jsadmission.AdmissionRequest{}, false)
+	res, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{}, false)
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -72,7 +73,7 @@ func TestHandle_Mutate_AddLabel(t *testing.T) {
 			return { allowed: true, modifiedObject: obj };
 		}
 	`)
-	res, err := jsadmission.Handle(inst, &jsadmission.AdmissionRequest{
+	res, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{
 		Object: map[string]any{
 			"metadata": map[string]any{"name": "p"},
 		},
@@ -92,7 +93,7 @@ func TestHandle_Mutate_AddLabel(t *testing.T) {
 
 func TestHandle_MissingExport(t *testing.T) {
 	inst := newVMWithSource(t, `function validate(req) { return {allowed:true}; }`)
-	_, err := jsadmission.Handle(inst, &jsadmission.AdmissionRequest{}, true)
+	_, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{}, true)
 	if err == nil {
 		t.Fatal("expected error when mutate() is missing")
 	}
@@ -103,7 +104,7 @@ func TestHandle_MissingExport(t *testing.T) {
 
 func TestHandle_ThrowsSurface(t *testing.T) {
 	inst := newVMWithSource(t, `function validate(req) { throw new Error("boom"); }`)
-	_, err := jsadmission.Handle(inst, &jsadmission.AdmissionRequest{}, false)
+	_, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{}, false)
 	if err == nil {
 		t.Fatal("expected error from JS throw")
 	}

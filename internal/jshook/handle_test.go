@@ -1,6 +1,7 @@
 package jshook_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/o-haase/gojsop/internal/jsengine"
@@ -20,11 +21,11 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(inst.Close)
-	if err := inst.LoadModule("hook.js", src); err != nil {
+	if err := inst.LoadModule(context.Background(), "hook.js", src); err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
 
-	ctx := []jshook.BindingContext{{
+	bctx := []jshook.BindingContext{{
 		Binding:    "watch",
 		Type:       "Event",
 		WatchEvent: "Added",
@@ -32,7 +33,7 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 			"metadata": map[string]any{"name": "foo"},
 		},
 	}}
-	got, err := jshook.Handle(inst, ctx)
+	got, err := jshook.Handle(context.Background(), inst, bctx)
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 		t.Fatalf("return: got %q want %q", got, want)
 	}
 
-	res, err := inst.Eval("inspect.js", `lastEvent.watchEvent`)
+	res, err := inst.Eval(context.Background(), "inspect.js", `lastEvent.watchEvent`)
 	if err != nil {
 		t.Fatalf("Eval inspect: %v", err)
 	}
@@ -56,10 +57,10 @@ func TestHandle_MissingFunction(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(inst.Close)
-	if err := inst.LoadModule("nohandle.js", `function config(){return {}}`); err != nil {
+	if err := inst.LoadModule(context.Background(), "nohandle.js", `function config(){return {}}`); err != nil {
 		t.Fatalf("LoadModule: %v", err)
 	}
-	if _, err := jshook.Handle(inst, nil); err == nil {
+	if _, err := jshook.Handle(context.Background(), inst, nil); err == nil {
 		t.Fatal("expected error when hook has no handle()")
 	}
 }

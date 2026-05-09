@@ -1,6 +1,7 @@
 package jshook
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -12,13 +13,18 @@ import (
 // not export config() — JSHook reconciles enforce non-nil at their layer
 // (event subscriptions require config); JSAdmission policies don't call
 // this path's result at all.
-func ReadConfig(vm *jsengine.VM) (*Config, error) {
-	const bridge = `JSON.stringify(typeof config === "function" ? config() : null)`
-	raw, err := vm.Eval("__config_bridge__", bridge)
+//
+// ctx is the build / reconcile context — config() runs once per build, so
+// this gets the reconcile deadline rather than the per-call timeout.
+func ReadConfig(ctx context.Context, vm *jsengine.VM) (*Config, error) {
+	if !vm.HasExport("config") {
+		return nil, nil
+	}
+	raw, err := vm.CallExport(ctx, "config")
 	if err != nil {
 		return nil, fmt.Errorf("calling config(): %w", err)
 	}
-	if raw == "null" || raw == "" || raw == "undefined" {
+	if raw == "" {
 		return nil, nil
 	}
 	var cfg Config

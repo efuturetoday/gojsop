@@ -1,6 +1,7 @@
 package jsengine
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -12,7 +13,7 @@ func TestEval_1Plus1(t *testing.T) {
 	}
 	t.Cleanup(inst.Close)
 
-	got, err := inst.Eval("smoke.js", "1 + 1")
+	got, err := inst.Eval(context.Background(), "smoke.js", "1 + 1")
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
@@ -30,11 +31,11 @@ func TestEval_PersistentState(t *testing.T) {
 	}
 	t.Cleanup(inst.Close)
 
-	if _, err := inst.Eval("setup.js", "globalThis.counter = 0;"); err != nil {
+	if _, err := inst.Eval(context.Background(), "setup.js", "globalThis.counter = 0;"); err != nil {
 		t.Fatalf("setup eval: %v", err)
 	}
 	for i := 1; i <= 3; i++ {
-		got, err := inst.Eval("inc.js", "globalThis.counter++; globalThis.counter")
+		got, err := inst.Eval(context.Background(), "inc.js", "globalThis.counter++; globalThis.counter")
 		if err != nil {
 			t.Fatalf("inc eval: %v", err)
 		}
@@ -56,7 +57,7 @@ func TestMemoryLimit_Honoured(t *testing.T) {
 	t.Cleanup(inst.Close)
 
 	// Allocate a 16 MiB string. With a 4 MiB heap cap, qjs must throw.
-	_, err = inst.Eval("oom.js", `"x".repeat(16 * 1024 * 1024)`)
+	_, err = inst.Eval(context.Background(), "oom.js", `"x".repeat(16 * 1024 * 1024)`)
 	if err == nil {
 		t.Fatal("expected memory-limit error, got nil — limit not enforced")
 	}

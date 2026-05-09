@@ -1,6 +1,7 @@
 package jsadmission
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/fastschema/qjs"
@@ -83,7 +84,10 @@ type AdmissionResult struct {
 // policy code rather than going through a JSON roundtrip.
 //
 // Caller MUST hold the per-VM serialization lock — qjs is not goroutine-safe.
-func Handle(vm *jsengine.VM, req *AdmissionRequest, mutating bool) (*AdmissionResult, error) {
+//
+// ctx is plumbed into wazero via VM.WithContext; a context with deadline
+// gives the JS call a real timeout (returns jsengine.ErrCancelled).
+func Handle(ctx context.Context, vm *jsengine.VM, req *AdmissionRequest, mutating bool) (*AdmissionResult, error) {
 	if req == nil {
 		return nil, fmt.Errorf("admission request is nil")
 	}
@@ -91,25 +95,33 @@ func Handle(vm *jsengine.VM, req *AdmissionRequest, mutating bool) (*AdmissionRe
 	if mutating {
 		export = "mutate"
 	}
-	global := vm.Context().Global()
-	fn := global.GetPropertyStr(export)
-	defer fn.Free()
-	if !fn.IsFunction() {
-		return nil, fmt.Errorf("admission policy does not export a %s() function", export)
-	}
+	var result AdmissionResult
+	err := vm.WithContext(ctx, func(c *qjs.Context) error {
+		global := c.Global()
+		fn := global.GetPropertyStr(export)
+		defer fn.Free()
+		if !fn.IsFunction() {
+			return fmt.Errorf("admission policy does not export a %s() function", export)
+		}
 
-	out, err := global.Invoke(export, req)
-	if err != nil {
-		return nil, fmt.Errorf("calling %s(): %w", export, err)
-	}
-	defer out.Free()
+		out, err := global.Invoke(export, req)
+		if err != nil {
+			return fmt.Errorf("calling %s(): %w", export, jsengine.WrapEngineErr(ctx, err))
+		}
+		defer out.Free()
 
-	if out.IsUndefined() || out.IsNull() {
-		return nil, fmt.Errorf("%s() returned undefined — must return {allowed: bool, ...}", export)
-	}
-	result, err := qjs.JsObjectOrMapToGoStruct[AdmissionResult](out)
+		if out.IsUndefined() || out.IsNull() {
+			return fmt.Errorf("%s() returned undefined — must return {allowed: bool, ...}", export)
+		}
+		decoded, err := qjs.JsObjectOrMapToGoStruct[AdmissionResult](out)
+		if err != nil {
+			return fmt.Errorf("decode %s() return value: %w", export, err)
+		}
+		result = decoded
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("decode %s() return value: %w", export, err)
+		return nil, err
 	}
 	return &result, nil
 }

@@ -44,7 +44,7 @@ func runHook(t *testing.T, h *kubehost.KubeHost, source string) *jsengine.VM {
 		t.Fatalf("BindHost: %v", err)
 	}
 	if source != "" {
-		if _, err := inst.Eval("hook.js", source); err != nil {
+		if _, err := inst.Eval(context.Background(), "hook.js", source); err != nil {
 			t.Fatalf("Eval: %v", err)
 		}
 	}
@@ -66,7 +66,7 @@ func TestKubeHost_ApplyCreatesAndUpdates(t *testing.T) {
 	inst := runHook(t, h, src)
 
 	// First apply — creates the resource.
-	out, err := inst.Eval("call1.js", `JSON.stringify(runApply({key: "v1"}))`)
+	out, err := inst.Eval(context.Background(), "call1.js", `JSON.stringify(runApply({key: "v1"}))`)
 	if err != nil {
 		t.Fatalf("apply create: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestKubeHost_ApplyCreatesAndUpdates(t *testing.T) {
 	}
 
 	// Second apply — updates the resource.
-	if _, err := inst.Eval("call2.js", `runApply({key: "v2"})`); err != nil {
+	if _, err := inst.Eval(context.Background(), "call2.js", `runApply({key: "v2"})`); err != nil {
 		t.Fatalf("apply update: %v", err)
 	}
 	got, err = h.Dyn.Resource(schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}).
@@ -102,7 +102,7 @@ func TestKubeHost_ApplyCreatesAndUpdates(t *testing.T) {
 func TestKubeHost_GetReturnsNullForMissing(t *testing.T) {
 	h := newKubeHost(t)
 	inst := runHook(t, h, ``)
-	out, err := inst.Eval("get.js", `JSON.stringify(kube.get({
+	out, err := inst.Eval(context.Background(), "get.js", `JSON.stringify(kube.get({
 		apiVersion: "v1", kind: "ConfigMap", namespace: "default", name: "missing"
 	}))`)
 	if err != nil {
@@ -125,7 +125,7 @@ func TestKubeHost_ListReturnsItems(t *testing.T) {
 	h := newKubeHost(t, cm1, cm2)
 
 	inst := runHook(t, h, ``)
-	out, err := inst.Eval("list.js", `(() => {
+	out, err := inst.Eval(context.Background(), "list.js", `(() => {
 		const items = kube.list({apiVersion: "v1", kind: "ConfigMap", namespace: "default"});
 		return items.map(i => i.metadata.name).sort().join(",");
 	})()`)
@@ -182,7 +182,7 @@ func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
 				"data": map[string]any{"color": "blue", "n": "v" + string(rune('0'+i))},
 			},
 		}}
-		if _, err := inst.CallExport("handle", bc); err != nil {
+		if _, err := inst.CallExport(context.Background(), "handle", bc); err != nil {
 			t.Fatalf("Handle iteration %d: %v", i, err)
 		}
 	}
@@ -208,7 +208,7 @@ func TestKubeHost_DeleteRemovesResource(t *testing.T) {
 	}}
 	h := newKubeHost(t, cm)
 	inst := runHook(t, h, ``)
-	if _, err := inst.Eval("del.js", `kube.delete({
+	if _, err := inst.Eval(context.Background(), "del.js", `kube.delete({
 		apiVersion: "v1", kind: "ConfigMap", namespace: "default", name: "doomed"
 	})`); err != nil {
 		t.Fatalf("delete: %v", err)

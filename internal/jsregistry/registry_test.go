@@ -1,6 +1,7 @@
 package jsregistry_test
 
 import (
+	"context"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -17,7 +18,7 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	key := types.NamespacedName{Name: "h1"}
 	opts := jsregistry.BuildOptions{Source: src, SourceHash: "abc123"}
 
-	mi, restarted, err := reg.GetOrLoad(key, opts)
+	mi, restarted, err := reg.GetOrLoad(context.Background(), key, opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
@@ -28,11 +29,11 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 		t.Errorf("RestartCount: got %d, want 0", mi.RestartCount)
 	}
 
-	if _, err := mi.VM.Eval("inc.js", "globalThis.counter = 42"); err != nil {
+	if _, err := mi.VM.Eval(context.Background(), "inc.js", "globalThis.counter = 42"); err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
 
-	mi2, restarted2, err := reg.GetOrLoad(key, opts)
+	mi2, restarted2, err := reg.GetOrLoad(context.Background(), key, opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad #2: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	if mi2 != mi {
 		t.Fatal("expected identical ManagedVM pointer")
 	}
-	got, err := mi2.VM.Eval("read.js", "globalThis.counter")
+	got, err := mi2.VM.Eval(context.Background(), "read.js", "globalThis.counter")
 	if err != nil {
 		t.Fatalf("Eval read: %v", err)
 	}
@@ -59,16 +60,16 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 	src1 := []byte(`globalThis.tag = "v1"; function config(){return {}}`)
 	src2 := []byte(`globalThis.tag = "v2"; function config(){return {}}`)
 
-	mi, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src1, SourceHash: "h1"})
+	mi, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src1, SourceHash: "h1"})
 	if err != nil {
 		t.Fatalf("load v1: %v", err)
 	}
-	got, _ := mi.VM.Eval("t.js", "globalThis.tag")
+	got, _ := mi.VM.Eval(context.Background(), "t.js", "globalThis.tag")
 	if got != "v1" {
 		t.Fatalf("v1 tag: got %q", got)
 	}
 
-	mi2, restarted, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src2, SourceHash: "h2"})
+	mi2, restarted, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src2, SourceHash: "h2"})
 	if err != nil {
 		t.Fatalf("load v2: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 	if mi2.LastReason != jsregistry.ReasonSourceChanged {
 		t.Errorf("LastReason: got %q", mi2.LastReason)
 	}
-	got2, _ := mi2.VM.Eval("t.js", "globalThis.tag")
+	got2, _ := mi2.VM.Eval(context.Background(), "t.js", "globalThis.tag")
 	if got2 != "v2" {
 		t.Fatalf("v2 tag: got %q", got2)
 	}
@@ -97,7 +98,7 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	t.Cleanup(func() { reg.Drop(key) })
 
 	src := []byte(`globalThis.counter = 0; function config(){return {}}`)
-	mi, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{
+	mi, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{
 		Source:     src,
 		SourceHash: "h1",
 		Limits:     jsengine.Limits{MemoryMB: 8},
@@ -105,7 +106,7 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
-	if _, err := mi.VM.Eval("dirty.js", "globalThis.counter = 99"); err != nil {
+	if _, err := mi.VM.Eval(context.Background(), "dirty.js", "globalThis.counter = 99"); err != nil {
 		t.Fatalf("dirty eval: %v", err)
 	}
 
@@ -125,7 +126,7 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	if mi2.VM.Limits().MemoryMB != 8 {
 		t.Errorf("limits not preserved: got MemoryMB=%d", mi2.VM.Limits().MemoryMB)
 	}
-	got, err := mi2.VM.Eval("read.js", "globalThis.counter")
+	got, err := mi2.VM.Eval(context.Background(), "read.js", "globalThis.counter")
 	if err != nil {
 		t.Fatalf("read counter: %v", err)
 	}
@@ -150,7 +151,7 @@ func TestRegistry_Get(t *testing.T) {
 		t.Fatal("Get must return false for unknown key")
 	}
 	src := []byte(`function config(){return {}}`)
-	mi, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src, SourceHash: "x"})
+	mi, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src, SourceHash: "x"})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestRegistry_Drop(t *testing.T) {
 	key := types.NamespacedName{Name: "h3"}
 
 	src := []byte(`function config(){return {}}`)
-	if _, _, err := reg.GetOrLoad(key, jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
+	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if reg.Len() != 1 {
