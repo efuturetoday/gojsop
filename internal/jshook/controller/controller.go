@@ -269,7 +269,7 @@ func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, 
 		ObservedGeneration: hook.Generation,
 	})
 	hook.Status.ObservedGeneration = hook.Generation
-	hook.Status.LastExecution = &corev1alpha1.JSExecutionStatus{
+	hook.Status.LastReconcile = &corev1alpha1.JSReconcileStatus{
 		Time:  &now,
 		Error: conditionMsg,
 	}

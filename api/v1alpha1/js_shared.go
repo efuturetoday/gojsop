@@ -140,15 +140,15 @@ type JSInstanceStatus struct {
 	ManualRestartToken string `json:"manualRestartToken,omitempty"`
 }
 
-// JSExecutionStatus reports the outcome of the most recent JS call (event
-// handle() or admission validate()/mutate()).
-type JSExecutionStatus struct {
+// JSReconcileStatus reports the outcome of the most recent reconcile loop
+// for the resource. Distinct from runtime call telemetry — this records
+// whether the controller could *load and register* the hook/policy, not
+// whether handle()/validate()/mutate() actually ran.
+type JSReconcileStatus struct {
 	// +optional
 	Time *metav1.Time `json:"time,omitempty"`
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	DurationMs int64 `json:"durationMs,omitempty"`
-	// Error is non-empty if the last call failed.
+	// Error is non-empty when the last reconcile failed (source load,
+	// build, subscribe, manual restart). Empty on a successful reconcile.
 	// +optional
 	Error string `json:"error,omitempty"`
 }

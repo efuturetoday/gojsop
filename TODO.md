@@ -17,27 +17,21 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
 ## 1. Smells
 
 - **Restart bookkeeping is shallow.** `ManagedVM` keeps only
-  `RestartCount` + `LastReason`; no per-trigger counters (OOM vs
-  panic vs timeout streak vs manual), no history ring.
+  `RestartCount` + `LastReason`; no per-trigger counters (six now —
+  OOM / panic / timeout / timeout-streak / manual / source-changed),
+  no history ring.
 - **`KubeHost` is a process-wide singleton.** One `Ctx`/`Dyn`/`Mapper`
   shared across all hooks; per-hook ServiceAccount scoping (Phase 2)
   will require touching every call site.
   `internal/jsengine/kubehost/kubehost.go:24-31`.
-- **Failure path overwrites `LastExecution`.** `controller.fail()`
-  writes both Conditions and `LastExecution.Error`, mixing reconcile
-  failures with hook-execution telemetry. Same shape on the admission
-  side via `failAdmission`.
 - **5s hard-coded backoff on every fail path.** `RequeueAfter:
   5*time.Second` regardless of error class — bad source URL and a
   transient API error get the same retry shape.
-- **Admission rescue is partial.** Panic and OOM in `validate()` /
-  `mutate()` now rebuild the VM via `jslifecycle.Rescue`, symmetric
-  to the dispatcher. Single timeouts still don't rescue: the review
-  goroutine is still alive and still holds `mi.CallMu`, so closing
-  the runtime would race with an active eval. Until JS is
-  interruptible (separate engine-level work) a stuck policy waits
-  for its own call to finish.
-  `internal/jsadmission/server.go:review`.
+- **`CloseOnContextDone` overhead unmeasured.** Per-call ctx
+  cancellation via wazero is now on for every call (admission and
+  dispatcher). The plan acknowledged a benchmark gate; it never ran.
+  If hot-path admission cost is unacceptable, fall back to forking
+  qjs to re-enable QuickJS-level interrupts.
 
 ## 2. Missing
 
@@ -60,16 +54,13 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
   all of these. With events landed, this is the natural counterpart:
   events answer "did something interesting happen", metrics answer
   "how often, how slow".
-- **JS execution is not interruptible.** `Limits.TimeoutSeconds` is a
-  Go-side context deadline; the QuickJS instance keeps running an
-  infinite loop and the worker goroutine is held until it returns.
-  Three timeouts trigger a hard restart but the in-flight goroutine
-  leaks until QuickJS returns. Same shape on the admission server's
-  review goroutine — `ReviewTimeout` fires, but the qjs call leaks
-  until it finishes. Build-time hangs (`while(true)` at module top
-  level or inside `config()`) hold the per-key build mutex with no
-  event ever fired, since the build never returns. Engine-level
-  fix (qjs interrupt callback or runtime-close from a watchdog).
+- **Build-time hangs still leak.** Runtime calls are now
+  cancellable (wazero `CloseOnContextDone` + per-call ctx), so
+  dispatcher and admission both rescue on timeout. Build path
+  takes ctx too, but a `while(true)` at module top level or inside
+  `config()` holds the per-key build mutex with no event ever
+  fired — `RestartByKey` only kicks in after one successful build
+  has cached `BuildOptions`.
 - **No leader-election awareness in the dispatcher.** Informers spin
   up locally on the leader; on failover the new leader rebuilds them
   with a fresh Synchronization. Events arriving in the gap are lost.
@@ -122,15 +113,17 @@ the unrelated k8s "rule resources" list (e.g. `pods`) — kept as-is.
   user has to read source to learn schedule/jqFilter/queue/
   allowFailure are placeholders. The CRD shape promises a richer
   feature set than the runtime delivers.
-- **Two concurrency models in one operator.** JSHook = informer
-  queue + persistent VM + FIFO worker; JSAdmission = synchronous
-  webhook on the same registry. Explaining "the VM is shared, but
-  JSHook serializes via worker and admission via per-VM lock" takes
-  a paragraph.
-- **Restart contract has four triggers and one knob.** OOM / panic /
-  timeout-streak (3) / manual; only the `restart` annotation is
-  user-facing. No `spec.restartPolicy` to opt out, tighten the
-  streak threshold, or freeze the VM after N restarts.
+- **Two concurrency models, shared lock primitive.** JSHook =
+  informer queue + FIFO worker; JSAdmission = synchronous webhook.
+  Both now collapse onto `Registry.Call(ctx, key, fn)` for lock +
+  recover + classify, but the queueing-layer asymmetry remains and
+  is undocumented.
+- **Restart contract has six triggers and one knob.** OOM / panic /
+  timeout / timeout-streak / manual / source-changed; only the
+  `restart` annotation is user-facing. No `spec.restartPolicy` to
+  opt out, tighten the streak threshold, freeze the VM after N
+  restarts, or disable timeout-streak now that single-timeout
+  rescue exists.
 - **JS error surface is a string.** `Status.Condition.Message` is
   the main feedback path. Build-time gets a small assist now —
   `EntrypointMissing` events name the missing export, and typed

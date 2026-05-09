@@ -451,16 +451,17 @@ spec:
                     format: date-time
                     type: string
                 type: object
-              lastReview:
-                description: LastReview reports the most recent validate()/mutate()
-                  call.
+              lastReconcile:
+                description: |-
+                  LastReconcile reports when the controller last ran for this policy
+                  and what went wrong (if anything). Distinct from runtime call
+                  telemetry — a successful reconcile here does NOT mean
+                  validate()/mutate() ran.
                 properties:
-                  durationMs:
-                    format: int64
-                    minimum: 0
-                    type: integer
                   error:
-                    description: Error is non-empty if the last call failed.
+                    description: |-
+                      Error is non-empty when the last reconcile failed (source load,
+                      build, subscribe, manual restart). Empty on a successful reconcile.
                     type: string
                   time:
                     format: date-time

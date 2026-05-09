@@ -274,7 +274,7 @@ func (r *JSAdmissionReconciler) failAdmission(ctx context.Context, pol *corev1al
 		ObservedGeneration: pol.Generation,
 	})
 	pol.Status.ObservedGeneration = pol.Generation
-	pol.Status.LastReview = &corev1alpha1.JSExecutionStatus{Time: &now, Error: conditionMsg}
+	pol.Status.LastReconcile = &corev1alpha1.JSReconcileStatus{Time: &now, Error: conditionMsg}
 	if err := r.Status().Update(ctx, pol); err != nil {
 		return ctrl.Result{}, err
 	}

@@ -137,9 +137,12 @@ type JSAdmissionStatus struct {
 	// +optional
 	Instance *JSInstanceStatus `json:"instance,omitempty"`
 
-	// LastReview reports the most recent validate()/mutate() call.
+	// LastReconcile reports when the controller last ran for this policy
+	// and what went wrong (if anything). Distinct from runtime call
+	// telemetry — a successful reconcile here does NOT mean
+	// validate()/mutate() ran.
 	// +optional
-	LastReview *JSExecutionStatus `json:"lastReview,omitempty"`
+	LastReconcile *JSReconcileStatus `json:"lastReconcile,omitempty"`
 
 	// Conditions follows standard Kubernetes condition conventions.
 	// +listType=map

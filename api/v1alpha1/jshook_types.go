@@ -49,9 +49,11 @@ type JSHookStatus struct {
 	// +optional
 	Instance *JSInstanceStatus `json:"instance,omitempty"`
 
-	// LastExecution reports the most recent handle() call.
+	// LastReconcile reports when the controller last ran for this resource
+	// and what went wrong (if anything). Distinct from runtime call
+	// telemetry — a successful reconcile here does NOT mean handle() ran.
 	// +optional
-	LastExecution *JSExecutionStatus `json:"lastExecution,omitempty"`
+	LastReconcile *JSReconcileStatus `json:"lastReconcile,omitempty"`
 
 	// Conditions follows standard Kubernetes condition conventions.
 	// +listType=map
