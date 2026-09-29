@@ -136,11 +136,12 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var hook corev1alpha1.JSHook
 	if err := r.Get(ctx, req.NamespacedName, &hook); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Hook was deleted — tear down informers and close the instance.
+			log.Info("cleanup started", "phase", "delete")
 			if r.Dispatcher != nil {
 				r.Dispatcher.Drop(req.NamespacedName)
 			}
 			r.Registry.Drop(req.NamespacedName)
+			log.Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err

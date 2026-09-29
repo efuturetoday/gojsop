@@ -111,6 +111,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	var pol corev1alpha1.JSAdmission
 	if err := r.Get(ctx, req.NamespacedName, &pol); err != nil {
 		if apierrors.IsNotFound(err) {
+			log.Info("cleanup started", "phase", "delete")
 			if r.Server != nil {
 				r.Server.Unregister(req.NamespacedName)
 			}
@@ -118,6 +119,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				r.Registrar.Remove(req.NamespacedName)
 			}
 			r.Registry.Drop(req.NamespacedName)
+			log.Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
