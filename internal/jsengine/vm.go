@@ -101,7 +101,16 @@ func (vm *VM) Context() *qjs.Context {
 // gives us per-call cancellation without any qjs-level patching.
 //
 // The caller is responsible for serialization (in the registry: mi.CallMu).
-func (vm *VM) withContext(ctx context.Context, fn func() error) error {
+//
+// When ctx ends while fn runs, wazero closes the module and qjs panics on the
+// next wasm call instead of returning an error. withContext turns exactly that
+// panic into ErrCancelled, so the call is classified as cancelled and not as a
+// panic. The module stays closed: the VM is dead after such a call and the
+// caller must rebuild it. A closed-module panic while ctx is still live, and
+// every other panic, propagate unchanged.
+//
+// js-execution.R4
+func (vm *VM) withContext(ctx context.Context, fn func() error) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -109,6 +118,15 @@ func (vm *VM) withContext(ctx context.Context, fn func() error) error {
 	prev := qctx.Context
 	qctx.Context = ctx
 	defer func() { qctx.Context = prev }()
+	defer func() {
+		if p := recover(); p != nil {
+			if ctx.Err() != nil && closedModulePanic(p) {
+				err = fmt.Errorf("%w: %v", ErrCancelled, p)
+				return
+			}
+			panic(p)
+		}
+	}()
 	return fn()
 }
 
@@ -212,6 +230,16 @@ func (vm *VM) CallExport(ctx context.Context, name string, args ...any) (string,
 // owning resource is removed or being restarted. The caller MUST hold the
 // per-VM serialization lock (or otherwise guarantee no in-flight call) —
 // closing while a wasm call is mid-flight races inside wazero.
+//
+// Closing a VM whose module wazero already closed (a cancelled call, see
+// withContext) is allowed and does not panic: qjs panics in QJS_Free then,
+// and that one panic is swallowed. The module is gone either way; anything
+// else qjs panics about still propagates.
 func (vm *VM) Close() {
+	defer func() {
+		if p := recover(); p != nil && !closedModulePanic(p) {
+			panic(p)
+		}
+	}()
 	vm.rt.Close()
 }

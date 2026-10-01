@@ -32,8 +32,9 @@ registry caches the whole `BuildOptions`, so `RestartByKey` can rebuild without
 the controller. This is how a rescue works from the dispatcher or the admission
 server, which hold no source.
 
-A restart has one of six reasons: source changed, memory limit, panic, timeout,
-timeout streak or manual. `jslifecycle.Rescue` wraps `RestartByKey` and emits
+A restart has one of five reasons: source changed, memory limit, panic, timeout
+or manual (the CRD enum still lists `timeout-streak`, which nothing sets: a
+cancelled call closes the module, so every timeout restarts, REG-4). `jslifecycle.Rescue` wraps `RestartByKey` and emits
 the `Restarted` and `RescueFailed` events. Per-VM data that a controller needs
 (for example the parsed JSHook config) is computed in a `PostBuildHook` and
 stored in `ManagedVM.Extra`. The same hook checks required exports.
@@ -72,7 +73,7 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
   Gate: `TestRegistry_RestartOnSourceChange`.
 - **R4** Rebuild a restarted VM from its cached `BuildOptions`.
   Why: rescue callers hold no source, limits or host binder.
-  Gate: `TestRegistry_RestartByKey_RebuildsFromCachedSource`, `TestRegistry_RestartByKey_UnknownHook`.
+  Gate: `TestRegistry_RestartByKey_RebuildsFromCachedSource`, `TestRegistry_RestartByKey_UnknownHook`, `TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM`.
 - **R5** Keep one VM per key across reconciles while the source hash is unchanged.
   Why: scripts keep top-level state between calls (see js-execution).
   Gate: `TestRegistry_PersistsAcrossLoads`. Violated today → REG-7.

@@ -2,7 +2,9 @@ package jsregistry_test
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/types"
 
@@ -245,5 +247,52 @@ func TestRegistry_Drop(t *testing.T) {
 	if reg.Len() != 0 {
 		t.Fatalf("Len after drop: got %d, want 0", reg.Len())
 	}
+	reg.Drop(key)
+}
+
+// js-registry.R4
+// js-execution.R4
+func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T) {
+	reg := jsregistry.NewRegistry()
+	key := types.NamespacedName{Name: "k"}
+	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{
+		Source:     []byte("function spin() { while (true) {} }\nfunction ok() { return 1; }"),
+		SourceHash: "h",
+	}); err != nil {
+		t.Fatalf("GetOrLoad: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	res, _, err := reg.Call(ctx, key, func(ctx context.Context, vm *jsengine.VM) error {
+		_, err := vm.CallExport(ctx, "spin")
+		return err
+	})
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if res.Outcome != jsregistry.OutcomeCancelled || !errors.Is(res.Err, jsengine.ErrCancelled) {
+		t.Fatalf("outcome %v err %v, want cancelled / ErrCancelled", res.Outcome, res.Err)
+	}
+
+	// The module is closed; restart closes the dead VM without a panic and
+	// the rebuilt one runs.
+	if _, err := reg.RestartByKey(key, jsregistry.ReasonTimeout); err != nil {
+		t.Fatalf("RestartByKey: %v", err)
+	}
+	res, _, _ = reg.Call(context.Background(), key, func(ctx context.Context, vm *jsengine.VM) error {
+		_, err := vm.CallExport(ctx, "ok")
+		return err
+	})
+	if res.Outcome != jsregistry.OutcomeOK {
+		t.Fatalf("rebuilt VM: outcome %v err %v", res.Outcome, res.Err)
+	}
+
+	// Dropping a dead VM must not panic either.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel2()
+	_, _, _ = reg.Call(ctx2, key, func(ctx context.Context, vm *jsengine.VM) error {
+		_, err := vm.CallExport(ctx, "spin")
+		return err
+	})
 	reg.Drop(key)
 }

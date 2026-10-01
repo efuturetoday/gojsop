@@ -51,3 +51,26 @@ func wrapEngineErr(ctx context.Context, err error) error {
 	}
 	return err
 }
+
+// closedModulePanic reports whether p is the panic qjs raises when it calls
+// into a wazero module that is already closed (qjs v0.0.6 turns every failed
+// wasm call into a panic, e.g. "failed to call QJS_Free: module closed with
+// context deadline exceeded"). With CloseOnContextDone, wazero closes the
+// module the moment the call's context ends, so the call that was running,
+// and any later Close of the VM, hit this panic. It is the only panic the
+// engine converts; everything else still propagates. Like wrapEngineErr it
+// sniffs the message because qjs gives no typed error.
+//
+// js-execution.R4
+func closedModulePanic(p any) bool {
+	var msg string
+	switch v := p.(type) {
+	case error:
+		msg = v.Error()
+	case string:
+		msg = v
+	default:
+		return false
+	}
+	return strings.Contains(msg, "module closed")
+}

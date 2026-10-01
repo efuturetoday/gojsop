@@ -26,7 +26,7 @@ type RestartReason string
 //   - ReasonMemoryLimit:   handle() returned an "out of memory" error (dispatcher worker / admission)
 //   - ReasonPanic:         handle() panicked (Registry.Call recover)
 //   - ReasonTimeout:       handle() exceeded the per-call deadline (admission, dispatcher)
-//   - ReasonTimeoutStreak: dispatcher saw N consecutive timeouts (legacy; still used by dispatcher)
+//   - ReasonTimeoutStreak: no longer set: a cancelled call closes the module, so every timeout restarts with ReasonTimeout; kept as CRD enum value
 //   - ReasonManual:        gojsop.io/restart annotation changed on the JSHook (reconciler)
 const (
 	ReasonSourceChanged RestartReason = "source-changed"

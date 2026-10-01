@@ -46,11 +46,6 @@ import (
 // while the type lives in one place.
 type EventEmitter = jslifecycle.EventEmitter
 
-// timeoutStreakThreshold is how many consecutive Handle() calls may exceed
-// Limits.TimeoutSeconds before the instance is rescue-restarted.
-// jshook.R11
-const timeoutStreakThreshold = 3
-
 // eventKey identifies a queued BindingContext. All fields are strings, so the
 // struct is hashable and can be used directly as a workqueue key — the queue
 // dedupes by struct equality, collapsing bursts on the same object into one
@@ -188,12 +183,6 @@ type subscription struct {
 	// emit publishes corev1.Events about this subscription's hook. Nil when
 	// the reconciler did not configure a recorder (test default).
 	emit EventEmitter
-
-	// timeoutStreak counts consecutive Handle() calls that exceeded
-	// Limits.TimeoutSeconds. Reset on a call that finishes inside the
-	// budget. Reaching timeoutStreakThreshold triggers a rescue restart.
-	// Owned by runWorker, which is single-goroutine per subscription.
-	timeoutStreak int
 }
 
 // stop signals the worker and watchers to wind down, then blocks until the
@@ -431,14 +420,9 @@ func (s *subscription) runWorker(ctx context.Context) {
 //   - other error → log + emit Warning + requeue
 //   - ok → forget
 //
-// Timeout handling has two layers. The wazero deadline (carried by
-// callCtx) bounds wall-clock at the spec'd budget and surfaces as
-// OutcomeCancelled. The dispatcher then keeps the legacy timeoutStreak
-// counter as a noise filter: a single overdue call emits an Event but
-// does not rescue; reaching timeoutStreakThreshold consecutive timeouts
-// rescues the VM. Rationale: with hard cancellation the call may be
-// killed mid-write or mid-IO and a one-off slow path shouldn't kill a
-// healthy VM, but a *streak* signals genuine breakage.
+// Cancellation: the wazero deadline (carried by callCtx) bounds wall-clock at
+// the spec'd budget and surfaces as OutcomeCancelled. wazero closes the module
+// when the context ends, so the VM is dead afterwards and is rescued at once.
 // jshook.R10
 // jshook.R11
 // jshook.R12
@@ -483,18 +467,17 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		s.requeue(qkey, bc)
 
 	case jsregistry.OutcomeCancelled:
-		// Per-call deadline tripped. Bump the streak; emit a single
-		// Warning per overdue call (recorder dedupes within its window).
-		// Rescue only when the streak threshold is reached — see the
-		// rationale on handleEvent above.
-		s.timeoutStreak++
-		s.publish(corev1.EventTypeWarning, conditions.EventHandleTimeout,
-			fmt.Sprintf("handle() exceeded %s", budget))
-		if s.timeoutStreak >= timeoutStreakThreshold {
-			logger.Info("handle() exceeded timeout for streak threshold — restarting instance",
-				"streak", s.timeoutStreak, "budget", budget, "elapsed", res.Duration)
-			s.rescue(logger, jsregistry.ReasonTimeoutStreak)
+		// The call's context ended and wazero closed the module, so this VM
+		// is dead whatever ended the call: rebuild it at once. Only the
+		// per-call deadline is a timeout of the hook and earns a Warning; a
+		// cancelled parent means Subscribe or Drop is stopping this worker.
+		if parent.Err() == nil {
+			s.publish(corev1.EventTypeWarning, conditions.EventHandleTimeout,
+				fmt.Sprintf("handle() exceeded %s", budget))
 		}
+		logger.Info("handle() cancelled — restarting instance",
+			"binding", bc.Binding, "event", bc.WatchEvent, "elapsed", res.Duration)
+		s.rescue(logger, jsregistry.ReasonTimeout)
 		s.requeue(qkey, bc)
 
 	case jsregistry.OutcomeError:
@@ -504,14 +487,12 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		// goes to logs and to status.lastExecution.error.
 		s.publish(corev1.EventTypeWarning, conditions.EventHandleFailed,
 			"handle() returned an error")
-		s.timeoutStreak = 0
 		s.requeue(qkey, bc)
 
 	default: // OutcomeOK
 		if out != "" {
 			logger.V(1).Info("handle() returned", "value", out)
 		}
-		s.timeoutStreak = 0
 		s.queue.Forget(qkey)
 	}
 }
@@ -526,7 +507,7 @@ func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (
 }
 
 // rescue rebuilds the instance via jslifecycle.Rescue (which publishes the
-// canonical Restarted / RescueFailed events) and resets the timeout streak.
+// canonical Restarted / RescueFailed events).
 // On rebuild failure it logs and leaves the dead instance in place — the next
 // reconcile will retry; the queue keeps eating events meanwhile.
 // jshook.R11
@@ -534,9 +515,7 @@ func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (
 func (s *subscription) rescue(logger logr.Logger, reason jsregistry.RestartReason) {
 	if _, err := jslifecycle.Rescue(s.reg, s.key, reason, s.emit); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
-		return
 	}
-	s.timeoutStreak = 0
 }
 
 // publish forwards to the EventEmitter the reconciler installed at

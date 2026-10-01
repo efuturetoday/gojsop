@@ -244,6 +244,8 @@ func (e *env) waitEmitted(reason string, n int) {
 	}
 }
 
+const bcSynchronization = "Synchronization"
+
 func boolp(b bool) *bool { return &b }
 
 const recordSrc = `
@@ -260,7 +262,7 @@ func TestDispatcher_SynchronizationFirstThenDeltas(t *testing.T) {
 
 	cs := e.waitCalls(2)
 	// R3: the snapshot is delivered first, the later change after it.
-	if cs[0]["type"] != "Synchronization" {
+	if cs[0]["type"] != bcSynchronization {
 		t.Fatalf("first context is %v, want Synchronization", cs[0])
 	}
 	objs, _ := cs[0]["objects"].([]any)
@@ -406,7 +408,7 @@ function handle(c) {
 	}
 }
 
-// jshook.R12 (memory-limit half only; the panic half is blocked by DISP-12)
+// jshook.R12
 func TestDispatcher_MemoryLimit_RestartsAtOnceAndRetries(t *testing.T) {
 	const src = `
 globalThis.log = [];
@@ -424,7 +426,7 @@ function handle(c) {
 		t.Fatalf("event %v, want restarted: memory-limit", ev)
 	}
 	cs := e.waitCalls(1)
-	if cs[0]["type"] != "Synchronization" {
+	if cs[0]["type"] != bcSynchronization {
 		t.Fatalf("retried context %v", cs[0])
 	}
 	if now, _ := e.reg.Get(e.key); now == first {
@@ -482,5 +484,94 @@ function handle(c) { enter(); log.push(c[0]); }`
 	time.Sleep(400 * time.Millisecond)
 	if got := e.entered.Load(); got != n {
 		t.Fatalf("handle ran %d more times after Drop", got-n)
+	}
+}
+
+// jshook.R11
+func TestDispatcher_Timeout_CancelsWarnsAndRestartsVM(t *testing.T) {
+	const src = `
+globalThis.log = [];
+function handle(c) { enter(); while (true) {} }`
+	e := newEnv(t, src, jsengine.Limits{TimeoutSeconds: 1})
+	first, _ := e.reg.Get(e.key)
+	e.subscribe(jshook.KubernetesBinding{})
+
+	e.waitEmitted(conditions.EventHandleTimeout, 1)
+	e.waitEmitted(conditions.EventRestarted, 1)
+	for _, ev := range e.emitted() {
+		if ev.Reason == conditions.EventHandleTimeout && ev.Type != corev1.EventTypeWarning {
+			t.Fatalf("event %v is not a Warning", ev)
+		}
+		if ev.Reason == conditions.EventRestarted && ev.Message != "restarted: "+string(jsregistry.ReasonTimeout) {
+			t.Fatalf("event %v, want restarted: timeout (cancelled, not panic)", ev)
+		}
+	}
+	if now, _ := e.reg.Get(e.key); now == first {
+		t.Fatal("VM was not replaced after the timeout")
+	}
+	// The retried event reaches the rebuilt VM.
+	n := e.entered.Load()
+	e.waitEntered(n)
+}
+
+// jshook.R9
+func TestDispatcher_ResubscribeDuringCall_NoOverlapAndProcessAlive(t *testing.T) {
+	const src = `
+globalThis.log = [];
+function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {} log.push(c[0]); }`
+	e := newEnv(t, src, jsengine.Limits{})
+	e.subscribe(jshook.KubernetesBinding{})
+	e.waitEntered(0)
+
+	// Re-subscribe while the first call is running: the old worker is stopped
+	// and the new one must not start before the old call has ended.
+	e.subscribe(jshook.KubernetesBinding{})
+
+	// calls() goes through Registry.Call, so it also proves the VM is usable
+	// and not left closed. The new subscription delivers its own Synchronization.
+	deadline := time.Now().Add(10 * time.Second)
+	for e.entered.Load() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("new subscription never ran handle()")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	e.calls()
+}
+
+// jshook.R12
+//
+// A VM whose module wazero closed (here: killed by a cancelled call nobody
+// rescued) makes the next handle() panic inside qjs with a live context. That
+// is a genuine panic: the worker must classify it as one, rebuild the VM
+// (closing the dead module must not panic again) and retry the event.
+func TestDispatcher_PanicInHandle_RestartsVMAndRetries(t *testing.T) {
+	const src = `
+globalThis.log = [];
+function handle(c) { log.push(c[0]); }
+function spin() { while (true) {} }`
+	e := newEnv(t, src, jsengine.Limits{})
+	first, _ := e.reg.Get(e.key)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	res, _, err := e.reg.Call(ctx, e.key, func(ctx context.Context, vm *jsengine.VM) error {
+		_, err := vm.CallExport(ctx, "spin")
+		return err
+	})
+	if err != nil || res.Outcome != jsregistry.OutcomeCancelled {
+		t.Fatalf("killing call: outcome %v err %v, want cancelled", res.Outcome, err)
+	}
+	e.subscribe(jshook.KubernetesBinding{})
+
+	e.waitEmitted(conditions.EventRestarted, 1)
+	if ev := e.emitted()[0]; ev.Message != "restarted: "+string(jsregistry.ReasonPanic) {
+		t.Fatalf("event %v, want restarted: panic", ev)
+	}
+	cs := e.waitCalls(1)
+	if cs[0]["type"] != bcSynchronization {
+		t.Fatalf("retried context %v", cs[0])
+	}
+	if now, _ := e.reg.Get(e.key); now == first {
+		t.Fatal("VM was not replaced")
 	}
 }

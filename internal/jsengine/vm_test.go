@@ -2,8 +2,10 @@ package jsengine
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestEval_1Plus1(t *testing.T) {
@@ -69,4 +71,40 @@ func TestMemoryLimit_Honoured(t *testing.T) {
 	if !strings.Contains(strings.ToLower(err.Error()), "memory") {
 		t.Logf("note: error did not mention memory: %v", err)
 	}
+}
+
+// js-execution.R4
+func TestCallExport_Deadline_IsErrCancelledNotPanic(t *testing.T) {
+	vm, err := New(Limits{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := vm.Eval(context.Background(), "m.js", "function spin() { while (true) {} }"); err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err = vm.CallExport(ctx, "spin") // a panic here fails the test
+	if !errors.Is(err, ErrCancelled) {
+		t.Fatalf("err = %v, want ErrCancelled", err)
+	}
+
+	// The module is closed now; replacing the VM must not panic.
+	vm.Close()
+	vm.Close()
+}
+
+// js-execution.R4
+func TestEval_Deadline_IsErrCancelledNotPanic(t *testing.T) {
+	vm, err := New(Limits{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := vm.Eval(ctx, "spin.js", "while (true) {}"); !errors.Is(err, ErrCancelled) {
+		t.Fatalf("err = %v, want ErrCancelled", err)
+	}
+	vm.Close()
 }

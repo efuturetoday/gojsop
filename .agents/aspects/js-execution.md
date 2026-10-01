@@ -34,7 +34,8 @@ Runtimes are long-lived. The top-level state of a script survives between
 calls, so a hook can keep caches. The price is that a broken runtime must be
 found and rebuilt. The [js-registry](js-registry.md) aspect covers that.
 
-A call ends when its context ends. The execution time limit of QuickJS does
+A call ends when its context ends. wazero closes the module then, so a
+cancelled VM is dead and its owner must rebuild it; closing it does not panic. The execution time limit of QuickJS does
 nothing in qjs v0.0.6, so the engine uses the wazero option
 `CloseOnContextDone`. When the deadline of the caller passes, wazero aborts
 the running code and the call returns `jsengine.ErrCancelled`. The deadline
@@ -80,9 +81,9 @@ Add a new kind of resource that runs JavaScript:
   Why: without a deadline an endless loop holds the VM forever.
   Gate: missing → GATE-5.
 - **R4** Classify engine errors with `errors.Is` against `jsengine.ErrCancelled`
-  and `jsengine.ErrOOM`. Only `jsengine.wrapEngineErr` may inspect error text.
+  and `jsengine.ErrOOM`. Only `jsengine.wrapEngineErr` and `jsengine.closedModulePanic` (the one qjs panic the engine converts: a call on a module wazero closed) may inspect error or panic text.
   Why: qjs and wazero error strings change between versions.
-  Gate: `TestWrapOOM`, `TestIsOOMError_OnlyMatchesSentinel`.
+  Gate: `TestWrapOOM`, `TestIsOOMError_OnlyMatchesSentinel`, `TestCallExport_Deadline_IsErrCancelledNotPanic`, `TestEval_Deadline_IsErrCancelledNotPanic`.
 - **R5** Every VM has a memory limit.
   Why: one script must not exhaust the memory of the operator.
   Gate: `TestMemoryLimit_Honoured`, `TestDefaultLimits_MatchKubebuilderTags`.
