@@ -73,7 +73,7 @@ status: 0 ok, 1 script exception (output: `message\nstack`), 2 interrupted,
 | example | Which real use should others copy? | `jshook.Handle` and `jsadmission.Handle`, typed wrappers over `jsrun.Runner.Invoke`. |
 | test helper | How does a test use the aspect without effort? | `jsengine.New` with `jsengine.Limits{}` builds a real VM in a test (the process-wide engine starts on first use); `kubehost` tests use the helper `newKubeHost`. No shared harness package (searched `_test.go` for helpers and fakes). |
 | sides | Which sides does it touch? | The operator process (Go) and the C glue compiled into `engine.wasm`, which the operator embeds. |
-| tie | How do the sides stay in step? | The CRD defaults for `spec.limits` and `jsengine.DefaultLimits` are tied by `TestDefaultLimits_MatchKubebuilderTags`. The committed `engine.wasm` and `glue.c` are tied by the pinned build `make engine-wasm` (R14); a CI check that a rebuild matches is missing → GATE-25. |
+| tie | How do the sides stay in step? | The CRD defaults for `spec.limits` and `jsengine.DefaultLimits` are tied by `TestDefaultLimits_MatchKubebuilderTags`. The committed `engine.wasm` and `glue.c` are tied by the pinned build `make engine-wasm` (R14); a CI check that a rebuild matches is missing → GATE-27. |
 
 ## How to use it
 
@@ -137,7 +137,7 @@ stays at tens of microseconds, a timeout costs its deadline).
   Gate: `TestCallExport_Deadline_IsErrCancelledAndVMStaysUsable`, `TestDeadline_CannotBeCaught`, `TestCall_ContextAlreadyDone_DoesNotRun`, `TestDeadline_StopsCatastrophicRegex`, `TestRegistry_CancelledCall_KeepsVMAndRestartStillRebuilds`; the cost guard is `BenchmarkVM_WarmCall` and `BenchmarkVM_Timeout`.
 - **R14** Build `internal/jsengine/engine.wasm` only with `make engine-wasm`, from `glue/glue.c`, with the toolchain pinned in `internal/jsengine/glue/versions.env` (QuickJS-ng, wasi-sdk, binaryen; downloaded into `./bin`), and commit it with the change to `glue.c`.
   Why: the embedded binary must be reproducible from the repository; versions live in one file.
-  Gate: missing → GATE-25.
+  Gate: missing → GATE-27.
 - **R15** An error from a script carries its message, its stack with file and line, and the name of the export: `calling handle(): TypeError: x\n    at handle (hook.js:3:9)`. `*jsengine.JSError` holds `Message` and `Stack`; `Error()` has both.
   Why: an author must find the failing line from a log, an event or a denial message.
   Gate: `TestScriptError_CarriesMessageStackFileLine`, `TestScriptError_NonErrorThrow`.
@@ -171,4 +171,4 @@ stays at tens of microseconds, a timeout costs its deadline).
 EXEC-9
 GATE-4
 GATE-7
-GATE-25
+GATE-27

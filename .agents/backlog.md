@@ -298,7 +298,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   over 3 MiB), and `Registrar.mergeNSSelector`.
 - **GATE-23** e2e case that runs a JSAdmission against a real apiserver over
   TLS with cert-manager.
-- **GATE-25** CI check that the committed `internal/jsengine/engine.wasm` equals a
+- **GATE-27** CI check that the committed `internal/jsengine/engine.wasm` equals a
   rebuild: run `make engine-wasm` and fail on a diff of `engine.wasm`. Needs the
   pinned toolchain of `glue/versions.env` on the runner (wasi-sdk 34, QuickJS-ng
   0.17.0, binaryen 129) and a check that the output is identical across macOS and
