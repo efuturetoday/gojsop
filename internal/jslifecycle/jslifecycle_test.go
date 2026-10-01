@@ -3,6 +3,7 @@ package jslifecycle
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,12 +41,19 @@ func TestRescue_Success_EmitsRestarted(t *testing.T) {
 	loadInstance(t, reg, key)
 
 	events, emit := captureEmitter(2)
-	mi, err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonPanic, emit)
-	if err != nil {
+	before, _ := reg.Get(jsregistry.HookKey(key))
+	if err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonPanic, emit); err != nil {
 		t.Fatalf("Rescue: unexpected error: %v", err)
 	}
-	if mi == nil {
-		t.Fatal("Rescue: ManagedVM is nil")
+	// Rescue does not wait for the rebuild; it ends with a fresh VM and the
+	// reason in the restart log.
+	var mi *jsregistry.ManagedVM
+	for deadline := time.Now().Add(20 * time.Second); mi == nil || mi == before; {
+		if time.Now().After(deadline) {
+			t.Fatal("Rescue: the VM was not rebuilt")
+		}
+		time.Sleep(5 * time.Millisecond)
+		mi, _ = reg.Get(jsregistry.HookKey(key))
 	}
 	if last := mi.LastRestart(); last.Reason != jsregistry.ReasonPanic {
 		t.Fatalf("Rescue: LastRestart.Reason=%q want %q", last.Reason, jsregistry.ReasonPanic)
@@ -77,7 +85,7 @@ func TestRescue_Failure_EmitsRescueFailed(t *testing.T) {
 	key := types.NamespacedName{Namespace: "ns", Name: "ghost"}
 
 	events, emit := captureEmitter(2)
-	if _, err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonMemoryLimit, emit); err == nil {
+	if err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonMemoryLimit, emit); err == nil {
 		t.Fatal("Rescue on unknown key: want error, got nil")
 	}
 
@@ -104,7 +112,7 @@ func TestRescue_NilEmitter_NoOps(t *testing.T) {
 	key := types.NamespacedName{Namespace: "ns", Name: "noemit"}
 	loadInstance(t, reg, key)
 
-	if _, err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonManual, nil); err != nil {
+	if err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonManual, nil); err != nil {
 		t.Fatalf("Rescue with nil emitter must succeed: %v", err)
 	}
 }

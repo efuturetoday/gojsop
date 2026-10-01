@@ -58,12 +58,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **REG-6** `doc` Two concurrency models on one lock: JSHook uses informer
   queue plus FIFO worker, JSAdmission is a synchronous webhook. Document the
   asymmetry in the js-registry block.
-- **REG-8** `decision` A failed rescue build keeps the old VM installed
-  (`jsregistry.Registry.RestartByKey`). After a timeout that VM is dead, so
-  every later call panics on the closed module and triggers the next rescue,
-  one `RescueFailed` event per call, until a build succeeds. No crash, but a
-  loop. Decide: keep, drop the VM and report the hook as not ready, or back
-  off. Done when decided and held by a test.
 
 ## STAT: Status and conditions
 
@@ -126,7 +120,10 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `config()` result from Subscribe time. A changed config after rebuild is not
   applied (`dispatcher.go:523`, `internal/jshook/controller/controller.go:224`).
 - **DISP-10** `debt` Failed events are requeued with `AddRateLimited` and no
-  retry cap; a poison event retries forever (`dispatcher.go:547`).
+  retry cap; a poison event retries forever (`dispatcher.go`, `requeue`). The
+  same holds for events of a hook that has no VM (`noVM`): they wait, folded
+  per object, until the VM is back or the hook is dropped. Not a cap, so not
+  narrowed.
 - **DISP-11** `gap` Selectors only partly applied: top-level `nameSelector`,
   `fieldSelector`, `namespace.labelSelector`, `matchExpressions` and
   multi-namespace are ignored (`dispatcher.go:208-224`).

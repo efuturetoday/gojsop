@@ -58,7 +58,7 @@ A policy decides on a request and must not change the cluster, so it can read ot
 - **Steps**:
   1. The request cannot get a decision from the script.
   2. With `Ignore` the request is admitted with a warning; otherwise it is denied with code 500.
-  3. After a crash, memory overrun or timeout the next request meets a fresh script instance.
+  3. After a crash, memory overrun or timeout the script instance is rebuilt in the background; until it is ready `failurePolicy` decides every request (jsadmission.R19), and the policy shows `Ready=False` (jsadmission.R18).
 - **Exceptions**: a plain script error does not restart the instance (jsadmission.R12)
 - **Result**: the author gets the availability or the enforcement they chose
 
@@ -88,13 +88,14 @@ A policy decides on a request and must not change the cluster, so it can read ot
 | jsadmission.R9 | On every script failure `failurePolicy` decides: `Ignore` allows with a warning, anything else denies with code 500. | `api/v1alpha1/jsadmission_types.go` (`FailurePolicy`) | `TestServer_Validate_FailurePolicy_Fail_OnJSThrow`, `TestServer_Validate_FailurePolicy_Ignore_OnJSThrow` |
 | jsadmission.R10 | `failurePolicy` and `timeoutSeconds` are the same for the apiserver (operator unreachable) and for the handler. | `Registrar` and `PolicyEntry` in `internal/jsadmission` | missing → GATE-17 |
 | jsadmission.R11 | A call that runs longer than the timeout (default 5 s) is a script failure. | `api/v1alpha1/jsadmission_types.go` (`TimeoutSeconds`); which field wins is open in ADM-5 | missing → GATE-22 |
-| jsadmission.R12 | After a panic, a memory overrun or a timeout the script instance is rebuilt; after a plain script error or a client disconnect it is kept. | `Server.review` in `server.go` | missing → GATE-22 |
+| jsadmission.R12 | After a panic, a memory overrun or a timeout the script instance is rebuilt in the background; after a plain script error or a client disconnect it is kept. | `Server.review` in `server.go` | missing → GATE-22 |
 | jsadmission.R13 | A policy can only read the cluster (`kube.get`, `kube.list`); `kube.apply` and `kube.delete` are not available. | admission runs with `sideEffects: None` | `TestSharedFactory_ForAdmission_ReadOnlySurface` |
 | jsadmission.R14 | Every response carries the UID of its request. | admission.k8s.io/v1 | `TestServer_Validate_AllowedRoundtrip` |
 | jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `cmd/main.go` (`excludeNamespaces`); extent open in ADM-6 | missing → ADM-6 |
 | jsadmission.R16 | A response with `allowed=false` carries no patch. | admission.k8s.io/v1 (`AdmissionResponse`) | `TestServer_Mutate_Denied_HasNoPatch` |
 | jsadmission.R17 | When the central webhook configurations cannot be written, the policy shows `Ready=False` with reason `WebhookSyncFailed`, the registrar retries, and `Ready` returns to `True` once it succeeds. | `Registrar.SyncError` and `JSAdmissionReconciler.Reconcile`; status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse`, `TestRegistrar_SyncFailure_IsRetriedAndReported` |
 | jsadmission.R18 | While the VM is not ready the policy is `Ready=False` with reason `Building` (the build runs; the reconcile does not wait for it) or `BuildFailed` (the last build failed; retried with backoff, a source change rebuilds at once). | [js-registry](../aspects/js-registry.md), status-conditions.R7 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
+| jsadmission.R19 | While the policy has no VM (a restart builds, or the build failed) every request is decided by `failurePolicy` at once; the request does not wait for the build. | [js-registry](../aspects/js-registry.md), js-registry.R19, `Server.review` | `TestServer_NoVM_AppliesFailurePolicyAtOnce` |
 
 ## Aspects
 

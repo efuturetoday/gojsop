@@ -54,6 +54,9 @@ type env struct {
 
 	entered atomic.Int32 // handle() calls started (JS reached enter())
 	ooms    atomic.Int32 // how many times oomNow() still answers true
+
+	// hold, while set, blocks every build of the hook's VM until it is closed.
+	hold atomic.Pointer[chan struct{}]
 }
 
 // newEnv builds a hook VM from src. The JS sees the host functions enter()
@@ -88,6 +91,15 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 	})
 	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsregistry.HookKey(e.key), jsregistry.BuildOptions{
 		Source: []byte(src), SourceHash: "h", Limits: lim, Binder: binder,
+		PostBuild: func(ctx context.Context, _ *jsengine.VM) (any, error) {
+			if gate := e.hold.Load(); gate != nil {
+				select {
+				case <-*gate:
+				case <-ctx.Done():
+				}
+			}
+			return nil, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
@@ -139,13 +151,21 @@ type call = map[string]any
 func (e *env) calls() []call {
 	e.t.Helper()
 	var out string
-	_, _, err := e.reg.Call(context.Background(), jsregistry.HookKey(e.key), func(ctx context.Context, vm *jsengine.VM) error {
-		var err error
-		out, err = vm.Eval(ctx, "log.js", `JSON.stringify(globalThis.log || [])`)
-		return err
-	})
-	if err != nil {
-		e.t.Fatalf("read log: %v", err)
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		_, _, err := e.reg.Call(context.Background(), jsregistry.HookKey(e.key), func(ctx context.Context, vm *jsengine.VM) error {
+			var err error
+			out, err = vm.Eval(ctx, "log.js", `JSON.stringify(globalThis.log || [])`)
+			return err
+		})
+		if err == nil {
+			break
+		}
+		// A rescue rebuilds in the background; the key holds no VM meanwhile.
+		if !errors.Is(err, jsregistry.ErrVMUnavailable) || time.Now().After(deadline) {
+			e.t.Fatalf("read log: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	var cs []call
 	if err := json.Unmarshal([]byte(out), &cs); err != nil {
@@ -647,5 +667,35 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 	case <-errA:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Subscribe A did not return after Drop")
+	}
+}
+
+// While the hook has no VM (a rescue rebuild runs) events are kept and retried
+// with the rate limiter; they reach the new VM, none is dropped.
+//
+// jshook.R19
+func TestDispatcher_NoVM_KeepsEventsAndDeliversAfterRebuild(t *testing.T) {
+	const src = `
+globalThis.log = [];
+function handle(c) { enter(); log.push(c[0]); }`
+	e := newEnv(t, src, jsengine.Limits{})
+	gate := make(chan struct{})
+	e.hold.Store(&gate)
+	if err := e.reg.RestartByKey(jsregistry.HookKey(e.key), jsregistry.ReasonManual); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.reg.Get(jsregistry.HookKey(e.key)); ok {
+		t.Fatal("a restarting hook must hold no VM")
+	}
+	e.subscribe(jshook.KubernetesBinding{})
+
+	time.Sleep(300 * time.Millisecond)
+	if n := e.entered.Load(); n != 0 {
+		t.Fatalf("handle ran %d times without a VM", n)
+	}
+	close(gate)
+	cs := e.waitCalls(1)
+	if cs[0]["type"] != bcSynchronization {
+		t.Fatalf("event kept across the rebuild: %v", cs[0])
 	}
 }

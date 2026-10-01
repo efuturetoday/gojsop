@@ -14,6 +14,9 @@ var (
 	ErrLoadModule = errors.New("registry: load module")
 	ErrPostBuild  = errors.New("registry: post-build")
 	ErrUnknownKey = errors.New("registry: unknown key")
+	// ErrVMUnavailable: the key is known but holds no VM now, because a build
+	// runs or the last one failed. Registry.Call returns it at once.
+	ErrVMUnavailable = errors.New("registry: vm unavailable")
 )
 
 // MissingExportError is returned from a PostBuild hook when the loaded JS

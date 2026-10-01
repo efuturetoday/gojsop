@@ -89,8 +89,9 @@ instead of events.
 - **Steps**:
   1. gojsop records a Warning event on the `JSHook` and logs the cause.
   2. A thrown error: the event is retried later with backoff; the VM stays.
-  3. A timeout: the call is cancelled, the event is retried; after three timeouts in a row the VM is restarted.
+  3. A timeout: the call is cancelled and the VM is restarted at once (it is dead after the cancellation); the event is retried.
   4. A panic or memory-limit error: the VM is restarted at once and the event is retried.
+  5. The restart builds in the background. Until the new VM is ready the hook shows `Ready=False` (`Building`, then `BuildFailed` if it fails) and the events wait (jshook.R18, jshook.R19).
 - **Exceptions**: a hook that fails forever is retried forever (see Open).
 - **Result**: the hook keeps receiving events on a healthy VM; the restart is visible as an event and in status ([js-registry](../aspects/js-registry.md)).
 
@@ -115,14 +116,15 @@ instead of events.
 | jshook.R8 | Changes of one object that wait for a call fold into one call with the newest object. | shell-operator parity, `dispatcher.eventKey` | `TestDispatcher_BurstOfChangesFoldsIntoNewestObject` |
 | jshook.R9 | Calls of one hook never overlap, also not across a re-subscribe. | decision (commit history), `dispatcher.subscription.stop` | `TestDispatcher_ResubscribeDuringCall_NoOverlapAndProcessAlive` |
 | jshook.R10 | A throwing `handle()` records a Warning event, does not restart the VM and the event is retried with backoff. | `dispatcher.subscription.handleEvent` | `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
-| jshook.R11 | A call is cancelled at the hook's `timeoutSeconds` and records a Warning event; wazero closes the module on cancellation, so the VM is restarted at once (reason `timeout`) and the event is retried. | `jsengine.Limits`, `dispatcher.subscription.handleEvent` | `TestDispatcher_Timeout_CancelsWarnsAndRestartsVM` |
-| jshook.R12 | A panic or a memory-limit error restarts the VM at once and the event is retried. | [js-registry](../aspects/js-registry.md), REG-4, `dispatcher.subscription.rescue` | `TestDispatcher_MemoryLimit_RestartsAtOnceAndRetries`, `TestDispatcher_PanicInHandle_RestartsVMAndRetries` |
+| jshook.R11 | A call is cancelled at the hook's `timeoutSeconds` and records a Warning event; wazero closes the module on cancellation, so the VM restart starts at once (reason `timeout`) and the event is retried. | `jsengine.Limits`, `dispatcher.subscription.handleEvent` | `TestDispatcher_Timeout_CancelsWarnsAndRestartsVM` |
+| jshook.R12 | A panic or a memory-limit error starts the VM restart at once and the event is retried. | [js-registry](../aspects/js-registry.md), REG-4, `dispatcher.subscription.rescue` | `TestDispatcher_MemoryLimit_RestartsAtOnceAndRetries`, `TestDispatcher_PanicInHandle_RestartsVMAndRetries` |
 | jshook.R13 | A retried event never overwrites a fresher state of the same object; success ends the retries. | `dispatcher.subscription.requeue` | `TestDispatcher_RetryKeepsFresherStateOfSameObject`, `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
 | jshook.R14 | After the hook is deleted it receives no more events. | `dispatcher.Dispatcher.Drop` | `TestDispatcher_Drop_NoMoreEvents` |
 | jshook.R15 | A namespace (one name) and `labelSelector.matchLabels` restrict the objects delivered. | `jshook.KubernetesBinding` | `TestControllers` |
 | jshook.R16 | A binding field that gojsop does not act on is not presented as working (project rule API-1). Violated today: `schedule`, `onStartup`, `jqFilter`, `allowFailure`, `queue`, other selector forms. | decision API-1 | missing → DISP-1 |
 | jshook.R17 | A hook whose informer does not sync does not block Subscribe or Drop of other hooks; Drop of that hook cancels its pending Subscribe. | `dispatcher.Dispatcher.Subscribe`, `dispatcher.Dispatcher.Drop` | `TestDispatcher_SlowSync_DoesNotBlockOtherHooks` |
 | jshook.R18 | While the VM is not ready the hook is `Ready=False` with reason `Building` (the build runs; the reconcile does not wait for it) or `BuildFailed` (the last build failed; retried with backoff, a source change rebuilds at once). | [js-registry](../aspects/js-registry.md), status-conditions.R7 | `TestReconcile_HangingBuildDoesNotBlockOtherHook`, `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce` |
+| jshook.R19 | While the hook has no VM (a restart builds, or the build failed) its events are kept and retried with the rate limiter, and reach the new VM; none is dropped. | [js-registry](../aspects/js-registry.md), js-registry.R19, `dispatcher.subscription.noVM` | `TestDispatcher_NoVM_KeepsEventsAndDeliversAfterRebuild` |
 
 Every rule is held by a test or is `missing → <KEY>`.
 

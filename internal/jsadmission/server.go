@@ -271,7 +271,7 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 		publishEntry(entry, corev1.EventTypeWarning,
 			conditions.EventReviewPanicked,
 			"panic in admission handler")
-		if _, err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonPanic, entry.Emit); err != nil {
+		if err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonPanic, entry.Emit); err != nil {
 			log.Error(err, "admission rescue failed", "reason", jsregistry.ReasonPanic)
 		}
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("panic in admission handler: %v", res.Panic))
@@ -279,7 +279,7 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 
 	case jsregistry.OutcomeMemoryLimit:
 		log.Error(res.Err, "admission JS call hit memory limit — rescuing")
-		if _, err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonMemoryLimit, entry.Emit); err != nil {
+		if err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonMemoryLimit, entry.Emit); err != nil {
 			log.Error(err, "admission rescue failed", "reason", jsregistry.ReasonMemoryLimit)
 		}
 		applyFailurePolicy(resp, entry.FailurePolicy, res.Err.Error())
@@ -299,7 +299,7 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 		publishEntry(entry, corev1.EventTypeWarning,
 			conditions.EventReviewTimeout,
 			fmt.Sprintf("review exceeded %s", timeout))
-		if _, err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonTimeout, entry.Emit); err != nil {
+		if err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonTimeout, entry.Emit); err != nil {
 			log.Error(err, "admission rescue failed", "reason", jsregistry.ReasonTimeout)
 		}
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("timeout after %s", timeout))

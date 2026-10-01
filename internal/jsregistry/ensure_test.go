@@ -76,6 +76,7 @@ func TestRegistry_Ensure_BuildsAsyncAndNotifies(t *testing.T) {
 	}
 }
 
+// js-registry.R13
 // js-registry.R15
 func TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys(t *testing.T) {
 	reg := jsregistry.NewRegistry()

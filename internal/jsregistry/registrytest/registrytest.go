@@ -30,3 +30,29 @@ func GetOrLoad(reg *jsregistry.Registry, ctx context.Context, key jsregistry.Key
 		}
 	}
 }
+
+// Restart calls Registry.RestartByKey and waits until the rebuilt VM is Ready
+// (or the build failed), like the synchronous restart the registry had before
+// builds went to the background.
+func Restart(reg *jsregistry.Registry, key jsregistry.Key, reason jsregistry.RestartReason) (*jsregistry.ManagedVM, error) {
+	before, ok := reg.Get(key)
+	if !ok {
+		return nil, reg.RestartByKey(key, reason) // the error for the unknown key
+	}
+	if err := reg.RestartByKey(key, reason); err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(time.Minute)
+	for {
+		st := reg.Ensure(key, before.Opts)
+		switch {
+		case st.Kind == jsregistry.StateReady && st.VM != before:
+			return st.VM, nil
+		case st.Kind == jsregistry.StateBroken:
+			return nil, st.Err
+		case time.Now().After(deadline):
+			return nil, context.DeadlineExceeded
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}

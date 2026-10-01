@@ -242,3 +242,41 @@ func TestPathFor_RoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// While the policy has no VM (a build runs or failed) the request is decided by
+// failurePolicy at once; it does not wait for the build.
+//
+// jsadmission.R19
+func TestServer_NoVM_AppliesFailurePolicyAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		policy  admissionregv1.FailurePolicyType
+		allowed bool
+	}{
+		{"Fail denies", admissionregv1.Fail, false},
+		{"Ignore allows", admissionregv1.Ignore, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			key := types.NamespacedName{Name: "policy-building"}
+			reg := jsregistry.NewRegistry()
+			regKey := jsregistry.AdmissionKey(key)
+			t.Cleanup(func() { reg.Drop(regKey) })
+			// A top-level endless loop: the build runs until the default 30 s
+			// deadline, the key stays Building for the whole test.
+			if st := reg.Ensure(regKey, jsregistry.BuildOptions{Source: []byte(`while(true){}`), SourceHash: "h"}); st.Kind != jsregistry.StateBuilding {
+				t.Fatalf("Ensure: %v, want Building", st.Kind)
+			}
+			srv := NewServer(reg, logr.Log)
+			srv.Register(PolicyEntry{Key: key, FailurePolicy: tc.policy, Timeout: 5 * time.Second})
+
+			start := time.Now()
+			resp := postReview(t, srv.ValidateHandler(), PathFor(key, false), &admissionv1.AdmissionRequest{UID: "u"})
+			if time.Since(start) > time.Second {
+				t.Fatalf("review took %v: it waited for the build", time.Since(start))
+			}
+			if resp.Allowed != tc.allowed {
+				t.Fatalf("allowed = %v, want %v (failurePolicy %s)", resp.Allowed, tc.allowed, tc.policy)
+			}
+		})
+	}
+}

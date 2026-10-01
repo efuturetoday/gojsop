@@ -189,7 +189,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if restarted {
 		last := mi.LastRestart()
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(mi.History), "reason", last.Reason)
-		if last.Reason != "" && conditions.WasBuilding(pol.Status.Conditions) {
+		if conditions.WasBuilding(pol.Status.Conditions) && last.Reason.ReportedByReconcile() {
 			r.event(&pol, corev1.EventTypeNormal, conditions.EventRestarted,
 				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
 		}
@@ -202,19 +202,23 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			prev = pol.Status.Instance.ManualRestartToken
 		}
 		if token != prev {
-			newMI, err := r.Registry.RestartByKey(jsregistry.AdmissionKey(req.NamespacedName), jsregistry.ReasonManual)
-			if err != nil {
+			// The restart builds in the background like any other build; the
+			// token is recorded now so the finished build does not restart
+			// again.
+			if err := r.Registry.RestartByKey(jsregistry.AdmissionKey(req.NamespacedName), jsregistry.ReasonManual); err != nil {
 				log.Error(err, "manual restart")
 				return r.failAdmission(ctx, &pol, conditions.EventBuildFailed,
 					"build failed: manual restart",
 					fmt.Sprintf("manual restart: %v", err))
 			}
-			last := newMI.LastRestart()
-			log.Info("manual restart applied", "token", token, "restarts", len(newMI.History))
+			log.Info("manual restart started", "token", token)
 			r.event(&pol, corev1.EventTypeNormal, conditions.EventRestarted,
-				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
-			mi = newMI
-			restarted = true
+				fmt.Sprintf("restarted: %s (hash %s)", jsregistry.ReasonManual, srcHash[:12]))
+			if pol.Status.Instance == nil {
+				pol.Status.Instance = &corev1alpha1.JSInstanceStatus{}
+			}
+			pol.Status.Instance.ManualRestartToken = token
+			return r.building(ctx, &pol)
 		}
 	}
 
@@ -318,13 +322,16 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{}, nil
 }
 
-// instanceChanged reports whether the VM is new to the policy's status: the
-// policy was not Ready before (every rebuild passes through Building or
-// Broken, which write Ready=False) or the source hash differs.
+// instanceChanged reports whether the status does not describe this instance
+// yet: none was recorded, it describes another source, or the last reconcile
+// failed after the build.
 func instanceChanged(pol *corev1alpha1.JSAdmission, srcHash string) bool {
 	inst := pol.Status.Instance
-	return inst == nil || inst.SourceHash != srcHash ||
-		!apimeta.IsStatusConditionTrue(pol.Status.Conditions, conditions.Ready)
+	if inst == nil || inst.SourceHash != srcHash {
+		return true
+	}
+	c := apimeta.FindStatusCondition(pol.Status.Conditions, conditions.Ready)
+	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == conditions.ReasonFailed
 }
 
 // building writes Ready=False with the reason Building and returns without a

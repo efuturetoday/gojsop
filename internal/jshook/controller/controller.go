@@ -211,7 +211,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if restarted {
 		last := mi.LastRestart()
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(mi.History), "reason", last.Reason)
-		if last.Reason != "" && conditions.WasBuilding(hook.Status.Conditions) {
+		if conditions.WasBuilding(hook.Status.Conditions) && last.Reason.ReportedByReconcile() {
 			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
 				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
 		}
@@ -227,19 +227,23 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			prev = hook.Status.Instance.ManualRestartToken
 		}
 		if token != prev {
-			newMI, err := r.Registry.RestartByKey(jsregistry.HookKey(req.NamespacedName), jsregistry.ReasonManual)
-			if err != nil {
+			// The restart builds in the background like any other build; the
+			// token is recorded now so the finished build does not restart
+			// again.
+			if err := r.Registry.RestartByKey(jsregistry.HookKey(req.NamespacedName), jsregistry.ReasonManual); err != nil {
 				log.Error(err, "manual restart")
 				return r.fail(ctx, &hook, conditions.EventBuildFailed,
 					"build failed: manual restart",
 					fmt.Sprintf("manual restart: %v", err))
 			}
-			last := newMI.LastRestart()
-			log.Info("manual restart applied", "token", token, "restarts", len(newMI.History))
+			log.Info("manual restart started", "token", token)
 			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
-				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
-			mi = newMI
-			restarted = true
+				fmt.Sprintf("restarted: %s (hash %s)", jsregistry.ReasonManual, srcHash[:12]))
+			if hook.Status.Instance == nil {
+				hook.Status.Instance = &corev1alpha1.JSInstanceStatus{}
+			}
+			hook.Status.Instance.ManualRestartToken = token
+			return r.building(ctx, &hook)
 		}
 	}
 
@@ -298,15 +302,17 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{}, nil
 }
 
-// instanceChanged reports whether the VM is new to the hook's status: the hook
-// was not Ready before (every rebuild passes through Building or Broken, which
-// write Ready=False) or the source hash differs. Then the bindings are
-// (re)subscribed and a restart is reported. A rescue restart does not count:
-// it keeps the subscription (DISP-9).
+// instanceChanged reports whether the bindings must be (re)subscribed: the
+// status does not describe an instance yet, it describes another source, or the
+// last reconcile failed after the build. A rebuild of the same source (limits
+// changed, rescue restart, manual restart) keeps the subscription (DISP-9).
 func instanceChanged(hook *corev1alpha1.JSHook, srcHash string) bool {
 	inst := hook.Status.Instance
-	return inst == nil || inst.SourceHash != srcHash ||
-		!apimeta.IsStatusConditionTrue(hook.Status.Conditions, conditions.Ready)
+	if inst == nil || inst.SourceHash != srcHash {
+		return true
+	}
+	c := apimeta.FindStatusCondition(hook.Status.Conditions, conditions.Ready)
+	return c != nil && c.Status == metav1.ConditionFalse && c.Reason == conditions.ReasonFailed
 }
 
 // building writes Ready=False with the reason Building and returns without a

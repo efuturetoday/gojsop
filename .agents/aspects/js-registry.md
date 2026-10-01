@@ -36,7 +36,7 @@ server, which hold no source.
 A restart has one of six reasons: source changed, limits changed, memory limit,
 panic, timeout or manual (the CRD enum still lists `timeout-streak`, which nothing sets: a
 cancelled call closes the module, so every timeout restarts, REG-4). `jslifecycle.Rescue` wraps `RestartByKey` and emits
-the `Restarted` and `RescueFailed` events. Per-VM data that a controller needs
+the `Restarted` and `RescueFailed` events. A restart does not build in the caller: it closes the VM and starts the same background build as `Ensure`, so until it ends the key holds no VM and `Registry.Call` returns `ErrVMUnavailable`. Per-VM data that a controller needs
 (for example the parsed JSHook config) is computed in a `PostBuildHook` and
 stored in `ManagedVM.Extra`. The same hook checks required exports.
 
@@ -57,7 +57,7 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 
 1. In a controller, load the source and compute its hash, then call `Registry.Ensure` with `BuildOptions` (source, hash, limits, host binder, `PostBuildHook`, backoff). Building: write `Ready=False`/`Building` and return; the registry notifies the controller through `Registry.Watch` when the build ends. Broken: write `Ready=False`/`BuildFailed` and requeue after the backoff. Ready: continue.
 2. Compute per-VM data in the `PostBuildHook` and read it from `ManagedVM.Extra`.
-3. Run JavaScript only through `Registry.Call`; on panic, memory limit or timeout call `jslifecycle.Rescue`.
+3. Run JavaScript only through `Registry.Call`; on panic, memory limit or timeout call `jslifecycle.Rescue`, which starts the rebuild and returns; handle `ErrVMUnavailable` from `Registry.Call` by retrying later (events) or by your failure policy (admission).
 4. Drop the VM with `Registry.Drop` when the resource goes away.
 5. Add a test with `jsregistry.NewRegistry()` and carry the rule ID in a comment above it.
 
@@ -99,9 +99,9 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 - **R12** Rebuild a VM when `Ensure` gets other effective limits, even with an unchanged source hash.
   Why: a changed `spec.limits` must take effect; zero fields count as the defaults, so an explicit default is no change. The restart reason is `limits-changed`.
   Gate: `TestRegistry_Ensure_RebuildsOnLimitsChange`.
-- **R13** Bound the rescue build of `RestartByKey` by the VM's timeout limit.
-  Why: a hanging module or `PostBuild` must not hold the per-key build lock forever; a failed rescue build keeps the old VM.
-  Gate: `TestRegistry_RestartByKey_BuildHasDeadline`.
+- **R13** Bound every build, the rescue build of `RestartByKey` too, by the VM's timeout limit.
+  Why: a hanging module or `PostBuild` must not hold the per-key build lock forever.
+  Gate: `TestRegistry_RestartByKey_BuildHasDeadlineAndFailureHoldsNoVM`, `TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys`.
 - **R14** Key every registry entry by `jsregistry.Key`, which carries the kind next to the name.
   Why: both kinds are cluster-scoped and share one registry, so a JSHook and a JSAdmission of the same name must not replace each other's VM.
   Gate: `TestRegistry_SameNameInBothKindsCoexists`.
@@ -118,6 +118,9 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 - **R18** Notify the key on the `Registry.Watch` channel of its kind when a build ends, whether it installed a VM or failed.
   Why: reconciles do not wait, so the controller of the kind needs the event to publish the new state.
   Gate: `TestRegistry_Ensure_BuildsAsyncAndNotifies`, `TestRegistry_Watch_DeliversOnlyOwnKind`.
+- **R19** Hold no VM in a Broken entry or in one that a call or a manual restart sent to rebuild, and let `Registry.Call` return `ErrVMUnavailable` at once for it. A build for changed options keeps the old VM serving until the new one is installed; every failed build drops the old VM.
+  Why: a VM after a timeout is dead, and calls on it panic and trigger one rescue each (a loop of rescues); callers must see "not ready" and apply their own policy (requeue, `failurePolicy`).
+  Gate: `TestRegistry_Call_WithoutVM_IsErrVMUnavailable`, `TestRegistry_RestartByKey_BuildHasDeadlineAndFailureHoldsNoVM`.
 
 ## Decisions
 
@@ -130,8 +133,9 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 
 - **Builds run asynchronously; a newer build cancels a running one.** Status: proposed.
   Why: a build runs user JavaScript that may hang; a reconcile or call that waits for it stalls other hooks, and a stuck build blocks the fix. Every key is in one state, Ready, Building or Broken, and `Registry.Ensure` reports it without waiting.
-  Not taken: a synchronous build with a reconcile deadline, because the build lock stays held by the hanging build and the reconcile worker still waits.
+  A restart after a call (panic, memory limit, timeout) or a manual restart closes the VM and builds in the background too; a failed build leaves the key Broken without a VM, so no dead VM serves calls and no call triggers a rescue. Callers meet `ErrVMUnavailable`: the dispatcher requeues the event, the admission server applies `failurePolicy`.
+  Not taken: a synchronous build with a reconcile deadline, because the build lock stays held by the hanging build and the reconcile worker still waits. Keeping the old VM after a failed rescue build, because after a timeout it is dead.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-3 to REG-6, REG-8; gates GATE-2, GATE-4.
+Tracked in [backlog](../backlog.md): REG-3 to REG-6; gates GATE-2, GATE-4.

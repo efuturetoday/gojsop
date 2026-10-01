@@ -17,6 +17,7 @@ package dispatcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"sync"
@@ -481,9 +482,7 @@ func (s *subscription) runWorker(ctx context.Context) {
 func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
 	mi, ok := s.reg.Get(jsregistry.HookKey(s.key))
 	if !ok {
-		logger.Error(nil, "hook not in registry — dropping event",
-			"binding", bc.Binding, "event", bc.WatchEvent)
-		s.queue.Forget(qkey)
+		s.noVM(logger, qkey, bc)
 		return
 	}
 
@@ -498,7 +497,12 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		return herr
 	})
 	if err != nil {
-		// ErrUnknownKey: VM was dropped between Get and Call (race with reconciler delete).
+		// ErrVMUnavailable (rescued meanwhile) retries; ErrUnknownKey: the VM
+		// was dropped between Get and Call (race with reconciler delete).
+		if errors.Is(err, jsregistry.ErrVMUnavailable) {
+			s.noVM(logger, qkey, bc)
+			return
+		}
 		logger.Info("hook vanished mid-call", "binding", bc.Binding, "event", bc.WatchEvent)
 		s.queue.Forget(qkey)
 		return
@@ -549,6 +553,22 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 	}
 }
 
+// noVM handles an event for a hook that has no VM now. A hook that is
+// Building or Broken keeps its events: they are requeued with the rate limiter
+// and meet the new VM. A hook the registry no longer knows loses them.
+// jshook.R19
+func (s *subscription) noVM(logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
+	if !s.reg.Known(jsregistry.HookKey(s.key)) {
+		logger.Error(nil, "hook not in registry — dropping event",
+			"binding", bc.Binding, "event", bc.WatchEvent)
+		s.queue.Forget(qkey)
+		return
+	}
+	logger.V(1).Info("hook has no VM yet — requeueing event",
+		"binding", bc.Binding, "event", bc.WatchEvent)
+	s.requeue(qkey, bc)
+}
+
 // contextWithOptionalTimeout returns a derived context with the given
 // timeout, or the parent unchanged (with a no-op cancel) when timeout <= 0.
 func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -558,14 +578,14 @@ func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (
 	return context.WithTimeout(parent, timeout)
 }
 
-// rescue rebuilds the instance via jslifecycle.Rescue (which publishes the
-// canonical Restarted / RescueFailed events).
-// On rebuild failure it logs and leaves the dead instance in place — the next
-// reconcile will retry; the queue keeps eating events meanwhile.
+// rescue closes the instance and starts its rebuild via jslifecycle.Rescue
+// (which publishes the canonical Restarted / RescueFailed events). It does not
+// wait for the build: until it ends calls find no VM and the event is requeued
+// with backoff (handleEvent); a failed build shows as BuildFailed on the hook.
 // jshook.R11
 // jshook.R12
 func (s *subscription) rescue(logger logr.Logger, reason jsregistry.RestartReason) {
-	if _, err := jslifecycle.Rescue(s.reg, jsregistry.HookKey(s.key), reason, s.emit); err != nil {
+	if err := jslifecycle.Rescue(s.reg, jsregistry.HookKey(s.key), reason, s.emit); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
 	}
 }

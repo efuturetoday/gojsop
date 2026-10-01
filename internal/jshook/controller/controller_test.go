@@ -192,3 +192,44 @@ func TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce(t *testing.
 	}
 	reconcileUntil(t, r, c, "bad", conditions.ReasonReconciled)
 }
+
+// A new value of the restart annotation rebuilds in the background: the hook is
+// Building meanwhile, and the finished build does not restart a second time.
+//
+// jshook.R18
+// js-registry.R4
+func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
+	hook := testHook("manual", `function config() { return {}; } function handle() {}`, 0)
+	r, c := newTestReconciler(t, jsregistry.Backoff{}, hook)
+	key := types.NamespacedName{Name: "manual"}
+	t.Cleanup(func() { r.Registry.Drop(jsregistry.HookKey(key)) })
+	reconcileUntil(t, r, c, "manual", conditions.ReasonReconciled)
+
+	var h corev1alpha1.JSHook
+	if err := c.Get(t.Context(), key, &h); err != nil {
+		t.Fatal(err)
+	}
+	h.Annotations = map[string]string{ManualRestartAnnotation: "1"}
+	if err := c.Update(t.Context(), &h); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	if cond := readyCondition(t, c, "manual"); cond.Reason != conditions.ReasonBuilding {
+		t.Fatalf("after the annotation: %+v, want Building", cond)
+	}
+	reconcileUntil(t, r, c, "manual", conditions.ReasonReconciled)
+	for range 3 { // the same token must not restart again
+		if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mi, _ := r.Registry.Get(jsregistry.HookKey(key))
+	if got := mi.RestartsByReason[jsregistry.ReasonManual]; got != 1 {
+		t.Fatalf("manual restarts = %d, want 1", got)
+	}
+	if cond := readyCondition(t, c, "manual"); cond.Reason != conditions.ReasonReconciled {
+		t.Fatalf("after the restart: %+v", cond)
+	}
+}

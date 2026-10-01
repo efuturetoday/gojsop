@@ -38,6 +38,19 @@ const (
 	ReasonLimitsChanged RestartReason = "limits-changed"
 )
 
+// ReportedByReconcile reports whether a controller reports the restart with
+// this reason as a Restarted event after the build. Restarts that a call
+// started (panic, memory limit, timeout) are reported by jslifecycle.Rescue
+// when they start.
+func (r RestartReason) ReportedByReconcile() bool {
+	switch r {
+	case ReasonSourceChanged, ReasonLimitsChanged:
+		return true
+	default:
+		return false
+	}
+}
+
 // PostBuildHook is invoked once per fresh VM after the source has loaded. It
 // returns the value to stash on ManagedVM.Extra. JSHook uses it to call
 // jshook.ReadConfig and cache the parsed Config. Returning a non-nil error
@@ -108,6 +121,9 @@ type ManagedVM struct {
 	// phase. Today the dispatcher and the admission server both go through
 	// Registry.Call, which acquires this mutex.
 	CallMu sync.Mutex
+	// closed is set under CallMu when the VM is closed; a call that took the
+	// lock afterwards reports ErrVMUnavailable instead of running on it.
+	closed bool
 }
 
 // LastRestart returns the most recent RestartEvent, or the zero value if the
@@ -441,6 +457,7 @@ func (r *Registry) runBuild(ctx context.Context, cancel context.CancelFunc, key 
 func closeVM(mi *ManagedVM) {
 	if mi != nil {
 		mi.CallMu.Lock()
+		mi.closed = true
 		mi.VM.Close()
 		mi.CallMu.Unlock()
 	}
@@ -474,6 +491,26 @@ func (r *Registry) installLocked(s *slot, mi *ManagedVM, reason RestartReason) *
 	s.err = nil
 	s.attempts = 0
 	return old
+}
+
+// lookup returns the installed VM of key (nil if none) and whether the key is
+// known at all.
+func (r *Registry) lookup(key Key) (mi *ManagedVM, known bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.slots[key]
+	if s == nil {
+		return nil, false
+	}
+	return s.vm, true
+}
+
+// Known reports whether the registry holds an entry for key, in any state.
+// With Get it tells "no VM yet or any more" (retry later) from "never
+// registered or dropped" (give up).
+func (r *Registry) Known(key Key) bool {
+	_, known := r.lookup(key)
+	return known
 }
 
 // Get returns the current ManagedVM for key without modifying anything. The
@@ -511,73 +548,60 @@ func (r *Registry) Drop(key Key) {
 		mi.CallMu.Lock()
 		logger.Info("drop closing vm")
 		start := time.Now()
+		mi.closed = true
 		mi.VM.Close()
 		logger.Info("drop closed vm", "duration", time.Since(start))
 		mi.CallMu.Unlock()
 	}
 }
 
-// RestartByKey force-replaces the VM for key with a fresh runtime, reusing the
-// cached BuildOptions from the last successful load. Used by rescue paths
-// (memory/panic/timeout/manual) that don't have the build inputs in hand.
-// Returns ErrUnknownKey if the resource is unknown to the registry.
+// RestartByKey is the rescue and manual restart path: it closes the VM of key
+// and starts a rebuild from the cached BuildOptions, and returns without
+// waiting for it. Until the build ends the key is Building and Registry.Call
+// reports ErrVMUnavailable; a failed build leaves it Broken, holding no VM.
+// The key is notified now and again when the build ends, so its controller
+// publishes both states. Returns ErrUnknownKey if the resource is unknown to
+// the registry.
 //
-// Holds the per-key build mutex across the rebuild so a build for the same key
-// serializes behind it; r.mu is only held for the brief read of the existing
-// entry and the install at the end. The old VM's CallMu is acquired before
-// vm.Close so we don't race in-flight wasm.
-//
-// The build context derives from a background context, not from the caller's
-// request context (about to be cancelled on a timeout rescue), but is bounded
-// by the VM's own timeout limit, so a hanging module or PostBuild cannot hold
-// the build lock forever. A failed build keeps the old VM installed.
+// The old VM's CallMu is acquired before vm.Close so we don't race in-flight
+// wasm; callers run it after their own call returned. The build runs under
+// the context and deadline of Ensure.
 //
 // js-registry.R4
 // js-registry.R13
-// js-registry.R7
-// js-registry.R8
-func (r *Registry) RestartByKey(key Key, reason RestartReason) (*ManagedVM, error) {
+// js-registry.R19
+func (r *Registry) RestartByKey(key Key, reason RestartReason) error {
 	r.mu.Lock()
 	s := r.slots[key]
-	r.mu.Unlock()
 	if s == nil {
-		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
-	}
-	s.buildMu.Lock()
-	defer s.buildMu.Unlock()
-
-	r.mu.Lock()
-	existing := s.vm
-	current := r.slots[key] == s
-	r.mu.Unlock()
-	if !current || existing == nil {
-		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(),
-		time.Duration(existing.Opts.Limits.WithDefaults().TimeoutSeconds)*time.Second)
-	defer cancel()
-	mi, err := r.build(ctx, key, existing.Opts)
-	if err != nil {
-		return nil, err
-	}
-
-	r.mu.Lock()
-	if r.slots[key] != s {
 		r.mu.Unlock()
-		mi.VM.Close()
-		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
+		return fmt.Errorf("%w: %s", ErrUnknownKey, key)
 	}
-	old := r.installLocked(s, mi, reason)
+	old := s.vm
+	if old != nil {
+		s.opts = old.Opts
+	} else if s.building {
+		// A build for the same key already runs; it replaces the VM anyway.
+		r.mu.Unlock()
+		return nil
+	}
+	s.vm = nil
+	s.abortBuild()
+	s.attempts, s.err = 0, nil
+	r.startBuildLocked(key, s, reason)
+	n := r.notifierLocked(key.Kind)
 	r.mu.Unlock()
+
 	closeVM(old)
-	return mi, nil
+	n.add(key)
+	return nil
 }
 
 // Call runs fn under mi.CallMu with a panic-safe wrapper. The result classifies
 // the outcome (panic / OOM / cancelled / other error / ok) so callers don't
-// reimplement the same recover + errors.Is dance. Returns ErrUnknownKey if
-// no VM is registered for key.
+// reimplement the same recover + errors.Is dance. Call never waits for a build:
+// it returns ErrVMUnavailable at once while the key holds no VM (Building or
+// Broken), and ErrUnknownKey if the key is not registered at all.
 //
 // fn receives the same ctx Call was called with; pass a context with deadline
 // to enforce a per-call timeout (wazero observes the runtime's embedded ctx
@@ -589,14 +613,21 @@ func (r *Registry) RestartByKey(key Key, reason RestartReason) (*ManagedVM, erro
 //
 // js-execution.R2
 // js-registry.R1
+// js-registry.R19
 func (r *Registry) Call(ctx context.Context, key Key, fn func(ctx context.Context, vm *jsengine.VM) error) (CallResult, *ManagedVM, error) {
-	mi, ok := r.Get(key)
-	if !ok {
+	mi, known := r.lookup(key)
+	if mi == nil {
+		if known {
+			return CallResult{}, nil, fmt.Errorf("%w: %s", ErrVMUnavailable, key)
+		}
 		return CallResult{}, nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
 	}
 
 	mi.CallMu.Lock()
 	defer mi.CallMu.Unlock()
+	if mi.closed { // replaced or dropped while this call waited for the lock
+		return CallResult{}, nil, fmt.Errorf("%w: %s", ErrVMUnavailable, key)
+	}
 
 	res := CallResult{}
 	start := time.Now()

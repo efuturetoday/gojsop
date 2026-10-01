@@ -34,11 +34,13 @@ import (
 // message stability rules (see internal/conditions) are the caller's job.
 type EventEmitter func(eventType, reason, message string)
 
-// Rescue restarts the VM registered under key with the given reason and emits
-// the canonical lifecycle event:
+// Rescue starts the restart of the VM registered under key with the given
+// reason and emits the canonical lifecycle event. It does not wait for the
+// rebuild: the key is Building until it ends, and a failed build shows up as
+// BuildFailed on the resource.
 //
-//   - on success: Warning Restarted, message "restarted: <reason>"
-//   - on failure: Warning RescueFailed, message "rescue <reason> failed"
+//   - key known: Warning Restarted, message "restarted: <reason>"
+//   - key unknown: Warning RescueFailed, message "rescue <reason> failed"
 //
 // Both message templates are drawn from the small set of registry restart
 // reasons (jsregistry.ReasonPanic / ReasonMemoryLimit / ReasonTimeoutStreak /
@@ -52,16 +54,15 @@ type EventEmitter func(eventType, reason, message string)
 // The emitter is optional; passing nil is supported.
 //
 // js-registry.R2
-func Rescue(reg *jsregistry.Registry, key jsregistry.Key, reason jsregistry.RestartReason, emit EventEmitter) (*jsregistry.ManagedVM, error) {
-	mi, err := reg.RestartByKey(key, reason)
-	if err != nil {
+func Rescue(reg *jsregistry.Registry, key jsregistry.Key, reason jsregistry.RestartReason, emit EventEmitter) error {
+	if err := reg.RestartByKey(key, reason); err != nil {
 		publish(emit, corev1.EventTypeWarning, conditions.EventRescueFailed,
 			fmt.Sprintf("rescue %s failed", reason))
-		return nil, err
+		return err
 	}
 	publish(emit, corev1.EventTypeWarning, conditions.EventRestarted,
 		fmt.Sprintf("restarted: %s", reason))
-	return mi, nil
+	return nil
 }
 
 // RestartHistoryFor projects the registry's internal restart log onto the CRD

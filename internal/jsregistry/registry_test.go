@@ -123,7 +123,7 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 		t.Fatalf("dirty eval: %v", err)
 	}
 
-	mi2, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonPanic)
+	mi2, err := registrytest.Restart(reg, jsregistry.HookKey(key), jsregistry.ReasonPanic)
 	if err != nil {
 		t.Fatalf("RestartByKey: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 
 	// Three manual restarts → counter == 3, history == 3.
 	for i := range 3 {
-		if _, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonManual); err != nil {
+		if _, err := registrytest.Restart(reg, jsregistry.HookKey(key), jsregistry.ReasonManual); err != nil {
 			t.Fatalf("restart #%d: %v", i, err)
 		}
 	}
@@ -183,7 +183,7 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 	// Push another 22 (total 25) — ring should cap at 20, oldest evicted,
 	// counter keeps climbing.
 	for i := range 22 {
-		if _, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonPanic); err != nil {
+		if _, err := registrytest.Restart(reg, jsregistry.HookKey(key), jsregistry.ReasonPanic); err != nil {
 			t.Fatalf("restart panic #%d: %v", i, err)
 		}
 	}
@@ -212,7 +212,7 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 // js-registry.R4
 func TestRegistry_RestartByKey_UnknownHook(t *testing.T) {
 	reg := jsregistry.NewRegistry()
-	if _, err := reg.RestartByKey(jsregistry.HookKey(types.NamespacedName{Name: "ghost"}), jsregistry.ReasonManual); err == nil {
+	if err := reg.RestartByKey(jsregistry.HookKey(types.NamespacedName{Name: "ghost"}), jsregistry.ReasonManual); err == nil {
 		t.Fatal("expected error for unknown hook")
 	}
 }
@@ -280,7 +280,7 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 
 	// The module is closed; restart closes the dead VM without a panic and
 	// the rebuilt one runs.
-	if _, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonTimeout); err != nil {
+	if _, err := registrytest.Restart(reg, jsregistry.HookKey(key), jsregistry.ReasonTimeout); err != nil {
 		t.Fatalf("RestartByKey: %v", err)
 	}
 	res, _, _ = reg.Call(context.Background(), jsregistry.HookKey(key), func(ctx context.Context, vm *jsengine.VM) error {
@@ -337,43 +337,58 @@ func TestRegistry_Ensure_RebuildsOnLimitsChange(t *testing.T) {
 	}
 }
 
+// A rescue build is bounded by the timeout limit. RestartByKey returns at once,
+// the key is Building without a VM (calls get ErrVMUnavailable), and a build
+// that runs into its deadline leaves the key Broken, still without a VM.
+//
 // js-registry.R13
-func TestRegistry_RestartByKey_BuildHasDeadline(t *testing.T) {
+// js-registry.R19
+func TestRegistry_RestartByKey_BuildHasDeadlineAndFailureHoldsNoVM(t *testing.T) {
 	reg := jsregistry.NewRegistry()
-	key := types.NamespacedName{Name: "dl"}
-	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
-	builds := 0
+	key := jsregistry.HookKey(types.NamespacedName{Name: "dl"})
+	t.Cleanup(func() { reg.Drop(key) })
+	var builds atomic.Int32
 	opts := jsregistry.BuildOptions{
 		Source:     []byte(`function ok(){return 1}`),
 		SourceHash: "h",
 		Limits:     jsengine.Limits{TimeoutSeconds: 1},
 		// The first build passes; every later build hangs until its ctx ends.
 		PostBuild: func(ctx context.Context, vm *jsengine.VM) (any, error) {
-			builds++
-			if builds == 1 {
+			if builds.Add(1) == 1 {
 				return nil, nil
 			}
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
 	}
-	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), opts)
-	if err != nil {
-		t.Fatalf("GetOrLoad: %v", err)
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), key, opts); err != nil {
+		t.Fatalf("initial load: %v", err)
 	}
 
-	done := make(chan error, 1)
-	go func() { _, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonManual); done <- err }()
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("RestartByKey: want error from the timed-out build")
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("RestartByKey did not return: rescue build has no deadline")
+	start := time.Now()
+	if err := reg.RestartByKey(key, jsregistry.ReasonManual); err != nil {
+		t.Fatalf("RestartByKey: %v", err)
 	}
-	if cur, _ := reg.Get(jsregistry.HookKey(key)); cur != mi {
-		t.Error("failed rescue build must keep the old VM installed")
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("RestartByKey waited %v for the build", time.Since(start))
+	}
+	if _, ok := reg.Get(key); ok {
+		t.Fatal("a restarting key must hold no VM")
+	}
+	_, _, err := reg.Call(context.Background(), key, func(context.Context, *jsengine.VM) error { return nil })
+	if !errors.Is(err, jsregistry.ErrVMUnavailable) {
+		t.Fatalf("Call while Building: %v, want ErrVMUnavailable", err)
+	}
+
+	broken := waitFor(t, reg, key, opts, jsregistry.StateBroken)
+	if broken.Err == nil || time.Since(start) > 10*time.Second {
+		t.Fatalf("Broken: err=%v after %v; the rescue build has no deadline", broken.Err, time.Since(start))
+	}
+	if _, ok := reg.Get(key); ok {
+		t.Fatal("a broken key must hold no VM")
+	}
+	if _, _, err := reg.Call(context.Background(), key, func(context.Context, *jsengine.VM) error { return nil }); !errors.Is(err, jsregistry.ErrVMUnavailable) {
+		t.Fatalf("Call while Broken: %v, want ErrVMUnavailable", err)
 	}
 }
 
@@ -441,7 +456,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 			_, err := vm.CallExport(ctx, "ping")
 			return err
 		})
-		if err != nil {
+		if err = ignoreUnavailable(err); err != nil {
 			return err
 		}
 		if res.Outcome != jsregistry.OutcomeOK {
@@ -481,7 +496,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	for range 2 {
 		wg.Go(func() {
 			for range restarts {
-				if _, err := reg.RestartByKey(jsregistry.HookKey(keyA), jsregistry.ReasonManual); err != nil {
+				if err := reg.RestartByKey(jsregistry.HookKey(keyA), jsregistry.ReasonManual); err != nil {
 					errc <- fmt.Errorf("restart: %w", err)
 					return
 				}
@@ -535,7 +550,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	})
 	wg2.Go(func() {
 		for range restarts {
-			if _, err := reg.RestartByKey(jsregistry.HookKey(keyA), jsregistry.ReasonManual); err != nil && !errors.Is(err, jsregistry.ErrUnknownKey) {
+			if err := reg.RestartByKey(jsregistry.HookKey(keyA), jsregistry.ReasonManual); err != nil && !errors.Is(err, jsregistry.ErrUnknownKey) {
 				errc <- fmt.Errorf("restart after drop: %w", err)
 				return
 			}
@@ -576,4 +591,72 @@ func TestRegistry_SameNameInBothKindsCoexists(t *testing.T) {
 	if _, ok := reg.Get(hook); !ok {
 		t.Fatal("dropping the JSAdmission dropped the JSHook")
 	}
+}
+
+// js-registry.R19
+func TestRegistry_Call_WithoutVM_IsErrVMUnavailable(t *testing.T) {
+	reg := jsregistry.NewRegistry()
+	key := jsregistry.HookKey(types.NamespacedName{Name: "novm"})
+	t.Cleanup(func() { reg.Drop(key) })
+	noop := func(context.Context, *jsengine.VM) error { return nil }
+
+	if _, _, err := reg.Call(context.Background(), key, noop); !errors.Is(err, jsregistry.ErrUnknownKey) {
+		t.Fatalf("never registered: %v, want ErrUnknownKey", err)
+	}
+	// Building: the first build runs and has no VM yet.
+	reg.Ensure(key, jsregistry.BuildOptions{Source: []byte(`while(true){}`), SourceHash: "h", Limits: jsengine.Limits{TimeoutSeconds: 1}})
+	start := time.Now()
+	if _, _, err := reg.Call(context.Background(), key, noop); !errors.Is(err, jsregistry.ErrVMUnavailable) || time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("Building: %v after %v, want ErrVMUnavailable at once", err, time.Since(start))
+	}
+	// Broken: the build ran into its deadline.
+	waitFor(t, reg, key, jsregistry.BuildOptions{Source: []byte(`while(true){}`), SourceHash: "h", Limits: jsengine.Limits{TimeoutSeconds: 1}}, jsregistry.StateBroken)
+	if _, ok := reg.Get(key); ok {
+		t.Fatal("a broken key must hold no VM")
+	}
+	if _, _, err := reg.Call(context.Background(), key, noop); !errors.Is(err, jsregistry.ErrVMUnavailable) {
+		t.Fatalf("Broken: %v, want ErrVMUnavailable", err)
+	}
+	// A rescue leaves no dead VM behind to panic on: after a cancelled call the
+	// key is Building and the next call is refused, not run on the closed module.
+	release := make(chan struct{})
+	var built atomic.Int32
+	ok := jsregistry.BuildOptions{Source: []byte("function spin() { while (true) {} }"), SourceHash: "ok",
+		PostBuild: func(ctx context.Context, _ *jsengine.VM) (any, error) {
+			if built.Add(1) > 1 { // the rescue build waits for the release
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+			}
+			return nil, nil
+		}}
+	defer close(release)
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), key, ok); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	res, _, _ := reg.Call(ctx, key, func(ctx context.Context, vm *jsengine.VM) error {
+		_, err := vm.CallExport(ctx, "spin")
+		return err
+	})
+	if res.Outcome != jsregistry.OutcomeCancelled {
+		t.Fatalf("outcome %v, want cancelled", res.Outcome)
+	}
+	if err := reg.RestartByKey(key, jsregistry.ReasonTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reg.Call(context.Background(), key, noop); !errors.Is(err, jsregistry.ErrVMUnavailable) {
+		t.Fatalf("after rescue start: %v, want ErrVMUnavailable (no call on the dead VM)", err)
+	}
+}
+
+// ignoreUnavailable drops ErrVMUnavailable: a restart is in flight and the call
+// is refused at once, which is the contract.
+func ignoreUnavailable(err error) error {
+	if errors.Is(err, jsregistry.ErrVMUnavailable) {
+		return nil
+	}
+	return err
 }
