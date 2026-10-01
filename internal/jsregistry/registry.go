@@ -1,6 +1,6 @@
 // Package jsregistry holds the live JS VM for every JSHook/JSAdmission the
-// controller knows about. One VM per NamespacedName, owned by the controller's
-// lifetime.
+// controller knows about. One VM per Key (kind and name), owned by the
+// controller's lifetime.
 package jsregistry
 
 import (
@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/o-haase/gojsop/internal/jsengine"
@@ -140,7 +139,7 @@ type CallResult struct {
 }
 
 // Registry holds the live JS VM for every JSHook/JSAdmission the controller
-// knows about. One VM per NamespacedName, owned by the controller's lifetime.
+// knows about. One VM per Key (kind and name), owned by the controller's lifetime.
 //
 // Concurrency model: r.mu protects map structural integrity only — it is
 // never held while user JS executes (LoadModule, postBuild, Call). Per-key
@@ -151,14 +150,14 @@ type CallResult struct {
 // Registry.Call takes around the user fn.
 type Registry struct {
 	mu         sync.Mutex
-	vms        map[types.NamespacedName]*ManagedVM
-	buildLocks map[types.NamespacedName]*sync.Mutex
+	vms        map[Key]*ManagedVM
+	buildLocks map[Key]*sync.Mutex
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		vms:        make(map[types.NamespacedName]*ManagedVM),
-		buildLocks: make(map[types.NamespacedName]*sync.Mutex),
+		vms:        make(map[Key]*ManagedVM),
+		buildLocks: make(map[Key]*sync.Mutex),
 	}
 }
 
@@ -168,7 +167,7 @@ func NewRegistry() *Registry {
 // point of the split.
 //
 // js-registry.R7
-func (r *Registry) getBuildLock(key types.NamespacedName) *sync.Mutex {
+func (r *Registry) getBuildLock(key Key) *sync.Mutex {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	bMu, ok := r.buildLocks[key]
@@ -189,7 +188,7 @@ func (r *Registry) getBuildLock(key types.NamespacedName) *sync.Mutex {
 // reconcile deadline.
 //
 // js-registry.R6
-func (r *Registry) build(ctx context.Context, key types.NamespacedName, opts BuildOptions) (*ManagedVM, error) {
+func (r *Registry) build(ctx context.Context, key Key, opts BuildOptions) (*ManagedVM, error) {
 	vm, err := jsengine.New(opts.Limits)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNewVM, err)
@@ -200,7 +199,7 @@ func (r *Registry) build(ctx context.Context, key types.NamespacedName, opts Bui
 			return nil, fmt.Errorf("%w: %v", ErrBindHost, err)
 		}
 	}
-	if err := vm.LoadModule(ctx, key.Name+".js", string(opts.Source)); err != nil {
+	if err := vm.LoadModule(ctx, key.Name.Name+".js", string(opts.Source)); err != nil {
 		vm.Close()
 		return nil, fmt.Errorf("%w: %v", ErrLoadModule, err)
 	}
@@ -253,7 +252,7 @@ func optsChanged(cur, opts BuildOptions) bool {
 // js-registry.R3
 // js-registry.R5
 // js-registry.R7
-func (r *Registry) GetOrLoad(ctx context.Context, key types.NamespacedName, opts BuildOptions) (*ManagedVM, bool, error) {
+func (r *Registry) GetOrLoad(ctx context.Context, key Key, opts BuildOptions) (*ManagedVM, bool, error) {
 	// 1. fast path
 	r.mu.Lock()
 	if existing, ok := r.vms[key]; ok && !optsChanged(existing.Opts, opts) {
@@ -308,7 +307,7 @@ func (r *Registry) GetOrLoad(ctx context.Context, key types.NamespacedName, opts
 // js-registry.R8
 // js-registry.R11
 // status-conditions.R4
-func (r *Registry) installNew(key types.NamespacedName, mi *ManagedVM, reason RestartReason, err error) *ManagedVM {
+func (r *Registry) installNew(key Key, mi *ManagedVM, reason RestartReason, err error) *ManagedVM {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -335,7 +334,7 @@ func (r *Registry) installNew(key types.NamespacedName, mi *ManagedVM, reason Re
 // Get returns the current ManagedVM for key without modifying anything. The
 // dispatcher's worker uses this to look up the live VM per dispatch, so a
 // rescue restart transparently switches the next call to the new VM.
-func (r *Registry) Get(key types.NamespacedName) (*ManagedVM, bool) {
+func (r *Registry) Get(key Key) (*ManagedVM, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	mi, ok := r.vms[key]
@@ -351,7 +350,7 @@ func (r *Registry) Get(key types.NamespacedName) (*ManagedVM, bool) {
 // zombie VM, which the next reconcile (NotFound → Drop) cleans up.
 //
 // js-registry.R8
-func (r *Registry) Drop(key types.NamespacedName) {
+func (r *Registry) Drop(key Key) {
 	logger := log.Log.WithName("jsregistry").WithValues("key", key.String())
 	r.mu.Lock()
 	mi := r.vms[key]
@@ -390,7 +389,7 @@ func (r *Registry) Drop(key types.NamespacedName) {
 // js-registry.R13
 // js-registry.R7
 // js-registry.R8
-func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) (*ManagedVM, error) {
+func (r *Registry) RestartByKey(key Key, reason RestartReason) (*ManagedVM, error) {
 	bMu := r.getBuildLock(key)
 	bMu.Lock()
 	defer bMu.Unlock()
@@ -434,7 +433,7 @@ func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) 
 //
 // js-execution.R2
 // js-registry.R1
-func (r *Registry) Call(ctx context.Context, key types.NamespacedName, fn func(ctx context.Context, vm *jsengine.VM) error) (CallResult, *ManagedVM, error) {
+func (r *Registry) Call(ctx context.Context, key Key, fn func(ctx context.Context, vm *jsengine.VM) error) (CallResult, *ManagedVM, error) {
 	mi, ok := r.Get(key)
 	if !ok {
 		return CallResult{}, nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)

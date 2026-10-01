@@ -18,7 +18,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
@@ -53,7 +52,7 @@ type EventEmitter func(eventType, reason, message string)
 // The emitter is optional; passing nil is supported.
 //
 // js-registry.R2
-func Rescue(reg *jsregistry.Registry, key types.NamespacedName, reason jsregistry.RestartReason, emit EventEmitter) (*jsregistry.ManagedVM, error) {
+func Rescue(reg *jsregistry.Registry, key jsregistry.Key, reason jsregistry.RestartReason, emit EventEmitter) (*jsregistry.ManagedVM, error) {
 	mi, err := reg.RestartByKey(key, reason)
 	if err != nil {
 		publish(emit, corev1.EventTypeWarning, conditions.EventRescueFailed,

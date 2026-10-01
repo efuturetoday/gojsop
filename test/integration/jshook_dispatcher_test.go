@@ -53,14 +53,14 @@ function handle(c) { log.push(c[0]); }`
 
 		reg := jsregistry.NewRegistry()
 		opts := jsregistry.BuildOptions{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}}
-		_, _, err := reg.GetOrLoad(ctx, key, opts)
+		_, _, err := reg.GetOrLoad(ctx, jsregistry.HookKey(key), opts)
 		Expect(err).NotTo(HaveOccurred())
 		dyn, err := dynamic.NewForConfig(cfg)
 		Expect(err).NotTo(HaveOccurred())
 		d := dispatcher.New(dyn, configMapMapper{}, reg)
 		DeferCleanup(func() {
 			d.Drop(key)
-			reg.Drop(key)
+			reg.Drop(jsregistry.HookKey(key))
 		})
 
 		binding := jshook.KubernetesBinding{
@@ -79,7 +79,7 @@ function handle(c) { log.push(c[0]); }`
 		type meta struct{ Metadata struct{ Name string } }
 		delivered := func() []string {
 			var out string
-			_, _, err := reg.Call(ctx, key, func(c context.Context, vm *jsengine.VM) error {
+			_, _, err := reg.Call(ctx, jsregistry.HookKey(key), func(c context.Context, vm *jsengine.VM) error {
 				var err error
 				out, err = vm.Eval(c, "log.js", `JSON.stringify(globalThis.log)`)
 				return err

@@ -25,10 +25,10 @@ func captureEmitter(buf int) (chan [3]string, EventEmitter) {
 func loadInstance(t *testing.T, reg *jsregistry.Registry, key types.NamespacedName) {
 	t.Helper()
 	src := []byte(`function config(){return {configVersion:'v1'}} function handle(){}`)
-	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src, SourceHash: "h1"}); err != nil {
+	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "h1"}); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
-	t.Cleanup(func() { reg.Drop(key) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 }
 
 // js-registry.R2
@@ -39,7 +39,7 @@ func TestRescue_Success_EmitsRestarted(t *testing.T) {
 	loadInstance(t, reg, key)
 
 	events, emit := captureEmitter(2)
-	mi, err := Rescue(reg, key, jsregistry.ReasonPanic, emit)
+	mi, err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonPanic, emit)
 	if err != nil {
 		t.Fatalf("Rescue: unexpected error: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestRescue_Failure_EmitsRescueFailed(t *testing.T) {
 	key := types.NamespacedName{Namespace: "ns", Name: "ghost"}
 
 	events, emit := captureEmitter(2)
-	if _, err := Rescue(reg, key, jsregistry.ReasonMemoryLimit, emit); err == nil {
+	if _, err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonMemoryLimit, emit); err == nil {
 		t.Fatal("Rescue on unknown key: want error, got nil")
 	}
 
@@ -103,7 +103,7 @@ func TestRescue_NilEmitter_NoOps(t *testing.T) {
 	key := types.NamespacedName{Namespace: "ns", Name: "noemit"}
 	loadInstance(t, reg, key)
 
-	if _, err := Rescue(reg, key, jsregistry.ReasonManual, nil); err != nil {
+	if _, err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonManual, nil); err != nil {
 		t.Fatalf("Rescue with nil emitter must succeed: %v", err)
 	}
 }

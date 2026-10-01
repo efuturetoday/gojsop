@@ -127,7 +127,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if r.Registrar != nil {
 				r.Registrar.Remove(req.NamespacedName)
 			}
-			r.Registry.Drop(req.NamespacedName)
+			r.Registry.Drop(jsregistry.AdmissionKey(req.NamespacedName))
 			log.Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
@@ -158,7 +158,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	mi, restarted, err := r.Registry.GetOrLoad(ctx, req.NamespacedName, jsregistry.BuildOptions{
+	mi, restarted, err := r.Registry.GetOrLoad(ctx, jsregistry.AdmissionKey(req.NamespacedName), jsregistry.BuildOptions{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
@@ -184,7 +184,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			prev = pol.Status.Instance.ManualRestartToken
 		}
 		if token != prev {
-			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsregistry.ReasonManual)
+			newMI, err := r.Registry.RestartByKey(jsregistry.AdmissionKey(req.NamespacedName), jsregistry.ReasonManual)
 			if err != nil {
 				log.Error(err, "manual restart")
 				return r.failAdmission(ctx, &pol, conditions.EventBuildFailed,

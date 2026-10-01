@@ -14,7 +14,7 @@ This aspect describes how gojsop keeps, builds, calls and restarts the JavaScrip
 VMs of JSHooks and JSAdmissions.
 
 One `jsregistry.Registry` exists per process. It holds one long-lived VM per
-JSHook or JSAdmission, keyed by `types.NamespacedName`. Controllers build,
+JSHook or JSAdmission, keyed by `jsregistry.Key` (kind and name). Controllers build,
 restart and drop VMs. The dispatcher and the admission server only call them.
 All runtime execution goes through `Registry.Call`, which takes the per-VM
 lock, recovers panics and classifies the outcome as ok, panic, cancelled,
@@ -101,6 +101,9 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 - **R13** Bound the rescue build of `RestartByKey` by the VM's timeout limit.
   Why: a hanging module or `PostBuild` must not hold the per-key build lock forever; a failed rescue build keeps the old VM.
   Gate: `TestRegistry_RestartByKey_BuildHasDeadline`.
+- **R14** Key every registry entry by `jsregistry.Key`, which carries the kind next to the name.
+  Why: both kinds are cluster-scoped and share one registry, so a JSHook and a JSAdmission of the same name must not replace each other's VM.
+  Gate: `TestRegistry_SameNameInBothKindsCoexists`.
 
 ## Decisions
 
@@ -113,4 +116,4 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-1, REG-3 to REG-6; gates GATE-2, GATE-4.
+Tracked in [backlog](../backlog.md): REG-1, REG-3 to REG-6, REG-8; gates GATE-2, GATE-4.

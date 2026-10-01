@@ -479,7 +479,7 @@ func (s *subscription) runWorker(ctx context.Context) {
 // jshook.R11
 // jshook.R12
 func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
-	mi, ok := s.reg.Get(s.key)
+	mi, ok := s.reg.Get(jsregistry.HookKey(s.key))
 	if !ok {
 		logger.Error(nil, "hook not in registry — dropping event",
 			"binding", bc.Binding, "event", bc.WatchEvent)
@@ -492,7 +492,7 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 	defer cancel()
 
 	var out string
-	res, _, err := s.reg.Call(callCtx, s.key, func(ctx context.Context, vm *jsengine.VM) error {
+	res, _, err := s.reg.Call(callCtx, jsregistry.HookKey(s.key), func(ctx context.Context, vm *jsengine.VM) error {
 		var herr error
 		out, herr = jshook.Handle(ctx, vm, []jshook.BindingContext{bc})
 		return herr
@@ -565,7 +565,7 @@ func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (
 // jshook.R11
 // jshook.R12
 func (s *subscription) rescue(logger logr.Logger, reason jsregistry.RestartReason) {
-	if _, err := jslifecycle.Rescue(s.reg, s.key, reason, s.emit); err != nil {
+	if _, err := jslifecycle.Rescue(s.reg, jsregistry.HookKey(s.key), reason, s.emit); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
 	}
 }

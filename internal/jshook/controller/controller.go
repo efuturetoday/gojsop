@@ -149,7 +149,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if r.Dispatcher != nil {
 				r.Dispatcher.Drop(req.NamespacedName)
 			}
-			r.Registry.Drop(req.NamespacedName)
+			r.Registry.Drop(jsregistry.HookKey(req.NamespacedName))
 			log.Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
@@ -178,7 +178,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	mi, restarted, err := r.Registry.GetOrLoad(ctx, req.NamespacedName, jsregistry.BuildOptions{
+	mi, restarted, err := r.Registry.GetOrLoad(ctx, jsregistry.HookKey(req.NamespacedName), jsregistry.BuildOptions{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
@@ -207,7 +207,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			prev = hook.Status.Instance.ManualRestartToken
 		}
 		if token != prev {
-			newMI, err := r.Registry.RestartByKey(req.NamespacedName, jsregistry.ReasonManual)
+			newMI, err := r.Registry.RestartByKey(jsregistry.HookKey(req.NamespacedName), jsregistry.ReasonManual)
 			if err != nil {
 				log.Error(err, "manual restart")
 				return r.fail(ctx, &hook, conditions.EventBuildFailed,

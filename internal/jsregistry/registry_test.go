@@ -18,13 +18,13 @@ import (
 // js-registry.R5
 func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	reg := jsregistry.NewRegistry()
-	t.Cleanup(func() { reg.Drop(types.NamespacedName{Name: "h1"}) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(types.NamespacedName{Name: "h1"})) })
 
 	src := []byte(`globalThis.counter = (globalThis.counter || 0); function config(){return {configVersion:"v1"}}`)
 	key := types.NamespacedName{Name: "h1"}
 	opts := jsregistry.BuildOptions{Source: src, SourceHash: "abc123"}
 
-	mi, restarted, err := reg.GetOrLoad(context.Background(), key, opts)
+	mi, restarted, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 		t.Fatalf("Eval: %v", err)
 	}
 
-	mi2, restarted2, err := reg.GetOrLoad(context.Background(), key, opts)
+	mi2, restarted2, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad #2: %v", err)
 	}
@@ -63,12 +63,12 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 func TestRegistry_RestartOnSourceChange(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "h2"}
-	t.Cleanup(func() { reg.Drop(key) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 
 	src1 := []byte(`globalThis.tag = "v1"; function config(){return {}}`)
 	src2 := []byte(`globalThis.tag = "v2"; function config(){return {}}`)
 
-	mi, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src1, SourceHash: "h1"})
+	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src1, SourceHash: "h1"})
 	if err != nil {
 		t.Fatalf("load v1: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 		t.Fatalf("v1 tag: got %q", got)
 	}
 
-	mi2, restarted, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src2, SourceHash: "h2"})
+	mi2, restarted, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src2, SourceHash: "h2"})
 	if err != nil {
 		t.Fatalf("load v2: %v", err)
 	}
@@ -107,10 +107,10 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "rescue"}
-	t.Cleanup(func() { reg.Drop(key) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 
 	src := []byte(`globalThis.counter = 0; function config(){return {}}`)
-	mi, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{
+	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{
 		Source:     src,
 		SourceHash: "h1",
 		Limits:     jsengine.Limits{MemoryMB: 8},
@@ -122,7 +122,7 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 		t.Fatalf("dirty eval: %v", err)
 	}
 
-	mi2, err := reg.RestartByKey(key, jsregistry.ReasonPanic)
+	mi2, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonPanic)
 	if err != nil {
 		t.Fatalf("RestartByKey: %v", err)
 	}
@@ -158,20 +158,20 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "ring"}
-	t.Cleanup(func() { reg.Drop(key) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 
 	src := []byte(`function config(){return {}}`)
-	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
+	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 
 	// Three manual restarts → counter == 3, history == 3.
 	for i := range 3 {
-		if _, err := reg.RestartByKey(key, jsregistry.ReasonManual); err != nil {
+		if _, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonManual); err != nil {
 			t.Fatalf("restart #%d: %v", i, err)
 		}
 	}
-	mi, _ := reg.Get(key)
+	mi, _ := reg.Get(jsregistry.HookKey(key))
 	if got := mi.RestartsByReason[jsregistry.ReasonManual]; got != 3 {
 		t.Errorf("RestartsByReason[manual] after 3: got %d, want 3", got)
 	}
@@ -182,11 +182,11 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 	// Push another 22 (total 25) — ring should cap at 20, oldest evicted,
 	// counter keeps climbing.
 	for i := range 22 {
-		if _, err := reg.RestartByKey(key, jsregistry.ReasonPanic); err != nil {
+		if _, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonPanic); err != nil {
 			t.Fatalf("restart panic #%d: %v", i, err)
 		}
 	}
-	mi, _ = reg.Get(key)
+	mi, _ = reg.Get(jsregistry.HookKey(key))
 	if got := len(mi.History); got != 20 {
 		t.Errorf("History length capped: got %d, want 20", got)
 	}
@@ -211,7 +211,7 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 // js-registry.R4
 func TestRegistry_RestartByKey_UnknownHook(t *testing.T) {
 	reg := jsregistry.NewRegistry()
-	if _, err := reg.RestartByKey(types.NamespacedName{Name: "ghost"}, jsregistry.ReasonManual); err == nil {
+	if _, err := reg.RestartByKey(jsregistry.HookKey(types.NamespacedName{Name: "ghost"}), jsregistry.ReasonManual); err == nil {
 		t.Fatal("expected error for unknown hook")
 	}
 }
@@ -219,17 +219,17 @@ func TestRegistry_RestartByKey_UnknownHook(t *testing.T) {
 func TestRegistry_Get(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "g"}
-	t.Cleanup(func() { reg.Drop(key) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 
-	if _, ok := reg.Get(key); ok {
+	if _, ok := reg.Get(jsregistry.HookKey(key)); ok {
 		t.Fatal("Get must return false for unknown key")
 	}
 	src := []byte(`function config(){return {}}`)
-	mi, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src, SourceHash: "x"})
+	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	got, ok := reg.Get(key)
+	got, ok := reg.Get(jsregistry.HookKey(key))
 	if !ok || got != mi {
 		t.Fatal("Get must return the live ManagedVM")
 	}
@@ -240,17 +240,17 @@ func TestRegistry_Drop(t *testing.T) {
 	key := types.NamespacedName{Name: "h3"}
 
 	src := []byte(`function config(){return {}}`)
-	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
+	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if reg.Len() != 1 {
 		t.Fatalf("Len: got %d, want 1", reg.Len())
 	}
-	reg.Drop(key)
+	reg.Drop(jsregistry.HookKey(key))
 	if reg.Len() != 0 {
 		t.Fatalf("Len after drop: got %d, want 0", reg.Len())
 	}
-	reg.Drop(key)
+	reg.Drop(jsregistry.HookKey(key))
 }
 
 // js-registry.R4
@@ -258,7 +258,7 @@ func TestRegistry_Drop(t *testing.T) {
 func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "k"}
-	if _, _, err := reg.GetOrLoad(context.Background(), key, jsregistry.BuildOptions{
+	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{
 		Source:     []byte("function spin() { while (true) {} }\nfunction ok() { return 1; }"),
 		SourceHash: "h",
 	}); err != nil {
@@ -266,7 +266,7 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	res, _, err := reg.Call(ctx, key, func(ctx context.Context, vm *jsengine.VM) error {
+	res, _, err := reg.Call(ctx, jsregistry.HookKey(key), func(ctx context.Context, vm *jsengine.VM) error {
 		_, err := vm.CallExport(ctx, "spin")
 		return err
 	})
@@ -279,10 +279,10 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 
 	// The module is closed; restart closes the dead VM without a panic and
 	// the rebuilt one runs.
-	if _, err := reg.RestartByKey(key, jsregistry.ReasonTimeout); err != nil {
+	if _, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonTimeout); err != nil {
 		t.Fatalf("RestartByKey: %v", err)
 	}
-	res, _, _ = reg.Call(context.Background(), key, func(ctx context.Context, vm *jsengine.VM) error {
+	res, _, _ = reg.Call(context.Background(), jsregistry.HookKey(key), func(ctx context.Context, vm *jsengine.VM) error {
 		_, err := vm.CallExport(ctx, "ok")
 		return err
 	})
@@ -293,11 +293,11 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 	// Dropping a dead VM must not panic either.
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel2()
-	_, _, _ = reg.Call(ctx2, key, func(ctx context.Context, vm *jsengine.VM) error {
+	_, _, _ = reg.Call(ctx2, jsregistry.HookKey(key), func(ctx context.Context, vm *jsengine.VM) error {
 		_, err := vm.CallExport(ctx, "spin")
 		return err
 	})
-	reg.Drop(key)
+	reg.Drop(jsregistry.HookKey(key))
 }
 
 // js-registry.R5
@@ -305,23 +305,23 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 func TestRegistry_GetOrLoad_RebuildsOnLimitsChange(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "lim"}
-	t.Cleanup(func() { reg.Drop(key) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 	src := []byte(`function ok(){return 1}`)
 	opts := jsregistry.BuildOptions{Source: src, SourceHash: "same", Limits: jsengine.Limits{MemoryMB: 16, TimeoutSeconds: 5}}
 
-	mi, _, err := reg.GetOrLoad(context.Background(), key, opts)
+	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
 
 	same := opts
 	same.Limits = jsengine.Limits{MemoryMB: 16, TimeoutSeconds: 5}
-	if mi2, restarted, _ := reg.GetOrLoad(context.Background(), key, same); restarted || mi2 != mi {
+	if mi2, restarted, _ := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), same); restarted || mi2 != mi {
 		t.Fatalf("identical limits must not rebuild (restarted=%v)", restarted)
 	}
 
 	opts.Limits.MemoryMB = 64
-	mi3, restarted, err := reg.GetOrLoad(context.Background(), key, opts)
+	mi3, restarted, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad changed limits: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestRegistry_GetOrLoad_RebuildsOnLimitsChange(t *testing.T) {
 func TestRegistry_RestartByKey_BuildHasDeadline(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "dl"}
-	t.Cleanup(func() { reg.Drop(key) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 	builds := 0
 	opts := jsregistry.BuildOptions{
 		Source:     []byte(`function ok(){return 1}`),
@@ -356,13 +356,13 @@ func TestRegistry_RestartByKey_BuildHasDeadline(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	}
-	mi, _, err := reg.GetOrLoad(context.Background(), key, opts)
+	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
 
 	done := make(chan error, 1)
-	go func() { _, err := reg.RestartByKey(key, jsregistry.ReasonManual); done <- err }()
+	go func() { _, err := reg.RestartByKey(jsregistry.HookKey(key), jsregistry.ReasonManual); done <- err }()
 	select {
 	case err := <-done:
 		if err == nil {
@@ -371,7 +371,7 @@ func TestRegistry_RestartByKey_BuildHasDeadline(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("RestartByKey did not return: rescue build has no deadline")
 	}
-	if cur, _ := reg.Get(key); cur != mi {
+	if cur, _ := reg.Get(jsregistry.HookKey(key)); cur != mi {
 		t.Error("failed rescue build must keep the old VM installed")
 	}
 }
@@ -395,7 +395,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	keyA := types.NamespacedName{Name: "conc-a"}
 	keyB := types.NamespacedName{Name: "conc-b"}
-	t.Cleanup(func() { reg.Drop(keyA); reg.Drop(keyB) })
+	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(keyA)); reg.Drop(jsregistry.HookKey(keyB)) })
 
 	var (
 		builds, maxBuilds atomic.Int32 // concurrent PostBuild runs for keyA (R7)
@@ -421,17 +421,17 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 			},
 		}
 	}
-	if _, _, err := reg.GetOrLoad(context.Background(), keyA, optsA(16)); err != nil {
+	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(keyA), optsA(16)); err != nil {
 		t.Fatalf("GetOrLoad A: %v", err)
 	}
-	if _, _, err := reg.GetOrLoad(context.Background(), keyB, jsregistry.BuildOptions{
+	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(keyB), jsregistry.BuildOptions{
 		Source: []byte(`function ping(){ return 1 }`), SourceHash: "b",
 	}); err != nil {
 		t.Fatalf("GetOrLoad B: %v", err)
 	}
 
 	call := func(key types.NamespacedName) error {
-		res, _, err := reg.Call(context.Background(), key, func(ctx context.Context, vm *jsengine.VM) error {
+		res, _, err := reg.Call(context.Background(), jsregistry.HookKey(key), func(ctx context.Context, vm *jsengine.VM) error {
 			c, _ := inCall.LoadOrStore(vm, new(atomic.Int32))
 			if c.(*atomic.Int32).Add(1) > 1 {
 				overlap.Add(1)
@@ -456,7 +456,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	bDone := make(chan struct{})
 	go func() {
 		defer close(bDone)
-		_, _, _ = reg.Call(context.Background(), keyB, func(ctx context.Context, vm *jsengine.VM) error {
+		_, _, _ = reg.Call(context.Background(), jsregistry.HookKey(keyB), func(ctx context.Context, vm *jsengine.VM) error {
 			close(entered)
 			<-release
 			return nil
@@ -480,7 +480,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	for range 2 {
 		wg.Go(func() {
 			for range restarts {
-				if _, err := reg.RestartByKey(keyA, jsregistry.ReasonManual); err != nil {
+				if _, err := reg.RestartByKey(jsregistry.HookKey(keyA), jsregistry.ReasonManual); err != nil {
 					errc <- fmt.Errorf("restart: %w", err)
 					return
 				}
@@ -489,7 +489,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	}
 	wg.Go(func() {
 		for i := range limitRebuilds {
-			if _, _, err := reg.GetOrLoad(context.Background(), keyA, optsA(int32(24+i))); err != nil {
+			if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(keyA), optsA(int32(24+i))); err != nil {
 				errc <- fmt.Errorf("getorload: %w", err)
 				return
 			}
@@ -499,7 +499,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	// on B must still complete.
 	wg.Go(func() {
 		for range 100 {
-			reg.Get(keyB)
+			reg.Get(jsregistry.HookKey(keyB))
 			reg.Len()
 		}
 	})
@@ -525,8 +525,8 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	}
 	wg2.Go(func() {
 		for range dropCycles {
-			reg.Drop(keyA)
-			if _, _, err := reg.GetOrLoad(context.Background(), keyA, optsA(16)); err != nil {
+			reg.Drop(jsregistry.HookKey(keyA))
+			if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(keyA), optsA(16)); err != nil {
 				errc <- fmt.Errorf("reload: %w", err)
 				return
 			}
@@ -534,7 +534,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	})
 	wg2.Go(func() {
 		for range restarts {
-			if _, err := reg.RestartByKey(keyA, jsregistry.ReasonManual); err != nil && !errors.Is(err, jsregistry.ErrUnknownKey) {
+			if _, err := reg.RestartByKey(jsregistry.HookKey(keyA), jsregistry.ReasonManual); err != nil && !errors.Is(err, jsregistry.ErrUnknownKey) {
 				errc <- fmt.Errorf("restart after drop: %w", err)
 				return
 			}
@@ -547,5 +547,32 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	}
 	if n := overlap.Load(); n != 0 {
 		t.Errorf("R8: %d overlapping calls on one VM", n)
+	}
+}
+
+// js-registry.R14
+func TestRegistry_SameNameInBothKindsCoexists(t *testing.T) {
+	reg := jsregistry.NewRegistry()
+	name := types.NamespacedName{Name: "foo"}
+	hook, adm := jsregistry.HookKey(name), jsregistry.AdmissionKey(name)
+	t.Cleanup(func() { reg.Drop(hook); reg.Drop(adm) })
+
+	miH, _, err := reg.GetOrLoad(context.Background(), hook, jsregistry.BuildOptions{Source: []byte(`globalThis.who = "hook"`), SourceHash: "h"})
+	if err != nil {
+		t.Fatalf("GetOrLoad hook: %v", err)
+	}
+	miA, _, err := reg.GetOrLoad(context.Background(), adm, jsregistry.BuildOptions{Source: []byte(`globalThis.who = "admission"`), SourceHash: "a"})
+	if err != nil {
+		t.Fatalf("GetOrLoad admission: %v", err)
+	}
+	if miH == miA || reg.Len() != 2 {
+		t.Fatalf("kinds share an entry: same=%v len=%d", miH == miA, reg.Len())
+	}
+	if got, _ := reg.Get(hook); got != miH {
+		t.Fatal("JSHook VM was replaced by the JSAdmission of the same name")
+	}
+	reg.Drop(adm)
+	if _, ok := reg.Get(hook); !ok {
+		t.Fatal("dropping the JSAdmission dropped the JSHook")
 	}
 }
