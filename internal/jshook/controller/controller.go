@@ -26,7 +26,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -81,22 +81,26 @@ type JSHookReconciler struct {
 	// Recorder publishes corev1.Event entries describing lifecycle moments
 	// (build/restart/dispatcher rescue/handle errors). Optional — nil-safe
 	// so unit tests that build the reconciler bare keep working. In
-	// production cmd/main.go injects mgr.GetEventRecorderFor(...).
-	Recorder record.EventRecorder
+	// production cmd/main.go injects mgr.GetEventRecorder(...).
+	Recorder events.EventRecorder
 }
+
+// eventAction is the action field every event carries; the events.k8s.io API
+// requires one, and the reason already names the moment.
+const eventAction = "Reconcile"
 
 // event records a corev1.Event about obj. Nil-safe: a Reconciler built
 // without a Recorder (the test default) silently no-ops.
 func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message string) {
 	if r.Recorder != nil {
-		r.Recorder.Event(obj, eventType, reason, message)
+		r.Recorder.Eventf(obj, nil, eventType, reason, eventAction, "%s", message)
 	}
 }
 
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // MVP: hooks can watch and mutate any resource. Phase 2 will narrow this
 // based on the bindings each hook actually declares (per-hook ServiceAccount).

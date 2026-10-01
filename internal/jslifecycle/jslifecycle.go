@@ -30,7 +30,7 @@ import (
 // accepts a nil emitter and silently no-ops.
 //
 // Reconcilers build the closure by binding a deepcopy of the resource to
-// record.EventRecorder.Event so the recorder has a stable target across
+// events.EventRecorder.Eventf so the recorder has a stable target across
 // reconciles. The (eventType, reason, message) tuple is forwarded verbatim;
 // message stability rules (see internal/conditions) are the caller's job.
 type EventEmitter func(eventType, reason, message string)
