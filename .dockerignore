@@ -9,3 +9,6 @@
 # Re-include Go module files
 !go.mod
 !go.sum
+
+# The embedded JS engine (go:embed in internal/jsengine, built by make engine-wasm)
+!internal/jsengine/engine.wasm

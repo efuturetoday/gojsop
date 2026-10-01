@@ -106,6 +106,36 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
+##@ Engine
+
+include internal/jsengine/glue/versions.env
+
+ENGINE_OS := $(shell uname -s | sed 's/Darwin/macos/;s/Linux/linux/')
+ENGINE_ARCH := $(shell uname -m | sed 's/aarch64/arm64/')
+WASI_SDK_DIR = $(LOCALBIN)/wasi-sdk-$(WASI_SDK_VERSION)
+QUICKJS_DIR = $(LOCALBIN)/quickjs-ng-$(QUICKJS_VERSION)
+BINARYEN_DIR = $(LOCALBIN)/binaryen-version_$(BINARYEN_VERSION)
+
+.PHONY: engine-wasm
+engine-wasm: ## Rebuild internal/jsengine/engine.wasm from glue.c with the pinned toolchain (internal/jsengine/glue/versions.env).
+	@set -e; mkdir -p "$(LOCALBIN)"; \
+	if [ ! -x "$(WASI_SDK_DIR)/bin/clang" ]; then \
+	  echo "Downloading wasi-sdk $(WASI_SDK_VERSION)"; \
+	  curl -fsSL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-$(WASI_SDK_VERSION)/wasi-sdk-$(WASI_SDK_VERSION).0-$(ENGINE_ARCH)-$(ENGINE_OS).tar.gz" | tar -xz -C "$(LOCALBIN)"; \
+	  mv "$(LOCALBIN)/wasi-sdk-$(WASI_SDK_VERSION).0-$(ENGINE_ARCH)-$(ENGINE_OS)" "$(WASI_SDK_DIR)"; \
+	fi; \
+	if [ ! -f "$(QUICKJS_DIR)/quickjs.c" ]; then \
+	  echo "Downloading quickjs-ng v$(QUICKJS_VERSION)"; \
+	  mkdir -p "$(QUICKJS_DIR)"; \
+	  curl -fsSL "https://github.com/quickjs-ng/quickjs/archive/refs/tags/v$(QUICKJS_VERSION).tar.gz" | tar -xz -C "$(QUICKJS_DIR)" --strip-components=1; \
+	fi; \
+	if [ ! -x "$(BINARYEN_DIR)/bin/wasm-opt" ]; then \
+	  echo "Downloading binaryen $(BINARYEN_VERSION)"; \
+	  case "$(ENGINE_ARCH)" in arm64) bin_arch=$(if $(filter linux,$(ENGINE_OS)),aarch64,arm64);; *) bin_arch=$(ENGINE_ARCH);; esac; \
+	  curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_$(BINARYEN_VERSION)/binaryen-version_$(BINARYEN_VERSION)-$$bin_arch-$(ENGINE_OS).tar.gz" | tar -xz -C "$(LOCALBIN)"; \
+	fi; \
+	WASI_SDK="$(WASI_SDK_DIR)" QUICKJS="$(QUICKJS_DIR)" WASM_OPT="$(BINARYEN_DIR)/bin/wasm-opt" internal/jsengine/glue/build.sh
+
 .PHONY: sdlc-check
 sdlc-check: ## Check .agents against the method of the SDLC library (github.com/efuturetoday/agentic-sdlc)
 	go run github.com/efuturetoday/agentic-sdlc/cmd/sdlc-check@v0.1.1
