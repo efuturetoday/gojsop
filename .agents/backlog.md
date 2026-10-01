@@ -319,12 +319,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`;
   `kubehost.FieldManager` calls itself a server-side-apply field manager
   (KUBE-1).
-- **GATE-25** `gate` CI cannot fetch the private module
-  `github.com/efuturetoday/agentic-sdlc` yet. `make sdlc-check` in
-  `lint.yml` needs `GOPRIVATE` plus a token with read access, set as a
-  repository secret once gojsop has a remote. Done when the lint job runs
-  the SDLC check green.
-
 ## UI: Operator UI
 
 - **UI-1** `decision` Operator web UI. scrippy had an Angular app (hook

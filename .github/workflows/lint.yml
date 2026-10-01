@@ -22,8 +22,18 @@ jobs:
         with:
           version: v2.7.2
 
+      - name: Give Go read access to the SDLC library
+        env:
+          SDLC_DEPLOY_KEY: ${{ secrets.SDLC_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SDLC_DEPLOY_KEY" > ~/.ssh/sdlc_deploy_key
+          chmod 600 ~/.ssh/sdlc_deploy_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          git config --global core.sshCommand "ssh -i ~/.ssh/sdlc_deploy_key -o IdentitiesOnly=yes"
+          git config --global url."git@github.com:efuturetoday/agentic-sdlc".insteadOf "https://github.com/efuturetoday/agentic-sdlc"
+
       - name: Check .agents against the SDLC method
         run: make sdlc-check
         env:
           GOPRIVATE: github.com/efuturetoday
-          # needs a token with read access to efuturetoday/agentic-sdlc (GATE-25)
