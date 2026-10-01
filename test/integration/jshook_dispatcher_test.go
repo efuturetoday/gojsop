@@ -52,7 +52,8 @@ function handle(c) { log.push(c[0]); }`
 		mkCM("sel-b", "other-ns", match)
 
 		reg := jsregistry.NewRegistry()
-		_, _, err := reg.GetOrLoad(ctx, key, jsregistry.BuildOptions{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}})
+		opts := jsregistry.BuildOptions{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}}
+		_, _, err := reg.GetOrLoad(ctx, key, opts)
 		Expect(err).NotTo(HaveOccurred())
 		dyn, err := dynamic.NewForConfig(cfg)
 		Expect(err).NotTo(HaveOccurred())

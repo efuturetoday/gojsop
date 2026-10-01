@@ -187,10 +187,11 @@ func objName(c call) string {
 	return ""
 }
 
-func objData(c call, key string) string {
+// dataV returns data.v of the object a call received.
+func dataV(c call) string {
 	o, _ := c["object"].(map[string]any)
 	d, _ := o["data"].(map[string]any)
-	s, _ := d[key].(string)
+	s, _ := d["v"].(string)
 	return s
 }
 
@@ -365,8 +366,8 @@ func TestDispatcher_BurstOfChangesFoldsIntoNewestObject(t *testing.T) {
 	if len(cs) != 3 {
 		t.Fatalf("want Synchronization + in-flight + one folded call, got %d: %v", len(cs), cs)
 	}
-	if objData(cs[2], "v") != "4" {
-		t.Fatalf("folded call carries v=%q, want newest 4", objData(cs[2], "v"))
+	if dataV(cs[2]) != "4" {
+		t.Fatalf("folded call carries v=%q, want newest 4", dataV(cs[2]))
 	}
 }
 
@@ -460,8 +461,8 @@ function handle(c) {
 	if len(cs) != 3 {
 		t.Fatalf("want 3 calls (sync, failed v=1, retry), got %d: %v", len(cs), cs)
 	}
-	if objData(cs[1], "v") != "1" || objData(cs[2], "v") != "2" {
-		t.Fatalf("retry carries v=%q after failed v=%q, want the fresher 2", objData(cs[2], "v"), objData(cs[1], "v"))
+	if dataV(cs[1]) != "1" || dataV(cs[2]) != "2" {
+		t.Fatalf("retry carries v=%q after failed v=%q, want the fresher 2", dataV(cs[2]), dataV(cs[1]))
 	}
 }
 
