@@ -18,7 +18,9 @@ explains areas, aspects, rule IDs, gates and open items.
 4. Go code and tests link to rules with comments such as `// js-execution.R4`
    (skill `sdlc-stack-go`).
 5. `make sdlc-check` and `make test lint` must pass.
-6. Write commit messages with the skill `caveman-commit`.
+6. Write commit messages with the skill `caveman-commit`. Commits carry no
+   AI co-author trailer, and the author email is
+   `12057167+efuturetoday@users.noreply.github.com`.
 7. The `golang-*` skills give general Go guidance. Where one contradicts an
    area or aspect of this repository, the area or aspect wins.
 
