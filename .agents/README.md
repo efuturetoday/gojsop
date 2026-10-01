@@ -20,8 +20,8 @@ Ways of doing things that both areas share.
 
 | Aspect | Covers |
 |---|---|
-| [js-execution](aspects/js-execution.md) | QuickJS on wazero, limits, cancellation, host APIs |
-| [js-registry](aspects/js-registry.md) | One VM per resource, `Registry.Call`, build and restart |
+| [js-execution](aspects/js-execution.md) | QuickJS on wazero, the `jsrun.Runner` port, limits, cancellation, host APIs |
+| [js-registry](aspects/js-registry.md) | One VM per resource behind `jsrun.Runner`, build and restart |
 | [js-sources](aspects/js-sources.md) | `spec.source`, loaders, source hash |
 | [kube-access](aspects/kube-access.md) | `kube.*` from JavaScript, RBAC |
 | [status-conditions](aspects/status-conditions.md) | CRD status, `Ready`, restart bookkeeping |

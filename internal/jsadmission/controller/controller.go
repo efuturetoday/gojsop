@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -39,10 +40,9 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsadmission"
-	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
-	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 	"github.com/o-haase/gojsop/internal/jssource"
 )
 
@@ -58,7 +58,7 @@ type JSAdmissionReconciler struct {
 	// Loader resolves spec.source to JS bytes (defaults to inline-only).
 	Loader *jssource.Chain
 	// Registry owns the per-policy persistent JS instances.
-	Registry *jsregistry.Registry
+	Runner jsrun.Runner
 	// KubeHost mints the host-function surface installed on every JSAdmission VM.
 	// ForAdmission returns a read-only binder — admission policies must not
 	// write to the cluster from the apiserver request path (sideEffects:
@@ -75,8 +75,8 @@ type JSAdmissionReconciler struct {
 	Recorder events.EventRecorder
 
 	// Backoff spaces the retries of a policy whose build failed. Zero fields
-	// use the jsregistry defaults. cmd/main.go sets it from the operator flags.
-	Backoff jsregistry.Backoff
+	// use the jsrun defaults. cmd/main.go sets it from the operator flags.
+	Backoff jsrun.Backoff
 }
 
 // eventAction is the action field every event carries; the events.k8s.io API
@@ -102,15 +102,15 @@ func (r *JSAdmissionReconciler) event(obj runtime.Object, eventType, reason, mes
 // (validate for validating, mutate for mutating). A missing entrypoint is
 // surfaced as a typed MissingExportError so the reconciler can map it to
 // the EntrypointMissing event reason without sniffing message strings.
-func admissionPostBuild(mutating bool) jsregistry.PostBuildHook {
+func admissionPostBuild(mutating bool) jsrun.PostBuildHook {
 	entry := "validate"
 	if mutating {
 		entry = "mutate"
 	}
-	return func(ctx context.Context, vm *jsengine.VM) (any, error) {
+	return func(ctx context.Context, s jsrun.Script) (any, error) {
 		_ = ctx
-		if !vm.HasExport(entry) {
-			return nil, &jsregistry.MissingExportError{Name: entry}
+		if !s.HasExport(entry) {
+			return nil, &jsrun.MissingExportError{Name: entry}
 		}
 		return nil, nil
 	}
@@ -132,7 +132,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if r.Registrar != nil {
 				r.Registrar.Remove(req.NamespacedName)
 			}
-			r.Registry.Drop(jsregistry.AdmissionKey(req.NamespacedName))
+			r.Runner.Drop(jsrun.AdmissionKey(req.NamespacedName))
 			log.Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
@@ -152,11 +152,11 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	lim := admissionLimitsFromSpec(pol.Spec.Limits)
 	mutating := pol.Spec.Type == "mutating"
 
-	var binder jsengine.HostBinder
+	var host jsrun.Host
 	if r.KubeHost != nil {
-		binder, err = r.KubeHost.ForAdmission(ctx, req.NamespacedName, "")
+		host, err = r.KubeHost.ForAdmission(ctx, req.NamespacedName, "")
 		if err != nil {
-			log.Error(err, "minting kube host binder")
+			log.Error(err, "minting kube host")
 			return r.failAdmission(ctx, &pol, conditions.EventBuildFailed,
 				"build failed: kube host",
 				fmt.Sprintf("kube host: %v", err))
@@ -167,24 +167,24 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// when it ends (SetupWithManager), so a reconcile never waits for it.
 	// js-registry.R15
 	// jsadmission.R18
-	st := r.Registry.Ensure(jsregistry.AdmissionKey(req.NamespacedName), jsregistry.BuildOptions{
+	st := r.Runner.Ensure(jsrun.AdmissionKey(req.NamespacedName), jsrun.Options{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
-		Binder:     binder,
+		Host:       host,
 		PostBuild:  admissionPostBuild(mutating),
 		Backoff:    r.Backoff,
 	})
 	switch st.Kind {
-	case jsregistry.StateBuilding:
+	case jsrun.StateBuilding:
 		log.V(1).Info("instance building")
 		return r.building(ctx, &pol)
-	case jsregistry.StateBroken:
+	case jsrun.StateBroken:
 		log.Error(st.Err, "instance build failed", "attempts", st.Attempts, "retryIn", st.RetryIn())
 		eventReason, eventMsg := conditions.ClassifyBuildError(st.Err)
 		return r.buildFailed(ctx, &pol, eventReason, eventMsg, st)
 	}
-	mi := st.VM
+	mi := st.Instance
 	restarted := instanceChanged(&pol, srcHash)
 	if restarted {
 		last := mi.LastRestart()
@@ -205,7 +205,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			// The restart builds in the background like any other build; the
 			// token is recorded now so the finished build does not restart
 			// again.
-			if err := r.Registry.RestartByKey(jsregistry.AdmissionKey(req.NamespacedName), jsregistry.ReasonManual); err != nil {
+			if err := r.Runner.Restart(jsrun.AdmissionKey(req.NamespacedName), jsrun.ReasonManual); err != nil {
 				log.Error(err, "manual restart")
 				return r.failAdmission(ctx, &pol, conditions.EventBuildFailed,
 					"build failed: manual restart",
@@ -213,7 +213,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 			log.Info("manual restart started", "token", token)
 			r.event(&pol, corev1.EventTypeNormal, conditions.EventRestarted,
-				fmt.Sprintf("restarted: %s (hash %s)", jsregistry.ReasonManual, srcHash[:12]))
+				fmt.Sprintf("restarted: %s (hash %s)", jsrun.ReasonManual, srcHash[:12]))
 			if pol.Status.Instance == nil {
 				pol.Status.Instance = &corev1alpha1.JSInstanceStatus{}
 			}
@@ -359,7 +359,7 @@ func (r *JSAdmissionReconciler) building(ctx context.Context, pol *corev1alpha1.
 // jsadmission.R18
 // status-conditions.R1
 // status-conditions.R2
-func (r *JSAdmissionReconciler) buildFailed(ctx context.Context, pol *corev1alpha1.JSAdmission, eventReason, eventMsg string, st jsregistry.State) (ctrl.Result, error) {
+func (r *JSAdmissionReconciler) buildFailed(ctx context.Context, pol *corev1alpha1.JSAdmission, eventReason, eventMsg string, st jsrun.State) (ctrl.Result, error) {
 	return r.failAdmissionAfter(ctx, pol, conditions.ReasonBuildFailed, eventReason, eventMsg,
 		fmt.Sprintf("instance: %v", st.Err), st.RetryIn())
 }
@@ -401,12 +401,12 @@ func (r *JSAdmissionReconciler) failAdmissionAfter(ctx context.Context, pol *cor
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
-// admissionLimitsFromSpec maps the CRD's optional Limits to jsengine.Limits.
-func admissionLimitsFromSpec(r *corev1alpha1.JSLimits) jsengine.Limits {
+// admissionLimitsFromSpec maps the CRD's optional Limits to jsrun.Limits.
+func admissionLimitsFromSpec(r *corev1alpha1.JSLimits) jsrun.Limits {
 	if r == nil {
-		return jsengine.Limits{}
+		return jsrun.Limits{}
 	}
-	return jsengine.Limits{MemoryMB: r.MemoryMB, TimeoutSeconds: r.TimeoutSeconds}
+	return jsrun.Limits{MemoryMB: r.MemoryMB, TimeoutSeconds: r.TimeoutSeconds}
 }
 
 func orInt32(v, def int32) int32 {
@@ -424,8 +424,8 @@ func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Loader == nil {
 		r.Loader = jssource.NewChain(jssource.InlineLoader{})
 	}
-	if r.Registry == nil {
-		r.Registry = jsregistry.NewRegistry()
+	if r.Runner == nil {
+		return errors.New("jsrun.Runner is required")
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSAdmission{}).
@@ -438,7 +438,7 @@ func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// changed sync outcome of the registrar.
 	ch := make(chan event.TypedGenericEvent[*corev1alpha1.JSAdmission], 64)
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		for key := range r.Registry.Watch(ctx, jsregistry.KindJSAdmission) {
+		for key := range r.Runner.Watch(ctx, jsrun.KindJSAdmission) {
 			pol := &corev1alpha1.JSAdmission{ObjectMeta: metav1.ObjectMeta{Name: key.Name.Name, Namespace: key.Name.Namespace}}
 			select {
 			case ch <- event.TypedGenericEvent[*corev1alpha1.JSAdmission]{Object: pol}:

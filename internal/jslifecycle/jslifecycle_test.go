@@ -11,6 +11,7 @@ import (
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // captureEmitter buffers (eventType, reason, message) tuples so tests can
@@ -22,15 +23,15 @@ func captureEmitter(buf int) (chan [3]string, EventEmitter) {
 	}
 }
 
-// loadInstance parks a real qjs VM in reg under key so RestartByKey has
+// loadInstance parks a real qjs VM in reg under key so Restart has
 // something to rebuild from cached BuildOptions.
 func loadInstance(t *testing.T, reg *jsregistry.Registry, key types.NamespacedName) {
 	t.Helper()
 	src := []byte(`function config(){return {configVersion:'v1'}} function handle(){}`)
-	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "h1"}); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Options{Source: src, SourceHash: "h1"}); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
-	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
+	t.Cleanup(func() { reg.Drop(jsrun.HookKey(key)) })
 }
 
 // js-registry.R2
@@ -41,8 +42,8 @@ func TestRescue_Success_EmitsRestarted(t *testing.T) {
 	loadInstance(t, reg, key)
 
 	events, emit := captureEmitter(2)
-	before, _ := reg.Get(jsregistry.HookKey(key))
-	if err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonPanic, emit); err != nil {
+	before, _ := reg.Get(jsrun.HookKey(key))
+	if err := Rescue(reg, jsrun.HookKey(key), jsrun.ReasonPanic, emit); err != nil {
 		t.Fatalf("Rescue: unexpected error: %v", err)
 	}
 	// Rescue does not wait for the rebuild; it ends with a fresh VM and the
@@ -53,10 +54,10 @@ func TestRescue_Success_EmitsRestarted(t *testing.T) {
 			t.Fatal("Rescue: the VM was not rebuilt")
 		}
 		time.Sleep(5 * time.Millisecond)
-		mi, _ = reg.Get(jsregistry.HookKey(key))
+		mi, _ = reg.Get(jsrun.HookKey(key))
 	}
-	if last := mi.LastRestart(); last.Reason != jsregistry.ReasonPanic {
-		t.Fatalf("Rescue: LastRestart.Reason=%q want %q", last.Reason, jsregistry.ReasonPanic)
+	if last := mi.LastRestart(); last.Reason != jsrun.ReasonPanic {
+		t.Fatalf("Rescue: LastRestart.Reason=%q want %q", last.Reason, jsrun.ReasonPanic)
 	}
 
 	select {
@@ -79,13 +80,13 @@ func TestRescue_Success_EmitsRestarted(t *testing.T) {
 // status-conditions.R4
 func TestRescue_Failure_EmitsRescueFailed(t *testing.T) {
 	reg := jsregistry.NewRegistry()
-	// Deliberately don't seed: RestartByKey on an unknown key returns an
+	// Deliberately don't seed: Restart on an unknown key returns an
 	// error, which is exactly the path we want to assert publishes
 	// RescueFailed (not Restarted).
 	key := types.NamespacedName{Namespace: "ns", Name: "ghost"}
 
 	events, emit := captureEmitter(2)
-	if err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonMemoryLimit, emit); err == nil {
+	if err := Rescue(reg, jsrun.HookKey(key), jsrun.ReasonMemoryLimit, emit); err == nil {
 		t.Fatal("Rescue on unknown key: want error, got nil")
 	}
 
@@ -112,7 +113,7 @@ func TestRescue_NilEmitter_NoOps(t *testing.T) {
 	key := types.NamespacedName{Namespace: "ns", Name: "noemit"}
 	loadInstance(t, reg, key)
 
-	if err := Rescue(reg, jsregistry.HookKey(key), jsregistry.ReasonManual, nil); err != nil {
+	if err := Rescue(reg, jsrun.HookKey(key), jsrun.ReasonManual, nil); err != nil {
 		t.Fatalf("Rescue with nil emitter must succeed: %v", err)
 	}
 }

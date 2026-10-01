@@ -29,10 +29,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## EXEC: JS execution
 
-- **EXEC-1** `debt` qjs imported outside `jsengine`.
-  `internal/jsadmission/handle.go:7` imports `fastschema/qjs`. Add a
-  `jsengine` helper that decodes the result into a Go struct, then drop the
-  import. Blocks GATE-2.
 - **EXEC-2** `bug` `kube.*` calls not bound by `timeoutSeconds`. `KubeHost`
   uses its own parent `h.Ctx` (`internal/jsengine/kubehost/kubehost.go:91-96`),
   not the per-call deadline. Not verified at runtime.
@@ -40,13 +36,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   benchmark never ran. Fallback if too slow: fork qjs for QuickJS interrupts.
 - **EXEC-4** `gap` JS runtime errors are one truncated string. `handle()` and
   `validate()` errors have no stack, line number or export name.
-
-- **EXEC-6** `debt` Dispatcher, admission server, controllers and `jslifecycle`
-  talk to `jsregistry.Registry` and `jsengine.VM` directly. Introduce the port
-  `jsrun.Runner` (ensure, invoke by key, export and input, restart, drop,
-  watch), make the registry its first adapter, and gate the import boundary
-  (GATE-2). The port must also fit an engine that prepares once and invokes
-  statelessly (spike `spike/quickjs-wasm`).
 
 ## REG: JS registry and restarts
 
@@ -240,11 +229,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 ## GATE: Gates and test infrastructure
 
 - **GATE-1** Add `make gates`: one target that runs all gates, identical in CI.
-- **GATE-2** Import and access boundaries via golangci `depguard` or an arch
-  test: no `fastschema/qjs` or `wazero` outside `internal/jsengine/**`;
-  `jsengine` used only by `jsregistry`, `jshook`, `jsadmission`; `jsregistry`
-  does not import `jssource`; `ManagedVM.VM` and `ManagedVM.CallMu` are not
-  touched outside `jsregistry` (needs a `go/analysis` check). Blocked by EXEC-1.
 - **GATE-4** `TestRegistry_Call_*`: outcomes OK, panic, cancelled, OOM, error,
   unknown key. No test references `Registry.Call` today.
 - **GATE-5** Test in `internal/jsengine`: `for(;;){}` with a 100 ms deadline

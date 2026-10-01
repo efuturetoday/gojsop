@@ -86,10 +86,10 @@ var _ = Describe("JSHook Controller", func() {
 		It("should reconcile and write resolved bindings into status", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &jshookctrl.JSHookReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Loader:   jssource.NewChain(jssource.InlineLoader{}),
-				Registry: jsregistry.NewRegistry(),
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Loader: jssource.NewChain(jssource.InlineLoader{}),
+				Runner: jsregistry.NewRegistry(),
 			}
 
 			// The first reconcile only starts the build and reports it
@@ -128,11 +128,12 @@ var _ = Describe("JSHook Controller", func() {
 			})
 
 			recorder := events.NewFakeRecorder(10)
+			reg := jsregistry.NewRegistry()
 			reconciler := &jshookctrl.JSHookReconciler{
 				Client:   k8sClient,
 				Scheme:   k8sClient.Scheme(),
 				Loader:   jssource.NewChain(jssource.InlineLoader{}),
-				Registry: jsregistry.NewRegistry(),
+				Runner:   reg,
 				Recorder: recorder,
 			}
 			// jshook.R18: while the build runs the hook is Ready=False/Building.
@@ -159,7 +160,7 @@ var _ = Describe("JSHook Controller", func() {
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Message).To(ContainSubstring("missing required export: " + missing + "()"))
 			Expect(recorder.Events).To(Receive(ContainSubstring(conditions.EventEntrypointMissing)))
-			Expect(reconciler.Registry.Len()).To(BeZero())
+			Expect(reg.Len()).To(BeZero())
 		},
 		Entry("no handle", "no-handle-hook", `function config() { return {}; }`, "handle"),
 		Entry("no config", "no-config-hook", `function handle() {}`, "config"),

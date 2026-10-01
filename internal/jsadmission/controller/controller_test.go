@@ -19,6 +19,7 @@ import (
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsadmission"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 	"github.com/o-haase/gojsop/internal/jssource"
 )
 
@@ -52,7 +53,7 @@ func TestReconcile_RegistrarSyncFailure_ShowsReadyFalse(t *testing.T) {
 		Client:    c,
 		Scheme:    scheme,
 		Loader:    jssource.NewChain(jssource.InlineLoader{}),
-		Registry:  jsregistry.NewRegistry(),
+		Runner:    jsregistry.NewRegistry(),
 		Registrar: reg,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}
@@ -61,7 +62,7 @@ func TestReconcile_RegistrarSyncFailure_ShowsReadyFalse(t *testing.T) {
 	// seconds under -race on a slow CI runner.
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		_, built := r.Registry.Get(jsregistry.AdmissionKey(req.NamespacedName))
+		_, built := r.Runner.Instance(jsrun.AdmissionKey(req.NamespacedName))
 		if _, err := r.Reconcile(ctx, req); err != nil {
 			t.Fatal(err)
 		}
@@ -118,14 +119,14 @@ func TestReconcile_BuildStates_ShowBuildingThenBuildFailed(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pol).WithStatusSubresource(pol).Build()
 	r := &JSAdmissionReconciler{
-		Client:   c,
-		Scheme:   scheme,
-		Loader:   jssource.NewChain(jssource.InlineLoader{}),
-		Registry: jsregistry.NewRegistry(),
-		Backoff:  jsregistry.Backoff{Base: time.Hour, Max: time.Hour},
+		Client:  c,
+		Scheme:  scheme,
+		Loader:  jssource.NewChain(jssource.InlineLoader{}),
+		Runner:  jsregistry.NewRegistry(),
+		Backoff: jsrun.Backoff{Base: time.Hour, Max: time.Hour},
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "hang"}}
-	t.Cleanup(func() { r.Registry.Drop(jsregistry.AdmissionKey(req.NamespacedName)) })
+	t.Cleanup(func() { r.Runner.Drop(jsrun.AdmissionKey(req.NamespacedName)) })
 	ready := func() *metav1.Condition {
 		var got corev1alpha1.JSAdmission
 		if err := c.Get(t.Context(), req.NamespacedName, &got); err != nil {

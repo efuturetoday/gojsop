@@ -132,3 +132,29 @@ func TestVM_SequentialCalls_NoContextRace(t *testing.T) {
 		cancel()
 	}
 }
+
+func TestInvoke_DecodesJSONAndLeavesOutOnUndefined(t *testing.T) {
+	inst, err := New(Limits{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(inst.Close)
+	if err := inst.LoadModule(context.Background(), "inv.js", `
+		function echo(x) { return { got: x.n + 1 }; }
+		function nothing() {}
+	`); err != nil {
+		t.Fatalf("LoadModule: %v", err)
+	}
+
+	var out struct{ Got int }
+	if err := inst.Invoke(context.Background(), "echo", map[string]int{"n": 1}, &out); err != nil || out.Got != 2 {
+		t.Fatalf("echo: out=%+v err=%v, want Got=2", out, err)
+	}
+	out.Got = 7
+	if err := inst.Invoke(context.Background(), "nothing", nil, &out); err != nil || out.Got != 7 {
+		t.Fatalf("undefined result: out=%+v err=%v, want out untouched", out, err)
+	}
+	if err := inst.Invoke(context.Background(), "missing", nil, nil); err == nil {
+		t.Fatal("expected an error for a missing export")
+	}
+}

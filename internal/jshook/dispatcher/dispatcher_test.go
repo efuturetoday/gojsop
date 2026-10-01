@@ -26,6 +26,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 var cmGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
@@ -89,9 +90,9 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 		}))
 		return nil
 	})
-	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsregistry.HookKey(e.key), jsregistry.BuildOptions{
-		Source: []byte(src), SourceHash: "h", Limits: lim, Binder: binder,
-		PostBuild: func(ctx context.Context, _ *jsengine.VM) (any, error) {
+	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsrun.HookKey(e.key), jsrun.Options{
+		Source: []byte(src), SourceHash: "h", Limits: lim, Host: binder,
+		PostBuild: func(ctx context.Context, _ jsrun.Script) (any, error) {
 			if gate := e.hold.Load(); gate != nil {
 				select {
 				case <-*gate:
@@ -107,7 +108,7 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 	e.d = dispatcher.New(e.dyn, fixedMapper{}, e.reg)
 	t.Cleanup(func() {
 		e.d.Drop(e.key)
-		e.reg.Drop(jsregistry.HookKey(e.key))
+		e.reg.Drop(jsrun.HookKey(e.key))
 	})
 	return e
 }
@@ -153,7 +154,7 @@ func (e *env) calls() []call {
 	var out string
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		_, _, err := e.reg.Call(context.Background(), jsregistry.HookKey(e.key), func(ctx context.Context, vm *jsengine.VM) error {
+		_, _, err := e.reg.Call(context.Background(), jsrun.HookKey(e.key), func(ctx context.Context, vm *jsengine.VM) error {
 			var err error
 			out, err = vm.Eval(ctx, "log.js", `JSON.stringify(globalThis.log || [])`)
 			return err
@@ -162,7 +163,7 @@ func (e *env) calls() []call {
 			break
 		}
 		// A rescue rebuilds in the background; the key holds no VM meanwhile.
-		if !errors.Is(err, jsregistry.ErrVMUnavailable) || time.Now().After(deadline) {
+		if !errors.Is(err, jsrun.ErrVMUnavailable) || time.Now().After(deadline) {
 			e.t.Fatalf("read log: %v", err)
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -374,7 +375,7 @@ func TestDispatcher_BurstOfChangesFoldsIntoNewestObject(t *testing.T) {
 
 	// Hold the VM so the worker blocks inside its next call; later changes
 	// pile up in the queue meanwhile.
-	mi, _ := e.reg.Get(jsregistry.HookKey(e.key))
+	mi, _ := e.reg.Get(jsrun.HookKey(e.key))
 	mi.CallMu.Lock()
 	e.update(newCM("a", "uid-a", "1")) // goes in flight
 	time.Sleep(200 * time.Millisecond)
@@ -406,7 +407,7 @@ function handle(c) {
   if (globalThis.fails-- > 0) { throw new Error("boom"); }
 }`
 	e := newEnv(t, src, jsengine.Limits{})
-	before, _ := e.reg.Get(jsregistry.HookKey(e.key))
+	before, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(jshook.KubernetesBinding{})
 
 	e.waitCalls(3) // two failures and the success
@@ -419,7 +420,7 @@ function handle(c) {
 			t.Fatalf("a thrown error must not restart the VM: %v", e.emitted())
 		}
 	}
-	after, _ := e.reg.Get(jsregistry.HookKey(e.key))
+	after, _ := e.reg.Get(jsrun.HookKey(e.key))
 	if after != before || len(after.History) != 0 {
 		t.Fatalf("VM was replaced after a thrown error (history %v)", after.History)
 	}
@@ -440,18 +441,18 @@ function handle(c) {
 }`
 	e := newEnv(t, src, jsengine.Limits{MemoryMB: 1})
 	e.ooms.Store(1)
-	first, _ := e.reg.Get(jsregistry.HookKey(e.key))
+	first, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(jshook.KubernetesBinding{})
 
 	e.waitEmitted(conditions.EventRestarted, 1)
-	if ev := e.emitted()[0]; ev.Message != "restarted: "+string(jsregistry.ReasonMemoryLimit) {
+	if ev := e.emitted()[0]; ev.Message != "restarted: "+string(jsrun.ReasonMemoryLimit) {
 		t.Fatalf("event %v, want restarted: memory-limit", ev)
 	}
 	cs := e.waitCalls(1)
 	if cs[0]["type"] != bcSynchronization {
 		t.Fatalf("retried context %v", cs[0])
 	}
-	if now, _ := e.reg.Get(jsregistry.HookKey(e.key)); now == first {
+	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now == first {
 		t.Fatal("VM was not replaced")
 	}
 }
@@ -515,7 +516,7 @@ func TestDispatcher_Timeout_CancelsWarnsAndRestartsVM(t *testing.T) {
 globalThis.log = [];
 function handle(c) { enter(); while (true) {} }`
 	e := newEnv(t, src, jsengine.Limits{TimeoutSeconds: 1})
-	first, _ := e.reg.Get(jsregistry.HookKey(e.key))
+	first, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(jshook.KubernetesBinding{})
 
 	e.waitEmitted(conditions.EventHandleTimeout, 1)
@@ -524,11 +525,11 @@ function handle(c) { enter(); while (true) {} }`
 		if ev.Reason == conditions.EventHandleTimeout && ev.Type != corev1.EventTypeWarning {
 			t.Fatalf("event %v is not a Warning", ev)
 		}
-		if ev.Reason == conditions.EventRestarted && ev.Message != "restarted: "+string(jsregistry.ReasonTimeout) {
+		if ev.Reason == conditions.EventRestarted && ev.Message != "restarted: "+string(jsrun.ReasonTimeout) {
 			t.Fatalf("event %v, want restarted: timeout (cancelled, not panic)", ev)
 		}
 	}
-	if now, _ := e.reg.Get(jsregistry.HookKey(e.key)); now == first {
+	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now == first {
 		t.Fatal("VM was not replaced after the timeout")
 	}
 	// The retried event reaches the rebuilt VM.
@@ -573,27 +574,27 @@ globalThis.log = [];
 function handle(c) { log.push(c[0]); }
 function spin() { while (true) {} }`
 	e := newEnv(t, src, jsengine.Limits{})
-	first, _ := e.reg.Get(jsregistry.HookKey(e.key))
+	first, _ := e.reg.Get(jsrun.HookKey(e.key))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	res, _, err := e.reg.Call(ctx, jsregistry.HookKey(e.key), func(ctx context.Context, vm *jsengine.VM) error {
+	res, _, err := e.reg.Call(ctx, jsrun.HookKey(e.key), func(ctx context.Context, vm *jsengine.VM) error {
 		_, err := vm.CallExport(ctx, "spin")
 		return err
 	})
-	if err != nil || res.Outcome != jsregistry.OutcomeCancelled {
+	if err != nil || res.Outcome != jsrun.OutcomeCancelled {
 		t.Fatalf("killing call: outcome %v err %v, want cancelled", res.Outcome, err)
 	}
 	e.subscribe(jshook.KubernetesBinding{})
 
 	e.waitEmitted(conditions.EventRestarted, 1)
-	if ev := e.emitted()[0]; ev.Message != "restarted: "+string(jsregistry.ReasonPanic) {
+	if ev := e.emitted()[0]; ev.Message != "restarted: "+string(jsrun.ReasonPanic) {
 		t.Fatalf("event %v, want restarted: panic", ev)
 	}
 	cs := e.waitCalls(1)
 	if cs[0]["type"] != bcSynchronization {
 		t.Fatalf("retried context %v", cs[0])
 	}
-	if now, _ := e.reg.Get(jsregistry.HookKey(e.key)); now == first {
+	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now == first {
 		t.Fatal("VM was not replaced")
 	}
 }
@@ -681,10 +682,10 @@ function handle(c) { enter(); log.push(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
 	gate := make(chan struct{})
 	e.hold.Store(&gate)
-	if err := e.reg.RestartByKey(jsregistry.HookKey(e.key), jsregistry.ReasonManual); err != nil {
+	if err := e.reg.Restart(jsrun.HookKey(e.key), jsrun.ReasonManual); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := e.reg.Get(jsregistry.HookKey(e.key)); ok {
+	if _, ok := e.reg.Get(jsrun.HookKey(e.key)); ok {
 		t.Fatal("a restarting hook must hold no VM")
 	}
 	e.subscribe(jshook.KubernetesBinding{})

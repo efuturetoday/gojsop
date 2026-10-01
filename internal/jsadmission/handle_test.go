@@ -5,38 +5,42 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/o-haase/gojsop/internal/jsadmission"
-	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
-func newVMWithSource(t *testing.T, src string) *jsengine.VM {
+// loadPolicy loads src as the policy of a fresh key in a real registry and
+// returns the Runner and the key.
+func loadPolicy(t *testing.T, src string) (jsrun.Runner, jsrun.Key) {
 	t.Helper()
-	inst, err := jsengine.New(jsengine.Limits{})
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	reg := jsregistry.NewRegistry()
+	key := jsrun.AdmissionKey(types.NamespacedName{Name: "policy"})
+	t.Cleanup(func() { reg.Drop(key) })
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Options{Source: []byte(src), SourceHash: "h"}); err != nil {
+		t.Fatalf("load policy: %v", err)
 	}
-	t.Cleanup(inst.Close)
-	if err := inst.LoadModule(context.Background(), "policy.js", src); err != nil {
-		t.Fatalf("LoadModule: %v", err)
-	}
-	return inst
+	return reg, key
 }
 
 // jsadmission.R2
 func TestHandle_Validate_Allow(t *testing.T) {
-	inst := newVMWithSource(t, `
+	rt, key := loadPolicy(t, `
 		function validate(req) {
 			if (req.operation !== "CREATE") throw new Error("unexpected op");
 			return { allowed: true };
 		}
 	`)
-	res, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{
+	res, hres, err := jsadmission.Handle(context.Background(), rt, key, &jsadmission.AdmissionRequest{
 		UID:       "abc",
 		Operation: "CREATE",
 		Object:    map[string]any{"kind": "Pod"},
 	}, false)
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
+	if err != nil || hres.Err != nil {
+		t.Fatalf("Handle: %v, %v", err, hres.Err)
 	}
 	if !res.Allowed {
 		t.Fatal("expected allowed=true")
@@ -45,14 +49,14 @@ func TestHandle_Validate_Allow(t *testing.T) {
 
 // jsadmission.R5
 func TestHandle_Validate_Deny(t *testing.T) {
-	inst := newVMWithSource(t, `
+	rt, key := loadPolicy(t, `
 		function validate(req) {
 			return { allowed: false, message: "no", code: 403, warnings: ["w1"] };
 		}
 	`)
-	res, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{}, false)
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
+	res, hres, err := jsadmission.Handle(context.Background(), rt, key, &jsadmission.AdmissionRequest{}, false)
+	if err != nil || hres.Err != nil {
+		t.Fatalf("Handle: %v, %v", err, hres.Err)
 	}
 	if res.Allowed {
 		t.Fatal("expected allowed=false")
@@ -66,7 +70,7 @@ func TestHandle_Validate_Deny(t *testing.T) {
 }
 
 func TestHandle_Mutate_AddLabel(t *testing.T) {
-	inst := newVMWithSource(t, `
+	rt, key := loadPolicy(t, `
 		function mutate(req) {
 			const obj = req.object;
 			obj.metadata = obj.metadata || {};
@@ -75,13 +79,13 @@ func TestHandle_Mutate_AddLabel(t *testing.T) {
 			return { allowed: true, modifiedObject: obj };
 		}
 	`)
-	res, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{
+	res, hres, err := jsadmission.Handle(context.Background(), rt, key, &jsadmission.AdmissionRequest{
 		Object: map[string]any{
 			"metadata": map[string]any{"name": "p"},
 		},
 	}, true)
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
+	if err != nil || hres.Err != nil {
+		t.Fatalf("Handle: %v, %v", err, hres.Err)
 	}
 	if !res.Allowed {
 		t.Fatal("expected allowed=true")
@@ -95,23 +99,29 @@ func TestHandle_Mutate_AddLabel(t *testing.T) {
 
 // jsadmission.R2
 func TestHandle_MissingExport(t *testing.T) {
-	inst := newVMWithSource(t, `function validate(req) { return {allowed:true}; }`)
-	_, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{}, true)
-	if err == nil {
+	rt, key := loadPolicy(t, `function validate(req) { return {allowed:true}; }`)
+	_, hres, err := jsadmission.Handle(context.Background(), rt, key, &jsadmission.AdmissionRequest{}, true)
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if hres.Err == nil {
 		t.Fatal("expected error when mutate() is missing")
 	}
-	if !strings.Contains(err.Error(), "mutate") {
-		t.Fatalf("error should mention missing mutate(): %v", err)
+	if !strings.Contains(hres.Err.Error(), "mutate") {
+		t.Fatalf("error should mention missing mutate(): %v", hres.Err)
 	}
 }
 
 func TestHandle_ThrowsSurface(t *testing.T) {
-	inst := newVMWithSource(t, `function validate(req) { throw new Error("boom"); }`)
-	_, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{}, false)
-	if err == nil {
+	rt, key := loadPolicy(t, `function validate(req) { throw new Error("boom"); }`)
+	_, hres, err := jsadmission.Handle(context.Background(), rt, key, &jsadmission.AdmissionRequest{}, false)
+	if err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if hres.Err == nil {
 		t.Fatal("expected error from JS throw")
 	}
-	if !strings.Contains(err.Error(), "boom") {
-		t.Fatalf("error should propagate JS message: %v", err)
+	if !strings.Contains(hres.Err.Error(), "boom") {
+		t.Fatalf("error should propagate JS message: %v", hres.Err)
 	}
 }

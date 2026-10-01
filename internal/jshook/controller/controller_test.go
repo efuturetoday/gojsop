@@ -18,6 +18,7 @@ import (
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
+	"github.com/o-haase/gojsop/internal/jsrun"
 	"github.com/o-haase/gojsop/internal/jssource"
 )
 
@@ -35,23 +36,23 @@ func TestReadConfig_PostBuildRejectsMissingExports(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := jsregistry.NewRegistry()
 			key := types.NamespacedName{Name: "h"}
-			t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
+			t.Cleanup(func() { reg.Drop(jsrun.HookKey(key)) })
 
-			_, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{
+			_, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Options{
 				Source: []byte(tc.src), SourceHash: "x", PostBuild: readConfig,
 			})
-			var miss *jsregistry.MissingExportError
+			var miss *jsrun.MissingExportError
 			if !errors.As(err, &miss) || miss.Name != tc.missing {
 				t.Fatalf("GetOrLoad error = %v, want MissingExportError for %q", err, tc.missing)
 			}
-			if _, ok := reg.Get(jsregistry.HookKey(key)); ok {
+			if _, ok := reg.Get(jsrun.HookKey(key)); ok {
 				t.Fatal("a hook that failed to build must not be registered")
 			}
 		})
 	}
 }
 
-func newTestReconciler(t *testing.T, backoff jsregistry.Backoff, hooks ...*corev1alpha1.JSHook) (*JSHookReconciler, client.Client) {
+func newTestReconciler(t *testing.T, backoff jsrun.Backoff, hooks ...*corev1alpha1.JSHook) (*JSHookReconciler, client.Client) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1alpha1.AddToScheme(scheme); err != nil {
@@ -63,11 +64,11 @@ func newTestReconciler(t *testing.T, backoff jsregistry.Backoff, hooks ...*corev
 	}
 	c := b.Build()
 	return &JSHookReconciler{
-		Client:   c,
-		Scheme:   scheme,
-		Loader:   jssource.NewChain(jssource.InlineLoader{}),
-		Registry: jsregistry.NewRegistry(),
-		Backoff:  backoff,
+		Client:  c,
+		Scheme:  scheme,
+		Loader:  jssource.NewChain(jssource.InlineLoader{}),
+		Runner:  jsregistry.NewRegistry(),
+		Backoff: backoff,
 	}, c
 }
 
@@ -118,11 +119,11 @@ func reconcileUntil(t *testing.T, r *JSHookReconciler, c client.Client, name, re
 // status-conditions.R7
 func TestReconcile_HangingBuildDoesNotBlockOtherHook(t *testing.T) {
 	good := `function config() { return {}; } function handle() {}`
-	r, c := newTestReconciler(t, jsregistry.Backoff{},
+	r, c := newTestReconciler(t, jsrun.Backoff{},
 		testHook("hang", `while(true){}`, 1), testHook("good", good, 0))
 	t.Cleanup(func() {
-		r.Registry.Drop(jsregistry.HookKey(types.NamespacedName{Name: "hang"}))
-		r.Registry.Drop(jsregistry.HookKey(types.NamespacedName{Name: "good"}))
+		r.Runner.Drop(jsrun.HookKey(types.NamespacedName{Name: "hang"}))
+		r.Runner.Drop(jsrun.HookKey(types.NamespacedName{Name: "good"}))
 	})
 
 	start := time.Now()
@@ -155,10 +156,10 @@ func TestReconcile_HangingBuildDoesNotBlockOtherHook(t *testing.T) {
 // js-registry.R17
 // status-conditions.R7
 func TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce(t *testing.T) {
-	backoff := jsregistry.Backoff{Base: time.Hour, Max: 2 * time.Hour}
+	backoff := jsrun.Backoff{Base: time.Hour, Max: 2 * time.Hour}
 	r, c := newTestReconciler(t, backoff, testHook("bad", `throw new Error("boom")`, 0))
 	key := types.NamespacedName{Name: "bad"}
-	t.Cleanup(func() { r.Registry.Drop(jsregistry.HookKey(key)) })
+	t.Cleanup(func() { r.Runner.Drop(jsrun.HookKey(key)) })
 
 	res, cond := reconcileUntil(t, r, c, "bad", conditions.ReasonBuildFailed)
 	if cond.Status != metav1.ConditionFalse {
@@ -200,9 +201,9 @@ func TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce(t *testing.
 // js-registry.R4
 func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
 	hook := testHook("manual", `function config() { return {}; } function handle() {}`, 0)
-	r, c := newTestReconciler(t, jsregistry.Backoff{}, hook)
+	r, c := newTestReconciler(t, jsrun.Backoff{}, hook)
 	key := types.NamespacedName{Name: "manual"}
-	t.Cleanup(func() { r.Registry.Drop(jsregistry.HookKey(key)) })
+	t.Cleanup(func() { r.Runner.Drop(jsrun.HookKey(key)) })
 	reconcileUntil(t, r, c, "manual", conditions.ReasonReconciled)
 
 	var h corev1alpha1.JSHook
@@ -225,8 +226,8 @@ func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mi, _ := r.Registry.Get(jsregistry.HookKey(key))
-	if got := mi.RestartsByReason[jsregistry.ReasonManual]; got != 1 {
+	mi, _ := r.Runner.Instance(jsrun.HookKey(key))
+	if got := mi.RestartsByReason[jsrun.ReasonManual]; got != 1 {
 		t.Fatalf("manual restarts = %d, want 1", got)
 	}
 	if cond := readyCondition(t, c, "manual"); cond.Reason != conditions.ReasonReconciled {

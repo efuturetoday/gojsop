@@ -36,10 +36,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
-	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // EventEmitter is the shared lifecycle-event callback. Aliased from
@@ -66,7 +65,7 @@ type eventKey struct {
 type Dispatcher struct {
 	dyn    dynamic.Interface
 	mapper RESTMapper
-	reg    *jsregistry.Registry
+	reg    jsrun.Runner
 
 	mu       sync.Mutex // guards subs and keyLocks only; never held across slow work
 	subs     map[types.NamespacedName]*subscription
@@ -87,10 +86,10 @@ type RESTMapping struct {
 
 // New creates an empty Dispatcher. Pass the cluster's dynamic client, a
 // RESTMapper (controller-runtime's mgr.GetRESTMapper() can be wrapped to fit),
-// and the Registry that owns per-hook persistent JS instances. The registry
+// and the Runner that owns per-hook persistent JS instances. The runner
 // is required so that worker rescue paths (memory/panic/timeout) can rebuild
 // the instance and the next call sees the new one transparently.
-func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsregistry.Registry) *Dispatcher {
+func New(dyn dynamic.Interface, mapper RESTMapper, reg jsrun.Runner) *Dispatcher {
 	return &Dispatcher{
 		dyn:      dyn,
 		mapper:   mapper,
@@ -101,7 +100,7 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsregistry.Registry) *Di
 }
 
 // Subscribe (re)wires informers for hook `key`. The worker resolves the live
-// instance via Registry on every dispatch. cfg drives which informers start.
+// instance via the Runner on every dispatch. cfg drives which informers start.
 // emit (optional) publishes lifecycle events; pass nil in tests.
 //
 // If a subscription already exists for key, it is torn down first.
@@ -114,7 +113,7 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsregistry.Registry) *Di
 // jshook.R17
 func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, cfg *jshook.Config, emit EventEmitter) error {
 	if d.reg == nil {
-		return fmt.Errorf("dispatcher: Registry is nil — Subscribe needs the registry to resolve live instances")
+		return fmt.Errorf("dispatcher: Runner is nil — Subscribe needs the runner to resolve live instances")
 	}
 
 	kl := d.keyLock(key)
@@ -225,7 +224,7 @@ func (d *Dispatcher) Drop(key types.NamespacedName) {
 // freshest snapshot — which is what hook authors expect.
 type subscription struct {
 	key    types.NamespacedName
-	reg    *jsregistry.Registry
+	reg    jsrun.Runner
 	queue  workqueue.TypedRateLimitingInterface[eventKey]
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -467,7 +466,7 @@ func (s *subscription) runWorker(ctx context.Context) {
 
 // handleEvent runs one BindingContext through the live VM and dispatches on
 // the outcome. The locking + recover + OOM/cancel classification lives in
-// jsregistry.Registry.Call; the dispatcher only owns the policy table:
+// jsrun.Runner.Invoke; the dispatcher only owns the policy table:
 //
 //   - panic / OOM / cancelled (timeout) → rescue + requeue
 //   - other error → log + emit Warning + requeue
@@ -480,26 +479,21 @@ func (s *subscription) runWorker(ctx context.Context) {
 // jshook.R11
 // jshook.R12
 func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
-	mi, ok := s.reg.Get(jsregistry.HookKey(s.key))
+	inst, ok := s.reg.Instance(jsrun.HookKey(s.key))
 	if !ok {
 		s.noVM(logger, qkey, bc)
 		return
 	}
 
-	budget := time.Duration(mi.VM.Limits().TimeoutSeconds) * time.Second
+	budget := time.Duration(inst.Limits.TimeoutSeconds) * time.Second
 	callCtx, cancel := contextWithOptionalTimeout(parent, budget)
 	defer cancel()
 
-	var out string
-	res, _, err := s.reg.Call(callCtx, jsregistry.HookKey(s.key), func(ctx context.Context, vm *jsengine.VM) error {
-		var herr error
-		out, herr = jshook.Handle(ctx, vm, []jshook.BindingContext{bc})
-		return herr
-	})
+	out, res, err := jshook.Handle(callCtx, s.reg, jsrun.HookKey(s.key), []jshook.BindingContext{bc})
 	if err != nil {
 		// ErrVMUnavailable (rescued meanwhile) retries; ErrUnknownKey: the VM
 		// was dropped between Get and Call (race with reconciler delete).
-		if errors.Is(err, jsregistry.ErrVMUnavailable) {
+		if errors.Is(err, jsrun.ErrVMUnavailable) {
 			s.noVM(logger, qkey, bc)
 			return
 		}
@@ -509,20 +503,20 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 	}
 
 	switch res.Outcome {
-	case jsregistry.OutcomePanic:
+	case jsrun.OutcomePanic:
 		logger.Error(fmt.Errorf("panic in handle(): %v", res.Panic),
 			"handle() panicked — restarting instance",
 			"binding", bc.Binding, "event", bc.WatchEvent, "stack", string(debug.Stack()))
-		s.rescue(logger, jsregistry.ReasonPanic)
+		s.rescue(logger, jsrun.ReasonPanic)
 		s.requeue(qkey, bc)
 
-	case jsregistry.OutcomeMemoryLimit:
+	case jsrun.OutcomeMemoryLimit:
 		logger.Error(res.Err, "handle() hit memory limit — restarting instance",
 			"binding", bc.Binding, "event", bc.WatchEvent)
-		s.rescue(logger, jsregistry.ReasonMemoryLimit)
+		s.rescue(logger, jsrun.ReasonMemoryLimit)
 		s.requeue(qkey, bc)
 
-	case jsregistry.OutcomeCancelled:
+	case jsrun.OutcomeCancelled:
 		// The call's context ended and wazero closed the module, so this VM
 		// is dead whatever ended the call: rebuild it at once. Only the
 		// per-call deadline is a timeout of the hook and earns a Warning; a
@@ -533,10 +527,10 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		}
 		logger.Info("handle() cancelled — restarting instance",
 			"binding", bc.Binding, "event", bc.WatchEvent, "elapsed", res.Duration)
-		s.rescue(logger, jsregistry.ReasonTimeout)
+		s.rescue(logger, jsrun.ReasonTimeout)
 		s.requeue(qkey, bc)
 
-	case jsregistry.OutcomeError:
+	case jsrun.OutcomeError:
 		logger.Error(res.Err, "handle() failed", "binding", bc.Binding, "event", bc.WatchEvent)
 		// Static message — the JS error string would explode dedup
 		// cardinality at admission/event-loop volume. The verbose error
@@ -558,7 +552,7 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 // and meet the new VM. A hook the registry no longer knows loses them.
 // jshook.R19
 func (s *subscription) noVM(logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
-	if !s.reg.Known(jsregistry.HookKey(s.key)) {
+	if !s.reg.Known(jsrun.HookKey(s.key)) {
 		logger.Error(nil, "hook not in registry — dropping event",
 			"binding", bc.Binding, "event", bc.WatchEvent)
 		s.queue.Forget(qkey)
@@ -584,8 +578,8 @@ func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (
 // with backoff (handleEvent); a failed build shows as BuildFailed on the hook.
 // jshook.R11
 // jshook.R12
-func (s *subscription) rescue(logger logr.Logger, reason jsregistry.RestartReason) {
-	if err := jslifecycle.Rescue(s.reg, jsregistry.HookKey(s.key), reason, s.emit); err != nil {
+func (s *subscription) rescue(logger logr.Logger, reason jsrun.RestartReason) {
+	if err := jslifecycle.Rescue(s.reg, jsrun.HookKey(s.key), reason, s.emit); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
 	}
 }

@@ -3,7 +3,7 @@
 //
 //   - the EventEmitter callback shape both packages use to publish corev1.Events
 //     about their owning resource without depending on controller-runtime;
-//   - the rescue helper that rebuilds a registered VM via the registry and
+//   - the rescue helper that rebuilds a registered script via the runner and
 //     publishes the canonical Restarted / RescueFailed events with stable,
 //     low-cardinality message templates.
 //
@@ -21,7 +21,7 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // EventEmitter publishes a corev1.Event about the JSHook or JSAdmission this
@@ -42,20 +42,20 @@ type EventEmitter func(eventType, reason, message string)
 //   - key known: Warning Restarted, message "restarted: <reason>"
 //   - key unknown: Warning RescueFailed, message "rescue <reason> failed"
 //
-// Both message templates are drawn from the small set of registry restart
-// reasons (jsregistry.ReasonPanic / ReasonMemoryLimit / ReasonTimeoutStreak /
+// Both message templates are drawn from the small set of restart
+// reasons (jsrun.ReasonPanic / ReasonMemoryLimit / ReasonTimeoutStreak /
 // ReasonManual / ReasonSourceChanged), so the recorder's (Reason, Message)
 // dedup window correctly collapses bursts of identical failures.
 //
-// The underlying error from RestartByKey is intentionally NOT folded into
+// The underlying error from Restart is intentionally NOT folded into
 // the event message — that string is wildly variable per-build and would
 // defeat dedup. Callers should log it through their own logger.
 //
 // The emitter is optional; passing nil is supported.
 //
 // js-registry.R2
-func Rescue(reg *jsregistry.Registry, key jsregistry.Key, reason jsregistry.RestartReason, emit EventEmitter) error {
-	if err := reg.RestartByKey(key, reason); err != nil {
+func Rescue(rt jsrun.Runner, key jsrun.Key, reason jsrun.RestartReason, emit EventEmitter) error {
+	if err := rt.Restart(key, reason); err != nil {
 		publish(emit, corev1.EventTypeWarning, conditions.EventRescueFailed,
 			fmt.Sprintf("rescue %s failed", reason))
 		return err
@@ -65,13 +65,13 @@ func Rescue(reg *jsregistry.Registry, key jsregistry.Key, reason jsregistry.Rest
 	return nil
 }
 
-// RestartHistoryFor projects the registry's internal restart log onto the CRD
+// RestartHistoryFor projects the runner's restart log onto the CRD
 // status shape: RestartsByReason as string-keyed counters and RecentRestarts
 // newest-first (so JSONPath print columns can read [0] without index-from-end
-// gymnastics). The registry stores history oldest-first; we reverse here so
+// gymnastics). The runner stores history oldest-first; we reverse here so
 // the storage order stays the natural "append on transition" shape.
 // status-conditions.R4
-func RestartHistoryFor(mi *jsregistry.ManagedVM) (map[string]int32, []corev1alpha1.JSRestartEvent) {
+func RestartHistoryFor(mi *jsrun.Instance) (map[string]int32, []corev1alpha1.JSRestartEvent) {
 	if mi == nil {
 		return nil, nil
 	}

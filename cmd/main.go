@@ -49,6 +49,7 @@ import (
 	jshookctrl "github.com/o-haase/gojsop/internal/jshook/controller"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 	"github.com/o-haase/gojsop/internal/jssource"
 	// +kubebuilder:scaffold:imports
 )
@@ -125,8 +126,8 @@ type runFlags struct {
 
 // backoff is the retry spacing of a failed JS build, handed to both
 // reconcilers.
-func (f runFlags) backoff() jsregistry.Backoff {
-	return jsregistry.Backoff{Base: f.buildBackoffBase, Max: f.buildBackoffMax}
+func (f runFlags) backoff() jsrun.Backoff {
+	return jsrun.Backoff{Base: f.buildBackoffBase, Max: f.buildBackoffMax}
 }
 
 // validate rejects flag values the operator cannot run with.
@@ -297,7 +298,7 @@ func main() {
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Loader:       loaderChain,
-		Registry:     registry,
+		Runner:       registry,
 		KubeHost:     kubeFactory,
 		Dispatcher:   disp,
 		SubscribeCtx: managerCtx,
@@ -327,7 +328,7 @@ func main() {
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Loader:    loaderChain,
-		Registry:  registry,
+		Runner:    registry,
 		KubeHost:  kubeFactory,
 		Server:    admissionServer,
 		Registrar: registrar,

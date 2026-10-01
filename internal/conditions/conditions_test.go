@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // status-conditions.R3
@@ -21,37 +21,37 @@ func TestClassifyBuildError(t *testing.T) {
 	}{
 		{
 			"missing export -> EntrypointMissing carrying name",
-			&jsregistry.MissingExportError{Name: "handle"},
+			&jsrun.MissingExportError{Name: "handle"},
 			EventEntrypointMissing,
 			"missing required export: handle()",
 		},
 		{
 			"wrapped missing export still extracted via errors.As",
-			fmt.Errorf("registry: post-build: %w", &jsregistry.MissingExportError{Name: "validate"}),
+			fmt.Errorf("registry: post-build: %w", &jsrun.MissingExportError{Name: "validate"}),
 			EventEntrypointMissing,
 			"missing required export: validate()",
 		},
 		{
 			"load module -> ModuleLoadFailed (static msg)",
-			fmt.Errorf("%w: %v", jsregistry.ErrLoadModule, errors.New("SyntaxError: at line 1")),
+			fmt.Errorf("%w: %v", jsrun.ErrLoadModule, errors.New("SyntaxError: at line 1")),
 			EventModuleLoadFailed,
 			"module load failed",
 		},
 		{
 			"post-build (non-MissingExport) -> ConfigInvalid (static msg)",
-			fmt.Errorf("%w: %v", jsregistry.ErrPostBuild, errors.New("config() returned non-object")),
+			fmt.Errorf("%w: %v", jsrun.ErrPostBuild, errors.New("config() returned non-object")),
 			EventConfigInvalid,
 			"config() returned an error",
 		},
 		{
 			"bind host -> BuildFailed bind host",
-			fmt.Errorf("%w: %v", jsregistry.ErrBindHost, errors.New("kube binder failed")),
+			fmt.Errorf("%w: %v", jsrun.ErrBindHost, errors.New("kube binder failed")),
 			EventBuildFailed,
 			"build failed: bind host",
 		},
 		{
 			"new VM -> BuildFailed new vm",
-			fmt.Errorf("%w: %v", jsregistry.ErrNewVM, errors.New("qjs init failed")),
+			fmt.Errorf("%w: %v", jsrun.ErrNewVM, errors.New("qjs init failed")),
 			EventBuildFailed,
 			"build failed: new vm",
 		},

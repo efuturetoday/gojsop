@@ -9,48 +9,25 @@ package jsengine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/fastschema/qjs"
+
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
-// Limits caps what a single VM may consume. Zero fields fall back to the
-// defaults in DefaultLimits(); callers are encouraged to pass explicit values
-// plumbed from spec.limits on the JSHook/JSAdmission CRDs.
-type Limits struct {
-	// MemoryMB caps the QuickJS heap in megabytes. Translated to bytes for
-	// JS_SetMemoryLimit. Zero means "use default".
-	MemoryMB int32
-	// TimeoutSeconds bounds a single handle() call. Enforced by passing a
-	// context with deadline into Eval/CallExport/LoadModule: wazero exits the
-	// in-flight wasm call when the context is cancelled, surfacing as
-	// ErrCancelled. The qjs MaxExecutionTime field is a no-op in v0.0.6, so
-	// CloseOnContextDone is the actual enforcement mechanism.
-	TimeoutSeconds int32
-}
+// Limits caps what a single VM may consume; see jsrun.Limits. Enforced by
+// passing a context with deadline into Eval/CallExport/LoadModule: wazero
+// exits the in-flight wasm call when the context is cancelled, surfacing as
+// ErrCancelled. The qjs MaxExecutionTime field is a no-op in v0.0.6, so
+// CloseOnContextDone is the actual enforcement mechanism.
+type Limits = jsrun.Limits
 
 // DefaultLimits matches the CRD doc defaults (memoryMB:32, timeoutSeconds:30).
-func DefaultLimits() Limits {
-	return Limits{MemoryMB: 32, TimeoutSeconds: 30}
-}
-
-// WithDefaults returns l with zero fields replaced by DefaultLimits. Callers
-// compare or read limits through it so "unset" and "explicit default" agree.
-func (l Limits) WithDefaults() Limits { return l.applyDefaults() }
-
-// applyDefaults fills in zero fields from DefaultLimits.
-func (l Limits) applyDefaults() Limits {
-	d := DefaultLimits()
-	if l.MemoryMB <= 0 {
-		l.MemoryMB = d.MemoryMB
-	}
-	if l.TimeoutSeconds <= 0 {
-		l.TimeoutSeconds = d.TimeoutSeconds
-	}
-	return l
-}
+func DefaultLimits() Limits { return jsrun.DefaultLimits() }
 
 // maxStackSizeBytes is the QuickJS stack cap. 1 MiB is the qjs README's
 // reference value and is plenty for typical hook code without inviting
@@ -98,7 +75,7 @@ func (c *callContext) Value(k any) any             { return c.get().Value(k) }
 // can be cancelled by passing a context with deadline into the Eval/Call
 // methods below.
 func New(lim Limits) (*VM, error) {
-	lim = lim.applyDefaults()
+	lim = lim.WithDefaults()
 	cc := newCallContext()
 	rt, err := qjs.New(qjs.Option{
 		MemoryLimit:        int(lim.MemoryMB) * 1024 * 1024,
@@ -257,6 +234,25 @@ func (vm *VM) CallExport(ctx context.Context, name string, args ...any) (string,
 		return nil
 	})
 	return out, err
+}
+
+// Invoke calls the named export with in as its one argument (none if in is
+// nil) and decodes the JSON form of the result into out. out stays untouched
+// when the export returned undefined; a nil out discards the result. It is
+// CallExport with typed output, and satisfies jsrun.Script.
+func (vm *VM) Invoke(ctx context.Context, export string, in, out any) error {
+	var args []any
+	if in != nil {
+		args = []any{in}
+	}
+	raw, err := vm.CallExport(ctx, export, args...)
+	if err != nil || raw == "" || out == nil {
+		return err
+	}
+	if err := json.Unmarshal([]byte(raw), out); err != nil {
+		return fmt.Errorf("decode %s() result: %w", export, err)
+	}
+	return nil
 }
 
 // Close releases the underlying QuickJS runtime. Always call this when the

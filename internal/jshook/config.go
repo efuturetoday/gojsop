@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // ReadConfig calls the module's exported `config()` if present and decodes
@@ -17,19 +17,19 @@ import (
 // ctx is the build / reconcile context — config() runs once per build, so
 // this gets the reconcile deadline rather than the per-call timeout.
 // jshook.R1
-func ReadConfig(ctx context.Context, vm *jsengine.VM) (*Config, error) {
-	if !vm.HasExport("config") {
+func ReadConfig(ctx context.Context, s jsrun.Script) (*Config, error) {
+	if !s.HasExport("config") {
 		return nil, nil
 	}
-	raw, err := vm.CallExport(ctx, "config")
-	if err != nil {
+	var raw json.RawMessage
+	if err := s.Invoke(ctx, "config", nil, &raw); err != nil {
 		return nil, fmt.Errorf("calling config(): %w", err)
 	}
-	if raw == "" {
+	if len(raw) == 0 {
 		return nil, nil
 	}
 	var cfg Config
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("config() returned non-JSON: %w (raw=%s)", err, raw)
 	}
 	return &cfg, nil

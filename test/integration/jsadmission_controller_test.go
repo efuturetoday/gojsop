@@ -30,6 +30,7 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	jsadmissionctrl "github.com/o-haase/gojsop/internal/jsadmission/controller"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 	"github.com/o-haase/gojsop/internal/jssource"
 )
 
@@ -78,10 +79,10 @@ var _ = Describe("JSAdmission Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &jsadmissionctrl.JSAdmissionReconciler{
-				Client:   k8sClient,
-				Scheme:   k8sClient.Scheme(),
-				Loader:   jssource.NewChain(jssource.InlineLoader{}),
-				Registry: jsregistry.NewRegistry(),
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Loader: jssource.NewChain(jssource.InlineLoader{}),
+				Runner: jsregistry.NewRegistry(),
 			}
 
 			// The first reconcile only starts the build; reconcile again until Ready.
@@ -90,7 +91,7 @@ var _ = Describe("JSAdmission Controller", func() {
 					NamespacedName: typeNamespacedName,
 				})
 				g.Expect(err).NotTo(HaveOccurred())
-				_, ok := controllerReconciler.Registry.Get(jsregistry.AdmissionKey(typeNamespacedName))
+				_, ok := controllerReconciler.Runner.Instance(jsrun.AdmissionKey(typeNamespacedName))
 				g.Expect(ok).To(BeTrue())
 			}, "10s", "20ms").Should(Succeed())
 		})

@@ -4,7 +4,9 @@ status: accepted
 entrypoints:
   - jsengine.New
   - jsengine.VM.CallExport
+  - jsengine.VM.Invoke
   - jsengine.VM.WithContext
+  - jsrun.Runner.Invoke
   - jsregistry.Registry.Call
 ---
 
@@ -51,8 +53,8 @@ timers. The [kube-access](kube-access.md) aspect covers the details.
 
 | Part | Question | Answer |
 |---|---|---|
-| block | What code does the work, once? | `jsengine.New` and `jsengine.VM` (the only wrapper of `fastschema/qjs` and wazero), run through `jsregistry.Registry.Call`. A second way exists: `jsadmission` imports `fastschema/qjs` in its result decoding (EXEC-1). |
-| example | Which real use should others copy? | `jsregistry.Registry.Call`, used by the JSHook and JSAdmission handlers. |
+| block | What code does the work, once? | `jsengine.New` and `jsengine.VM` (the only wrapper of `fastschema/qjs` and wazero), run through the port `jsrun.Runner.Invoke`, implemented by `jsregistry.Registry.Call`. No second way: `jsadmission` decodes the result from JSON (`jsengine.VM.Invoke`). |
+| example | Which real use should others copy? | `jshook.Handle` and `jsadmission.Handle`, typed wrappers over `jsrun.Runner.Invoke`. |
 | test helper | How does a test use the aspect without effort? | `jsengine.New` with `jsengine.Limits{}` builds a real VM in a test; `kubehost` tests use the helper `newKubeHost`. No shared harness package (searched `_test.go` for helpers and fakes). |
 | sides | Which sides does it touch? | n/a, because it is one side: the operator process (Go). Searched the repository for other languages and binaries. The CRD defaults are the only outside edge. |
 | tie | How do the sides stay in step? | The CRD defaults for `spec.limits` and `jsengine.DefaultLimits` are tied by `TestDefaultLimits_MatchKubebuilderTags`. |
@@ -61,8 +63,8 @@ timers. The [kube-access](kube-access.md) aspect covers the details.
 
 Add a new kind of resource that runs JavaScript:
 
-1. Build its VM only through `jsregistry.Registry.Ensure` with explicit `jsengine.Limits`, and never wait for the build (js-registry.R15).
-2. Run its script only inside `jsregistry.Registry.Call`, with a deadline from `spec.limits.timeoutSeconds` (R2, R3).
+1. Build its VM only through `jsrun.Runner.Ensure` with explicit `jsrun.Limits`, and never wait for the build (js-registry.R15).
+2. Run its script only through `jsrun.Runner.Invoke`, with a deadline from `spec.limits.timeoutSeconds` (R2, R3). Import `jsrun`, not `jsengine` or `jsregistry` (R10).
 3. Classify errors with `errors.Is` against `jsengine.ErrCancelled` and `jsengine.ErrOOM` (R4).
 4. Choose the `kube` surface from `kubehost.Factory`: read-only for decisions (R6).
 5. Gate: `TestMemoryLimit_Honoured` and `TestSharedFactory_ForAdmission_ReadOnlySurface`.
@@ -70,9 +72,9 @@ Add a new kind of resource that runs JavaScript:
 ## Rules
 
 - **R1** Only package `jsengine` imports `fastschema/qjs` or wazero.
-  Why: the engine stays replaceable, and error handling stays in one place. Broken today by `jsadmission` (EXEC-1).
-  Gate: missing → GATE-2.
-- **R2** Run user JavaScript only inside `jsregistry.Registry.Call`. The only
+  Why: the engine stays replaceable, and error handling stays in one place.
+  Gate: `TestImportBoundary_EngineStaysBehindRegistry`.
+- **R2** Run user JavaScript only through `jsrun.Runner.Invoke`, which the registry runs inside `Registry.Call`. The only
   exception is building a VM inside the registry (module load and `config()`).
   Why: one place for the call lock, panic recovery and result classification.
   Gate: missing → GATE-4.
@@ -104,6 +106,10 @@ Add a new kind of resource that runs JavaScript:
   later, so a write races with it.
   Gate: `TestVM_SequentialCalls_NoContextRace` (needs `go test -race`, which `make test` runs).
 
+- **R10** Reach script execution only through the port `jsrun.Runner`. The dispatcher, the admission server, the controllers and `jslifecycle` (packages under `internal/jshook`, `internal/jsadmission`, `internal/jslifecycle`, `internal/conditions`) import none of `internal/jsengine`, `fastschema/qjs`, wazero or `internal/jsregistry`; only `cmd` builds the adapter.
+  Why: callers that hold a VM, a lock or the engine tie the operator to one engine and one execution model (persistent VM per key); behind the port a second engine (prepare once, invoke statelessly) can replace it.
+  Gate: `TestImportBoundary_CallersUseOnlyRunnerPort`.
+
 ## Decisions
 
 - **Use QuickJS on wazero (via `fastschema/qjs`) as the engine.** Status: accepted.
@@ -115,11 +121,9 @@ Add a new kind of resource that runs JavaScript:
 
 ## Open
 
-EXEC-1
 EXEC-2
 EXEC-3
 EXEC-4
-GATE-2
 GATE-4
 GATE-5
 GATE-6

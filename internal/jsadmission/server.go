@@ -21,9 +21,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
-	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // EventEmitter is the shared lifecycle-event callback. Aliased from
@@ -61,15 +60,15 @@ type PolicyEntry struct {
 }
 
 // Server is the HTTP-level admission dispatcher. It holds the live policy
-// table and looks up the per-policy ManagedVM on every request.
+// table and calls the per-policy script through the Runner on every request.
 //
 // Mount the handlers on controller-runtime's WebhookServer:
 //
 //	wh.Register(admission.PathPrefixValidate, srv.ValidateHandler())
 //	wh.Register(admission.PathPrefixMutate,   srv.MutateHandler())
 type Server struct {
-	Registry *jsregistry.Registry
-	Log      logr.Logger
+	Runner jsrun.Runner
+	Log    logr.Logger
 
 	mu       sync.RWMutex
 	policies map[types.NamespacedName]PolicyEntry
@@ -77,13 +76,13 @@ type Server struct {
 	codecs serializer.CodecFactory
 }
 
-// NewServer returns a Server backed by the given registry. Pass the same
-// Registry the JSAdmissionReconciler uses to load policy code.
-func NewServer(reg *jsregistry.Registry, log logr.Logger) *Server {
+// NewServer returns a Server backed by the given runner. Pass the same
+// Runner the JSAdmissionReconciler uses to load policy code.
+func NewServer(rt jsrun.Runner, log logr.Logger) *Server {
 	scheme := runtime.NewScheme()
 	_ = admissionv1.AddToScheme(scheme)
 	return &Server{
-		Registry: reg,
+		Runner:   rt,
 		Log:      log,
 		policies: make(map[types.NamespacedName]PolicyEntry),
 		codecs:   serializer.NewCodecFactory(scheme),
@@ -215,10 +214,9 @@ func publishEntry(entry PolicyEntry, eventType, reason, message string) {
 // review runs the policy and produces an AdmissionResponse. UID is always
 // echoed from the request. failurePolicy decides Allowed on JS errors.
 //
-// Uses Registry.Call which serializes on mi.CallMu, swaps the qjs runtime
-// context for the per-call deadline, and classifies the outcome (panic /
-// OOM / cancelled / error / ok) under one roof. The previous goroutine +
-// time.NewTimer dance is gone because wazero now actually cancels the
+// Uses the Runner, which serializes calls, applies the per-call deadline and
+// classifies the outcome (panic / OOM / cancelled / error / ok) under one
+// roof. The previous goroutine + time.NewTimer dance is gone because wazero now actually cancels the
 // in-flight wasm call when the deadline fires (CloseOnContextDone), so we
 // can rescue the VM on timeout — which the old "leave the goroutine
 // running" approach couldn't do safely.
@@ -228,7 +226,7 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	log := s.Log.WithValues("policy", entry.Key, "uid", req.UID)
 	resp := &admissionv1.AdmissionResponse{UID: req.UID}
 
-	if _, ok := s.Registry.Get(jsregistry.AdmissionKey(entry.Key)); !ok {
+	if _, ok := s.Runner.Instance(jsrun.AdmissionKey(entry.Key)); !ok {
 		log.Info("admission instance not loaded yet — applying failurePolicy")
 		applyFailurePolicy(resp, entry.FailurePolicy, "policy instance not loaded")
 		return resp
@@ -248,15 +246,7 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	callCtx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	var result *AdmissionResult
-	res, _, callErr := s.Registry.Call(callCtx, jsregistry.AdmissionKey(entry.Key), func(ctx context.Context, vm *jsengine.VM) error {
-		out, err := Handle(ctx, vm, jsReq, entry.Mutating)
-		if err != nil {
-			return err
-		}
-		result = out
-		return nil
-	})
+	result, res, callErr := Handle(callCtx, s.Runner, jsrun.AdmissionKey(entry.Key), jsReq, entry.Mutating)
 	if callErr != nil {
 		// ErrUnknownKey: VM was dropped between Get and Call (race with controller delete).
 		log.Info("admission instance vanished mid-review — applying failurePolicy")
@@ -265,27 +255,27 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	}
 
 	switch res.Outcome {
-	case jsregistry.OutcomePanic:
+	case jsrun.OutcomePanic:
 		log.Error(fmt.Errorf("panic in admission handler: %v", res.Panic),
 			"admission JS call panicked — rescuing")
 		publishEntry(entry, corev1.EventTypeWarning,
 			conditions.EventReviewPanicked,
 			"panic in admission handler")
-		if err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonPanic, entry.Emit); err != nil {
-			log.Error(err, "admission rescue failed", "reason", jsregistry.ReasonPanic)
+		if err := jslifecycle.Rescue(s.Runner, jsrun.AdmissionKey(entry.Key), jsrun.ReasonPanic, entry.Emit); err != nil {
+			log.Error(err, "admission rescue failed", "reason", jsrun.ReasonPanic)
 		}
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("panic in admission handler: %v", res.Panic))
 		return resp
 
-	case jsregistry.OutcomeMemoryLimit:
+	case jsrun.OutcomeMemoryLimit:
 		log.Error(res.Err, "admission JS call hit memory limit — rescuing")
-		if err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonMemoryLimit, entry.Emit); err != nil {
-			log.Error(err, "admission rescue failed", "reason", jsregistry.ReasonMemoryLimit)
+		if err := jslifecycle.Rescue(s.Runner, jsrun.AdmissionKey(entry.Key), jsrun.ReasonMemoryLimit, entry.Emit); err != nil {
+			log.Error(err, "admission rescue failed", "reason", jsrun.ReasonMemoryLimit)
 		}
 		applyFailurePolicy(resp, entry.FailurePolicy, res.Err.Error())
 		return resp
 
-	case jsregistry.OutcomeCancelled:
+	case jsrun.OutcomeCancelled:
 		// Distinguish the two cancellation sources: client disconnect vs
 		// our deadline. Client disconnect is benign and the VM is fine —
 		// don't rescue. Our deadline tripped → VM is genuinely stuck on a
@@ -299,13 +289,13 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 		publishEntry(entry, corev1.EventTypeWarning,
 			conditions.EventReviewTimeout,
 			fmt.Sprintf("review exceeded %s", timeout))
-		if err := jslifecycle.Rescue(s.Registry, jsregistry.AdmissionKey(entry.Key), jsregistry.ReasonTimeout, entry.Emit); err != nil {
-			log.Error(err, "admission rescue failed", "reason", jsregistry.ReasonTimeout)
+		if err := jslifecycle.Rescue(s.Runner, jsrun.AdmissionKey(entry.Key), jsrun.ReasonTimeout, entry.Emit); err != nil {
+			log.Error(err, "admission rescue failed", "reason", jsrun.ReasonTimeout)
 		}
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("timeout after %s", timeout))
 		return resp
 
-	case jsregistry.OutcomeError:
+	case jsrun.OutcomeError:
 		// Regular JS Error from validate()/mutate(): the policy author
 		// returned/threw. Don't rescue — the VM is still healthy.
 		log.Error(res.Err, "admission JS call failed")

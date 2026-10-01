@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -37,12 +38,11 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
-	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 	"github.com/o-haase/gojsop/internal/jssource"
 )
 
@@ -67,7 +67,7 @@ type JSHookReconciler struct {
 
 	// Registry owns the per-hook persistent JS instances.
 	// Defaults to a fresh registry via SetupWithManager when nil.
-	Registry *jsregistry.Registry
+	Runner jsrun.Runner
 
 	// KubeHost mints the host-function surface installed on every JSHook VM.
 	// SharedFactory hands out the same client to all hooks; Phase 2 swaps in
@@ -88,8 +88,8 @@ type JSHookReconciler struct {
 	Recorder events.EventRecorder
 
 	// Backoff spaces the retries of a hook whose build failed. Zero fields use
-	// the jsregistry defaults. cmd/main.go sets it from the operator flags.
-	Backoff jsregistry.Backoff
+	// the jsrun defaults. cmd/main.go sets it from the operator flags.
+	Backoff jsrun.Backoff
 }
 
 // eventAction is the action field every event carries; the events.k8s.io API
@@ -118,14 +118,14 @@ func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message 
 // reconciler reads it back via configFromExtra. This keeps the config off the
 // engine and inside the feature package.
 // jshook.R2
-func readConfig(ctx context.Context, vm *jsengine.VM) (any, error) {
-	if !vm.HasExport("config") {
-		return nil, &jsregistry.MissingExportError{Name: "config"}
+func readConfig(ctx context.Context, s jsrun.Script) (any, error) {
+	if !s.HasExport("config") {
+		return nil, &jsrun.MissingExportError{Name: "config"}
 	}
-	if !vm.HasExport("handle") {
-		return nil, &jsregistry.MissingExportError{Name: "handle"}
+	if !s.HasExport("handle") {
+		return nil, &jsrun.MissingExportError{Name: "handle"}
 	}
-	cfg, err := jshook.ReadConfig(ctx, vm)
+	cfg, err := jshook.ReadConfig(ctx, s)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +156,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if r.Dispatcher != nil {
 				r.Dispatcher.Drop(req.NamespacedName)
 			}
-			r.Registry.Drop(jsregistry.HookKey(req.NamespacedName))
+			r.Runner.Drop(jsrun.HookKey(req.NamespacedName))
 			log.Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
@@ -174,11 +174,11 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	srcHash := jssource.Hash(source)
 	lim := limitsFromSpec(hook.Spec.Limits)
 
-	var binder jsengine.HostBinder
+	var host jsrun.Host
 	if r.KubeHost != nil {
-		binder, err = r.KubeHost.ForHook(ctx, req.NamespacedName, "")
+		host, err = r.KubeHost.ForHook(ctx, req.NamespacedName, "")
 		if err != nil {
-			log.Error(err, "minting kube host binder")
+			log.Error(err, "minting kube host")
 			return r.fail(ctx, &hook, conditions.EventBuildFailed,
 				"build failed: kube host",
 				fmt.Sprintf("kube host: %v", err))
@@ -189,24 +189,24 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// when it ends (SetupWithManager), so a reconcile never waits for it.
 	// js-registry.R15
 	// jshook.R18
-	st := r.Registry.Ensure(jsregistry.HookKey(req.NamespacedName), jsregistry.BuildOptions{
+	st := r.Runner.Ensure(jsrun.HookKey(req.NamespacedName), jsrun.Options{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
-		Binder:     binder,
+		Host:       host,
 		PostBuild:  readConfig,
 		Backoff:    r.Backoff,
 	})
 	switch st.Kind {
-	case jsregistry.StateBuilding:
+	case jsrun.StateBuilding:
 		log.V(1).Info("instance building")
 		return r.building(ctx, &hook)
-	case jsregistry.StateBroken:
+	case jsrun.StateBroken:
 		log.Error(st.Err, "instance build failed", "attempts", st.Attempts, "retryIn", st.RetryIn())
 		eventReason, eventMsg := conditions.ClassifyBuildError(st.Err)
 		return r.buildFailed(ctx, &hook, eventReason, eventMsg, st)
 	}
-	mi := st.VM
+	mi := st.Instance
 	restarted := instanceChanged(&hook, srcHash)
 	if restarted {
 		last := mi.LastRestart()
@@ -230,7 +230,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// The restart builds in the background like any other build; the
 			// token is recorded now so the finished build does not restart
 			// again.
-			if err := r.Registry.RestartByKey(jsregistry.HookKey(req.NamespacedName), jsregistry.ReasonManual); err != nil {
+			if err := r.Runner.Restart(jsrun.HookKey(req.NamespacedName), jsrun.ReasonManual); err != nil {
 				log.Error(err, "manual restart")
 				return r.fail(ctx, &hook, conditions.EventBuildFailed,
 					"build failed: manual restart",
@@ -238,7 +238,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			log.Info("manual restart started", "token", token)
 			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
-				fmt.Sprintf("restarted: %s (hash %s)", jsregistry.ReasonManual, srcHash[:12]))
+				fmt.Sprintf("restarted: %s (hash %s)", jsrun.ReasonManual, srcHash[:12]))
 			if hook.Status.Instance == nil {
 				hook.Status.Instance = &corev1alpha1.JSInstanceStatus{}
 			}
@@ -340,7 +340,7 @@ func (r *JSHookReconciler) building(ctx context.Context, hook *corev1alpha1.JSHo
 // jshook.R18
 // status-conditions.R1
 // status-conditions.R2
-func (r *JSHookReconciler) buildFailed(ctx context.Context, hook *corev1alpha1.JSHook, eventReason, eventMsg string, st jsregistry.State) (ctrl.Result, error) {
+func (r *JSHookReconciler) buildFailed(ctx context.Context, hook *corev1alpha1.JSHook, eventReason, eventMsg string, st jsrun.State) (ctrl.Result, error) {
 	return r.failReason(ctx, hook, conditions.ReasonBuildFailed, eventReason, eventMsg,
 		fmt.Sprintf("instance: %v", st.Err), st.RetryIn())
 }
@@ -381,13 +381,13 @@ func (r *JSHookReconciler) failReason(ctx context.Context, hook *corev1alpha1.JS
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
-// limitsFromSpec maps the CRD's optional Limits to jsengine.Limits.
+// limitsFromSpec maps the CRD's optional Limits to jsrun.Limits.
 // Zero/missing fields fall back to engine defaults inside New().
-func limitsFromSpec(r *corev1alpha1.JSLimits) jsengine.Limits {
+func limitsFromSpec(r *corev1alpha1.JSLimits) jsrun.Limits {
 	if r == nil {
-		return jsengine.Limits{}
+		return jsrun.Limits{}
 	}
-	return jsengine.Limits{
+	return jsrun.Limits{
 		MemoryMB:       r.MemoryMB,
 		TimeoutSeconds: r.TimeoutSeconds,
 	}
@@ -423,14 +423,14 @@ func (r *JSHookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Loader == nil {
 		r.Loader = jssource.NewChain(jssource.InlineLoader{})
 	}
-	if r.Registry == nil {
-		r.Registry = jsregistry.NewRegistry()
+	if r.Runner == nil {
+		return errors.New("jsrun.Runner is required")
 	}
 	// The registry reports every finished build of a JSHook; the forwarder
 	// turns it into a reconcile request.
 	ch := make(chan event.TypedGenericEvent[*corev1alpha1.JSHook])
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		for key := range r.Registry.Watch(ctx, jsregistry.KindJSHook) {
+		for key := range r.Runner.Watch(ctx, jsrun.KindJSHook) {
 			hook := &corev1alpha1.JSHook{ObjectMeta: metav1.ObjectMeta{Name: key.Name.Name, Namespace: key.Name.Namespace}}
 			select {
 			case ch <- event.TypedGenericEvent[*corev1alpha1.JSHook]{Object: hook}:

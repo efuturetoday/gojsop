@@ -4,9 +4,26 @@ import (
 	"context"
 	"testing"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
+	"k8s.io/apimachinery/pkg/types"
+
 	"github.com/o-haase/gojsop/internal/jshook"
+	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
+
+// loadHook loads src as the hook of a fresh key in a real registry.
+func loadHook(t *testing.T, src string) (*jsregistry.Registry, jsrun.Key, *jsregistry.ManagedVM) {
+	t.Helper()
+	reg := jsregistry.NewRegistry()
+	key := jsrun.HookKey(types.NamespacedName{Name: "hook"})
+	t.Cleanup(func() { reg.Drop(key) })
+	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Options{Source: []byte(src), SourceHash: "h"})
+	if err != nil {
+		t.Fatalf("load hook: %v", err)
+	}
+	return reg, key, mi
+}
 
 // jshook.R7
 func TestHandle_ReceivesBindingContext(t *testing.T) {
@@ -17,14 +34,7 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 			return { ack: ctx.length };
 		}
 	`
-	inst, err := jsengine.New(jsengine.Limits{})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	t.Cleanup(inst.Close)
-	if err := inst.LoadModule(context.Background(), "hook.js", src); err != nil {
-		t.Fatalf("LoadModule: %v", err)
-	}
+	reg, key, mi := loadHook(t, src)
 
 	bctx := []jshook.BindingContext{{
 		Binding:    "watch",
@@ -34,16 +44,16 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 			"metadata": map[string]any{"name": "foo"},
 		},
 	}}
-	got, err := jshook.Handle(context.Background(), inst, bctx)
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
+	got, hres, err := jshook.Handle(context.Background(), reg, key, bctx)
+	if err != nil || hres.Outcome != jsrun.OutcomeOK {
+		t.Fatalf("Handle: %v, %+v", err, hres)
 	}
 	want := `{"ack":1}`
 	if got != want {
 		t.Fatalf("return: got %q want %q", got, want)
 	}
 
-	res, err := inst.Eval(context.Background(), "inspect.js", `lastEvent.watchEvent`)
+	res, err := mi.VM.Eval(context.Background(), "inspect.js", `lastEvent.watchEvent`)
 	if err != nil {
 		t.Fatalf("Eval inspect: %v", err)
 	}
@@ -53,15 +63,12 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 }
 
 func TestHandle_MissingFunction(t *testing.T) {
-	inst, err := jsengine.New(jsengine.Limits{})
+	reg, key, _ := loadHook(t, `function config(){return {}}`)
+	_, hres, err := jshook.Handle(context.Background(), reg, key, nil)
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("Handle: %v", err)
 	}
-	t.Cleanup(inst.Close)
-	if err := inst.LoadModule(context.Background(), "nohandle.js", `function config(){return {}}`); err != nil {
-		t.Fatalf("LoadModule: %v", err)
-	}
-	if _, err := jshook.Handle(context.Background(), inst, nil); err == nil {
+	if hres.Err == nil {
 		t.Fatal("expected error when hook has no handle()")
 	}
 }

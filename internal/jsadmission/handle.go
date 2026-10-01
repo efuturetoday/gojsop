@@ -2,11 +2,10 @@ package jsadmission
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
-	"github.com/fastschema/qjs"
-
-	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // GroupVersionKind mirrors metav1.GroupVersionKind on the JS side.
@@ -70,60 +69,41 @@ type AdmissionResult struct {
 	ModifiedObject map[string]any `json:"modifiedObject,omitempty"`
 }
 
-// Handle invokes either validate(req) or mutate(req) on the persistent JS VM
-// and returns the decoded result.
+// Handle invokes either validate(req) or mutate(req) on the script of key and
+// returns the decoded result. The Result classifies how the call ended; the
+// error is set only when nothing ran (jsrun.ErrUnknownKey,
+// jsrun.ErrVMUnavailable) or the request is nil. A return value that is
+// undefined, null or not of the result shape turns an OK call into
+// jsrun.OutcomeError.
 //
-// qjs.JsFuncToGo would have been even cleaner, but it only auto-converts
-// primitive return types: for object returns it routes through toGoValue[any]
-// (yielding map[string]any) and then reflect.Convert into the declared sample
-// type — which fails for structs. So we Invoke and decode the *Value with
-// JsObjectOrMapToGoStruct, which is the qjs-supported path for struct shapes.
-//
-// The request is converted to a real JS object via qjs.ToJsValue (carried by
-// Value.Invoke) so Object/OldObject keep their structural identity for the
-// policy code rather than going through a JSON roundtrip.
-//
-// Caller MUST hold the per-VM serialization lock — qjs is not goroutine-safe.
-//
-// ctx is plumbed into wazero via VM.WithContext; a context with deadline
-// gives the JS call a real timeout (returns jsengine.ErrCancelled).
+// The request travels as the one argument of the export; the Runner converts
+// it, so Object/OldObject keep their structural identity for the policy code.
+// Locking, panic recovery and the deadline of ctx belong to the Runner.
 // jsadmission.R2
 // jsadmission.R4
-func Handle(ctx context.Context, vm *jsengine.VM, req *AdmissionRequest, mutating bool) (*AdmissionResult, error) {
+func Handle(ctx context.Context, rt jsrun.Runner, key jsrun.Key, req *AdmissionRequest, mutating bool) (*AdmissionResult, jsrun.Result, error) {
 	if req == nil {
-		return nil, fmt.Errorf("admission request is nil")
+		return nil, jsrun.Result{Outcome: jsrun.OutcomeError, Err: fmt.Errorf("admission request is nil")}, nil
 	}
 	export := "validate"
 	if mutating {
 		export = "mutate"
 	}
-	var result AdmissionResult
-	err := vm.WithContext(ctx, func(c *qjs.Context) error {
-		global := c.Global()
-		fn := global.GetPropertyStr(export)
-		defer fn.Free()
-		if !fn.IsFunction() {
-			return fmt.Errorf("admission policy does not export a %s() function", export)
-		}
-
-		out, err := global.Invoke(export, req)
-		if err != nil {
-			return fmt.Errorf("calling %s(): %w", export, jsengine.WrapEngineErr(ctx, err))
-		}
-		defer out.Free()
-
-		if out.IsUndefined() || out.IsNull() {
-			return fmt.Errorf("%s() returned undefined — must return {allowed: bool, ...}", export)
-		}
-		decoded, err := qjs.JsObjectOrMapToGoStruct[AdmissionResult](out)
-		if err != nil {
-			return fmt.Errorf("decode %s() return value: %w", export, err)
-		}
-		result = decoded
-		return nil
-	})
-	if err != nil {
-		return nil, err
+	var raw json.RawMessage
+	res, err := rt.Invoke(ctx, key, export, req, &raw)
+	if err != nil || res.Outcome != jsrun.OutcomeOK {
+		return nil, res, err
 	}
-	return &result, nil
+	if len(raw) == 0 || string(raw) == "null" {
+		res.Outcome = jsrun.OutcomeError
+		res.Err = fmt.Errorf("%s() returned undefined — must return {allowed: bool, ...}", export)
+		return nil, res, nil
+	}
+	var result AdmissionResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		res.Outcome = jsrun.OutcomeError
+		res.Err = fmt.Errorf("decode %s() return value: %w", export, err)
+		return nil, res, nil
+	}
+	return &result, res, nil
 }

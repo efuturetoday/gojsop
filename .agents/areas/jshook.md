@@ -131,7 +131,7 @@ Every rule is held by a test or is `missing → <KEY>`.
 ## Aspects
 
 - [js-execution](../aspects/js-execution.md): limits, timeouts and memory of the VM that runs `handle()`.
-- [js-registry](../aspects/js-registry.md): one VM per hook, `Registry.Call`, restart and rescue.
+- [js-registry](../aspects/js-registry.md): one VM per hook behind `jsrun.Runner`, restart and rescue.
 - [js-sources](../aspects/js-sources.md): where the hook source comes from.
 - [kube-access](../aspects/kube-access.md): how the dispatcher and hooks reach the cluster.
 - [status-conditions](../aspects/status-conditions.md): conditions and events a failing or restarted hook shows.

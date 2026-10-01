@@ -46,7 +46,7 @@ Add a source kind (for example OCI, SRC-1):
 
 - **R1** Resolve source text in the controller through `jssource.Chain.Load`. Never load sources inside `jsregistry`.
   Why: the registry only sees bytes and a hash, so it stays independent of where source lives.
-  Gate: missing → GATE-2.
+  Gate: `TestImportBoundary_EngineStaysBehindRegistry`.
 - **R2** A loader returns `claimed=false` only when its field is unset. A configured but broken ref returns `claimed=true` with an error.
   Why: only then does the controller report `SourceLoadFailed` instead of "no loader matched".
   Gate: `TestConfigMapLoader_NoRefFallsThrough`, `TestConfigMapLoader_MissingCM`, `TestConfigMapLoader_MissingKey`, `TestConfigMapLoader_EmptyValue`.
@@ -78,4 +78,4 @@ Add a source kind (for example OCI, SRC-1):
 
 ## Open
 
-Tracked in [backlog](../backlog.md): SRC-1 to SRC-6, API-1, API-2, STAT-2, OPS-3; gates GATE-2, GATE-9, GATE-10, GATE-16.
+Tracked in [backlog](../backlog.md): SRC-1 to SRC-6, API-1, API-2, STAT-2, OPS-3; gates GATE-9, GATE-10, GATE-16.

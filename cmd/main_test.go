@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 func parse(t *testing.T, args ...string) (runFlags, error) {
@@ -25,7 +25,7 @@ func TestFlags_BuildBackoffReachesReconcilers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := f.backoff(), (jsregistry.Backoff{Base: 2 * time.Second, Max: time.Minute}); got != want {
+	if got, want := f.backoff(), (jsrun.Backoff{Base: 2 * time.Second, Max: time.Minute}); got != want {
 		t.Fatalf("backoff = %+v, want %+v", got, want)
 	}
 
@@ -33,7 +33,7 @@ func TestFlags_BuildBackoffReachesReconcilers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := def.backoff(), (jsregistry.Backoff{Base: time.Second, Max: 5 * time.Minute}); got != want {
+	if got, want := def.backoff(), (jsrun.Backoff{Base: time.Second, Max: 5 * time.Minute}); got != want {
 		t.Fatalf("default backoff = %+v, want %+v", got, want)
 	}
 }

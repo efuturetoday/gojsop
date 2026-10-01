@@ -19,6 +19,7 @@ import (
 
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // pathLabels is the JSON-patch path the diff tests expect for label changes.
@@ -29,13 +30,13 @@ const pathLabels = "/metadata/labels"
 func loadPolicy(t *testing.T, src string, key types.NamespacedName) *jsregistry.Registry {
 	t.Helper()
 	reg := jsregistry.NewRegistry()
-	t.Cleanup(func() { reg.Drop(jsregistry.AdmissionKey(key)) })
+	t.Cleanup(func() { reg.Drop(jsrun.AdmissionKey(key)) })
 	source := []byte(src)
 	// Embed a no-op config() so Registry.Ensure doesn't reject the source.
 	if !strings.Contains(src, "function config(") {
 		source = append([]byte("function config(){return {configVersion:'v1'}}\n"), source...)
 	}
-	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.AdmissionKey(key), jsregistry.BuildOptions{Source: source, SourceHash: "h1"}); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.AdmissionKey(key), jsrun.Options{Source: source, SourceHash: "h1"}); err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
 	return reg
@@ -259,11 +260,11 @@ func TestServer_NoVM_AppliesFailurePolicyAtOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			key := types.NamespacedName{Name: "policy-building"}
 			reg := jsregistry.NewRegistry()
-			regKey := jsregistry.AdmissionKey(key)
+			regKey := jsrun.AdmissionKey(key)
 			t.Cleanup(func() { reg.Drop(regKey) })
 			// A top-level endless loop: the build runs until the default 30 s
 			// deadline, the key stays Building for the whole test.
-			if st := reg.Ensure(regKey, jsregistry.BuildOptions{Source: []byte(`while(true){}`), SourceHash: "h"}); st.Kind != jsregistry.StateBuilding {
+			if st := reg.Ensure(regKey, jsrun.Options{Source: []byte(`while(true){}`), SourceHash: "h"}); st.Kind != jsrun.StateBuilding {
 				t.Fatalf("Ensure: %v, want Building", st.Kind)
 			}
 			srv := NewServer(reg, logr.Log)

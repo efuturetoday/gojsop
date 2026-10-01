@@ -10,18 +10,19 @@ import (
 
 	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
-func hookKey(name string) jsregistry.Key {
-	return jsregistry.HookKey(types.NamespacedName{Name: name})
+func hookKey(name string) jsrun.Key {
+	return jsrun.HookKey(types.NamespacedName{Name: name})
 }
 
-func okOpts(hash string) jsregistry.BuildOptions {
-	return jsregistry.BuildOptions{Source: []byte(`function ping(){ return 1 }`), SourceHash: hash}
+func okOpts(hash string) jsrun.Options {
+	return jsrun.Options{Source: []byte(`function ping(){ return 1 }`), SourceHash: hash}
 }
 
 // waitFor polls Ensure until the state kind is reached.
-func waitFor(t *testing.T, reg *jsregistry.Registry, key jsregistry.Key, opts jsregistry.BuildOptions, want jsregistry.StateKind) jsregistry.State {
+func waitFor(t *testing.T, reg *jsregistry.Registry, key jsrun.Key, opts jsrun.Options, want jsrun.StateKind) jsrun.State {
 	t.Helper()
 	deadline := time.Now().Add(20 * time.Second)
 	for {
@@ -43,22 +44,22 @@ func TestRegistry_Ensure_BuildsAsyncAndNotifies(t *testing.T) {
 	key := hookKey("async")
 	t.Cleanup(func() { reg.Drop(key) })
 	ctx := t.Context()
-	notes := reg.Watch(ctx, jsregistry.KindJSHook)
+	notes := reg.Watch(ctx, jsrun.KindJSHook)
 
 	opts := okOpts("h1")
 	started := make(chan struct{})
 	release := make(chan struct{})
-	opts.PostBuild = func(context.Context, *jsengine.VM) (any, error) {
+	opts.PostBuild = func(context.Context, jsrun.Script) (any, error) {
 		close(started)
 		<-release
 		return nil, nil
 	}
-	if st := reg.Ensure(key, opts); st.Kind != jsregistry.StateBuilding {
+	if st := reg.Ensure(key, opts); st.Kind != jsrun.StateBuilding {
 		t.Fatalf("first Ensure: %v, want Building", st.Kind)
 	}
 	<-started
 	// Single flight: a second Ensure with the same options joins the build.
-	if st := reg.Ensure(key, opts); st.Kind != jsregistry.StateBuilding {
+	if st := reg.Ensure(key, opts); st.Kind != jsrun.StateBuilding {
 		t.Fatalf("second Ensure: %v, want Building", st.Kind)
 	}
 	close(release)
@@ -71,7 +72,7 @@ func TestRegistry_Ensure_BuildsAsyncAndNotifies(t *testing.T) {
 		t.Fatal("no notification after the build ended")
 	}
 	st := reg.Ensure(key, opts)
-	if st.Kind != jsregistry.StateReady || st.VM == nil {
+	if st.Kind != jsrun.StateReady || st.Instance == nil {
 		t.Fatalf("after build: %v, want Ready with VM", st.Kind)
 	}
 }
@@ -84,17 +85,17 @@ func TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys(t *testing.T) {
 	t.Cleanup(func() { reg.Drop(hang); reg.Drop(other) })
 
 	start := time.Now()
-	st := reg.Ensure(hang, jsregistry.BuildOptions{
+	st := reg.Ensure(hang, jsrun.Options{
 		Source: []byte(`while(true){}`), SourceHash: "h", Limits: jsengine.Limits{TimeoutSeconds: 1},
 	})
-	if st.Kind != jsregistry.StateBuilding || time.Since(start) > 500*time.Millisecond {
+	if st.Kind != jsrun.StateBuilding || time.Since(start) > 500*time.Millisecond {
 		t.Fatalf("Ensure of a hanging source: %v after %v, want Building at once", st.Kind, time.Since(start))
 	}
-	waitFor(t, reg, other, okOpts("o"), jsregistry.StateReady)
+	waitFor(t, reg, other, okOpts("o"), jsrun.StateReady)
 	// The build deadline from the limits ends the hang; the key is Broken.
-	broken := waitFor(t, reg, hang, jsregistry.BuildOptions{
+	broken := waitFor(t, reg, hang, jsrun.Options{
 		Source: []byte(`while(true){}`), SourceHash: "h", Limits: jsengine.Limits{TimeoutSeconds: 1},
-	}, jsregistry.StateBroken)
+	}, jsrun.StateBroken)
 	if broken.Err == nil || broken.Attempts != 1 {
 		t.Fatalf("Broken: err=%v attempts=%d, want an error and 1 attempt", broken.Err, broken.Attempts)
 	}
@@ -106,21 +107,22 @@ func TestRegistry_Ensure_NewOptsCancelRunningBuild(t *testing.T) {
 	key := hookKey("cancel")
 	t.Cleanup(func() { reg.Drop(key) })
 
-	stuck := jsregistry.BuildOptions{Source: []byte(`while(true){}`), SourceHash: "stuck"} // default limit: 30 s
-	if st := reg.Ensure(key, stuck); st.Kind != jsregistry.StateBuilding {
+	stuck := jsrun.Options{Source: []byte(`while(true){}`), SourceHash: "stuck"} // default limit: 30 s
+	if st := reg.Ensure(key, stuck); st.Kind != jsrun.StateBuilding {
 		t.Fatalf("Ensure stuck: %v", st.Kind)
 	}
 	time.Sleep(100 * time.Millisecond)
 	start := time.Now()
-	if st := reg.Ensure(key, okOpts("fixed")); st.Kind != jsregistry.StateBuilding {
+	if st := reg.Ensure(key, okOpts("fixed")); st.Kind != jsrun.StateBuilding {
 		t.Fatalf("Ensure fixed: %v, want Building", st.Kind)
 	}
-	st := waitFor(t, reg, key, okOpts("fixed"), jsregistry.StateReady)
+	waitFor(t, reg, key, okOpts("fixed"), jsrun.StateReady)
 	if time.Since(start) > 10*time.Second {
 		t.Fatalf("the new build waited %v for the stuck one: it was not cancelled", time.Since(start))
 	}
-	if st.VM.Opts.SourceHash != "fixed" {
-		t.Fatalf("installed hash %q, want fixed", st.VM.Opts.SourceHash)
+	mi, _ := reg.Get(key)
+	if mi.Opts.SourceHash != "fixed" {
+		t.Fatalf("installed hash %q, want fixed", mi.Opts.SourceHash)
 	}
 }
 
@@ -130,26 +132,26 @@ func TestRegistry_Ensure_BrokenBacksOffAndSourceChangeRebuildsAtOnce(t *testing.
 	key := hookKey("broken")
 	t.Cleanup(func() { reg.Drop(key) })
 
-	bad := jsregistry.BuildOptions{
+	bad := jsrun.Options{
 		Source: []byte(`throw new Error("boom")`), SourceHash: "bad",
-		Backoff: jsregistry.Backoff{Base: 100 * time.Millisecond, Max: time.Second},
+		Backoff: jsrun.Backoff{Base: 100 * time.Millisecond, Max: time.Second},
 	}
-	first := waitFor(t, reg, key, bad, jsregistry.StateBroken)
+	first := waitFor(t, reg, key, bad, jsrun.StateBroken)
 	if first.Attempts != 1 || first.Err == nil {
 		t.Fatalf("first failure: attempts=%d err=%v", first.Attempts, first.Err)
 	}
 	// Inside the backoff nothing is retried.
-	if st := reg.Ensure(key, bad); st.Kind != jsregistry.StateBroken || st.Attempts != 1 {
+	if st := reg.Ensure(key, bad); st.Kind != jsrun.StateBroken || st.Attempts != 1 {
 		t.Fatalf("Ensure inside backoff: %v attempts=%d, want Broken with 1", st.Kind, st.Attempts)
 	}
 	// After the backoff the next Ensure retries; the next failure counts up.
 	time.Sleep(time.Until(first.NextTry) + 10*time.Millisecond)
 	reg.Ensure(key, bad)
-	var second jsregistry.State
+	var second jsrun.State
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		second = reg.Ensure(key, bad)
-		if second.Kind == jsregistry.StateBroken && second.Attempts == 2 {
+		if second.Kind == jsrun.StateBroken && second.Attempts == 2 {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -163,15 +165,15 @@ func TestRegistry_Ensure_BrokenBacksOffAndSourceChangeRebuildsAtOnce(t *testing.
 	// A changed source does not wait for the backoff.
 	good := okOpts("good")
 	good.Backoff = bad.Backoff
-	if st := reg.Ensure(key, good); st.Kind != jsregistry.StateBuilding {
+	if st := reg.Ensure(key, good); st.Kind != jsrun.StateBuilding {
 		t.Fatalf("Ensure with a new source: %v, want Building at once", st.Kind)
 	}
-	waitFor(t, reg, key, good, jsregistry.StateReady)
+	waitFor(t, reg, key, good, jsrun.StateReady)
 }
 
 // js-registry.R17
 func TestBackoff_DoublesCapsAndJitters(t *testing.T) {
-	b := jsregistry.Backoff{Base: time.Second, Max: 10 * time.Second}
+	b := jsrun.Backoff{Base: time.Second, Max: 10 * time.Second}
 	for attempts, want := range map[int]time.Duration{1: time.Second, 2: 2 * time.Second, 3: 4 * time.Second, 4: 8 * time.Second, 5: 10 * time.Second, 40: 10 * time.Second} {
 		for range 50 {
 			got := b.Delay(attempts)
@@ -180,7 +182,7 @@ func TestBackoff_DoublesCapsAndJitters(t *testing.T) {
 			}
 		}
 	}
-	if d := (jsregistry.Backoff{}).Delay(1); d < jsregistry.DefaultBackoffBase/2 || d > jsregistry.DefaultBackoffBase {
+	if d := (jsrun.Backoff{}).Delay(1); d < jsrun.DefaultBackoffBase/2 || d > jsrun.DefaultBackoffBase {
 		t.Fatalf("zero Backoff Delay(1) = %v, want about the default base", d)
 	}
 }
@@ -189,11 +191,11 @@ func TestBackoff_DoublesCapsAndJitters(t *testing.T) {
 func TestRegistry_Watch_DeliversOnlyOwnKind(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	name := types.NamespacedName{Name: "k"}
-	hook, adm := jsregistry.HookKey(name), jsregistry.AdmissionKey(name)
+	hook, adm := jsrun.HookKey(name), jsrun.AdmissionKey(name)
 	t.Cleanup(func() { reg.Drop(hook); reg.Drop(adm) })
 	ctx := t.Context()
-	hooks := reg.Watch(ctx, jsregistry.KindJSHook)
-	adms := reg.Watch(ctx, jsregistry.KindJSAdmission)
+	hooks := reg.Watch(ctx, jsrun.KindJSHook)
+	adms := reg.Watch(ctx, jsrun.KindJSAdmission)
 
 	reg.Ensure(adm, okOpts("a"))
 	select {
@@ -221,7 +223,7 @@ func TestRegistry_Concurrent_EnsureCallDrop(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := hookKey("race")
 	t.Cleanup(func() { reg.Drop(key) })
-	opts := func(mem int32) jsregistry.BuildOptions {
+	opts := func(mem int32) jsrun.Options {
 		o := okOpts("race")
 		o.Limits = jsengine.Limits{MemoryMB: mem, TimeoutSeconds: 30}
 		return o

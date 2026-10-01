@@ -30,8 +30,9 @@ explains areas, aspects, rule IDs, gates and open items.
   `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`.
   Details: [kubebuilder-scaffold](.agents/aspects/kubebuilder-scaffold.md).
 - Never delete `// +kubebuilder:scaffold:*` comments.
-- Run user JavaScript only through `Registry.Call`
-  ([js-registry](.agents/aspects/js-registry.md)).
+- Run user JavaScript only through the port `jsrun.Runner` (`Invoke`); callers
+  never import `jsengine` or `jsregistry`
+  ([js-registry](.agents/aspects/js-registry.md), js-execution.R10).
 - Run e2e tests only against an isolated Kind cluster.
 
 ## After making changes

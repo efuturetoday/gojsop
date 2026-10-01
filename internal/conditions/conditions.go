@@ -8,7 +8,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 const (
@@ -86,21 +86,21 @@ func WasBuilding(conds []metav1.Condition) bool {
 // MissingExportError type — never sniffs error message strings.
 //
 // Shared between JSHook and JSAdmission reconcilers because both go through
-// the same Registry.Ensure/RestartByKey path.
+// the same Registry.Ensure/Restart path.
 // status-conditions.R3
 func ClassifyBuildError(err error) (reason, message string) {
-	var miss *jsregistry.MissingExportError
+	var miss *jsrun.MissingExportError
 	if errors.As(err, &miss) {
 		return EventEntrypointMissing, miss.Error()
 	}
 	switch {
-	case errors.Is(err, jsregistry.ErrLoadModule):
+	case errors.Is(err, jsrun.ErrLoadModule):
 		return EventModuleLoadFailed, "module load failed"
-	case errors.Is(err, jsregistry.ErrPostBuild):
+	case errors.Is(err, jsrun.ErrPostBuild):
 		return EventConfigInvalid, "config() returned an error"
-	case errors.Is(err, jsregistry.ErrBindHost):
+	case errors.Is(err, jsrun.ErrBindHost):
 		return EventBuildFailed, "build failed: bind host"
-	case errors.Is(err, jsregistry.ErrNewVM):
+	case errors.Is(err, jsrun.ErrNewVM):
 		return EventBuildFailed, "build failed: new vm"
 	default:
 		return EventBuildFailed, "build failed: unknown"

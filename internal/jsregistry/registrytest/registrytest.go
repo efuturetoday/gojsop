@@ -8,19 +8,21 @@ import (
 	"time"
 
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // GetOrLoad calls Registry.Ensure for key until the key is Ready or Broken
 // and returns the VM or the build error. The boolean reports whether a
 // different VM is installed than before the call. ctx bounds the wait only.
-func GetOrLoad(reg *jsregistry.Registry, ctx context.Context, key jsregistry.Key, opts jsregistry.BuildOptions) (*jsregistry.ManagedVM, bool, error) { //nolint:revive // mirrors the removed Registry.GetOrLoad
+func GetOrLoad(reg *jsregistry.Registry, ctx context.Context, key jsrun.Key, opts jsrun.Options) (*jsregistry.ManagedVM, bool, error) { //nolint:revive // mirrors the removed Registry.GetOrLoad
 	before, _ := reg.Get(key)
 	for {
 		st := reg.Ensure(key, opts)
 		switch st.Kind {
-		case jsregistry.StateReady:
-			return st.VM, st.VM != before, nil
-		case jsregistry.StateBroken:
+		case jsrun.StateReady:
+			mi, _ := reg.Get(key)
+			return mi, mi != before, nil
+		case jsrun.StateBroken:
 			return nil, false, st.Err
 		}
 		select {
@@ -31,24 +33,25 @@ func GetOrLoad(reg *jsregistry.Registry, ctx context.Context, key jsregistry.Key
 	}
 }
 
-// Restart calls Registry.RestartByKey and waits until the rebuilt VM is Ready
+// Restart calls Registry.Restart and waits until the rebuilt VM is Ready
 // (or the build failed), like the synchronous restart the registry had before
 // builds went to the background.
-func Restart(reg *jsregistry.Registry, key jsregistry.Key, reason jsregistry.RestartReason) (*jsregistry.ManagedVM, error) {
+func Restart(reg *jsregistry.Registry, key jsrun.Key, reason jsrun.RestartReason) (*jsregistry.ManagedVM, error) {
 	before, ok := reg.Get(key)
 	if !ok {
-		return nil, reg.RestartByKey(key, reason) // the error for the unknown key
+		return nil, reg.Restart(key, reason) // the error for the unknown key
 	}
-	if err := reg.RestartByKey(key, reason); err != nil {
+	if err := reg.Restart(key, reason); err != nil {
 		return nil, err
 	}
 	deadline := time.Now().Add(time.Minute)
 	for {
 		st := reg.Ensure(key, before.Opts)
+		mi, _ := reg.Get(key)
 		switch {
-		case st.Kind == jsregistry.StateReady && st.VM != before:
-			return st.VM, nil
-		case st.Kind == jsregistry.StateBroken:
+		case st.Kind == jsrun.StateReady && mi != before:
+			return mi, nil
+		case st.Kind == jsrun.StateBroken:
 			return nil, st.Err
 		case time.Now().After(deadline):
 			return nil, context.DeadlineExceeded

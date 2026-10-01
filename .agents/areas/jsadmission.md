@@ -113,10 +113,10 @@ A policy decides on a request and must not change the cluster, so it can read ot
 - **A policy is registered in `jsadmission.Server` before it is published to the `Registrar`.** Status: accepted (2026-05, project). Why: once the configuration points at the operator requests arrive, and an unknown path answers 404.
 - **The webhook entry is named `<ns>-<name>.policies.gojsop.io` (cluster-scoped: `<name>.policies.gojsop.io`).** Status: accepted (2026-05, project). Why: unique per policy inside one configuration.
 - **The operator serves the webhook over TLS with a cert-manager certificate, and the `Registrar` reads the CA bundle on every sync.** Status: accepted (2026-05, project). Why: without `--webhook-cert-path` controller-runtime self-signs and the apiserver rejects that certificate. Open: CA rotation reaches the configurations only on the next policy change (ADM-4).
-- **Admission VMs are built only by `SharedFactory.ForAdmission`, and scripts run only through `jsregistry.Registry.Call`.** Status: accepted (2026-05, project). Why: one place for the read-only surface and for lock, panic recovery and result classification (see aspects). Not taken: binding `kube.apply` and `kube.delete`, because admission runs under `sideEffects: None`.
+- **Admission VMs are built only by `SharedFactory.ForAdmission`, and scripts run only through `jsrun.Runner.Invoke`.** Status: accepted (2026-05, project). Why: one place for the read-only surface and for lock, panic recovery and result classification (see aspects). Not taken: binding `kube.apply` and `kube.delete`, because admission runs under `sideEffects: None`.
 - **After a timeout the VM is rescued instead of leaving the goroutine running.** Status: accepted (2026-05, project). Why: wazero gained context cancellation, and a stuck VM could not be rescued safely before. Not taken: leaving the goroutine running.
 - **The scaffolded Kubebuilder webhook for the `JSAdmission` CRD is an empty stub and validates nothing.** Status: proposed. Open: ADM-7.
 
 ## Open
 
-ADM-3, ADM-4, ADM-5, ADM-6, ADM-7, ADM-8, EXEC-1, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, ADM-9, ADM-10, ADM-11
+ADM-3, ADM-4, ADM-5, ADM-6, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, ADM-9, ADM-10, ADM-11
