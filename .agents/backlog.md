@@ -98,6 +98,14 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   failed"); the cause is only in the condition and the log
   (`internal/jshook/controller/controller.go:155`). This follows js-sources
   R5 (finite event messages). Confirm, or add a sanitized cause.
+- **SRC-7** `decision` Packages and imports, like Go modules. scrippy (the
+  predecessor) bundled scripts with esbuild and allowed URL imports (for
+  example from GitHub) under a per-CR `ModulesPolicy`: host allowlist, SRI
+  pins (`sha256-…`), size limits, fetch timeout; no policy means no imports.
+  To decide: whether foreign code may be fetched at runtime at all (security),
+  URL modules versus OCI artifacts (SRC-1), bundling inside the operator
+  versus before apply. Done when decided and recorded in js-sources.
+
 ## DISP: Hook dispatch and bindings
 
 - **DISP-1** `gap` Schedule and onStartup bindings never fire. Decoded and
