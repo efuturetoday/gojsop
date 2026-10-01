@@ -8,6 +8,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
 
+// status-conditions.R3
 // TestClassifyBuildError pins the typed-error → (reason, message) mapping
 // the JSHook/JSAdmission reconcilers depend on. The whole point of typed
 // sentinels is that this stays correct under message-string churn.

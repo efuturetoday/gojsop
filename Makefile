@@ -106,9 +106,9 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
-.PHONY: check-blocks
-check-blocks: ## Verify .agents/blocks against the code (symbols, tests, anchors)
-	go run ./hack/checkblocks
+.PHONY: sdlc-check
+sdlc-check: ## Check .agents against the method of the SDLC library (github.com/efuturetoday/agentic-sdlc)
+	go run github.com/efuturetoday/agentic-sdlc/cmd/sdlc-check@v0.1.1
 
 ##@ Build
 

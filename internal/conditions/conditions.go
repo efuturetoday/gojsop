@@ -61,7 +61,7 @@ const (
 //
 // Shared between JSHook and JSAdmission reconcilers because both go through
 // the same Registry.GetOrLoad/RestartByKey path.
-// Block: status-conditions R3
+// status-conditions.R3
 func ClassifyBuildError(err error) (reason, message string) {
 	var miss *jsregistry.MissingExportError
 	if errors.As(err, &miss) {

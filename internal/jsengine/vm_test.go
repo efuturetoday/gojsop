@@ -49,6 +49,7 @@ func TestEval_PersistentState(t *testing.T) {
 // TestMemoryLimit_Honoured proves that Limits.MemoryMB is actually wired
 // into qjs. A 4 MiB cap must reject a deliberate ~16 MiB allocation. Without
 // the wiring this test would silently allocate and pass.
+// js-execution.R5
 func TestMemoryLimit_Honoured(t *testing.T) {
 	inst, err := New(Limits{MemoryMB: 4})
 	if err != nil {

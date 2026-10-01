@@ -10,7 +10,7 @@ entrypoints:
 
 # JS Registry
 
-This block describes how gojsop keeps, builds, calls and restarts the JavaScript
+This aspect describes how gojsop keeps, builds, calls and restarts the JavaScript
 VMs of JSHooks and JSAdmissions.
 
 One `jsregistry.Registry` exists per process. It holds one long-lived VM per
@@ -18,16 +18,13 @@ JSHook or JSAdmission, keyed by `types.NamespacedName`. Controllers build,
 restart and drop VMs. The dispatcher and the admission server only call them.
 All runtime execution goes through `Registry.Call`, which takes the per-VM
 lock, recovers panics and classifies the outcome as ok, panic, cancelled,
-memory limit or error. The [js-execution](js-execution.md) block covers the
+memory limit or error. The [js-execution](js-execution.md) aspect covers the
 engine below it.
 
 The registry exists because the dispatcher and the admission server each had
 their own copy of lock, recover and error classification. `Registry.Call` unified
-them. A build runs user JavaScript, so it holds a per-key lock and never the
-registry lock; a slow build of one key must not block other keys. The commit
-history gives no further reason for this split. Per-reason restart counters and
-the history ring on the VM were added for observability; no deeper reason is
-recorded. Rejected alternatives are not recorded anywhere.
+them. Per-reason restart counters and the history ring on the VM were added for
+observability. See Decisions for the choices behind the build lock.
 
 The registry never loads sources. A controller loads the bytes, hashes them and
 passes both in `BuildOptions`. A changed hash makes `GetOrLoad` rebuild. The
@@ -44,11 +41,29 @@ stored in `ManagedVM.Extra`. The same hook checks required exports.
 JSHook calls arrive from an informer queue and a FIFO worker. JSAdmission
 calls arrive from a synchronous webhook. Both share one per-VM lock.
 
+## Parts
+
+| Part | Question | Answer |
+|---|---|---|
+| block | What code does the work, once, so nobody builds it a second time? | `jsregistry.Registry` with `jsregistry.Registry.Call`, `jsregistry.Registry.GetOrLoad` and `jsregistry.Registry.RestartByKey`; `jslifecycle.Rescue` for the restart path. Searched `internal` for a second lock, recover or restart path around it; the dispatcher and the admission server call the registry and have none. |
+| example | Which real use in the code should others copy? | `controller.JSHookReconciler` builds through `Registry.GetOrLoad` with a `PostBuildHook`; `jshook/dispatcher` calls `Registry.Call` and `jslifecycle.Rescue`. |
+| test helper | How does a test use the aspect without effort? | `jsregistry.NewRegistry()` is cheap and needs no cluster; tests build a VM with `GetOrLoad` and a `BuildOptions` literal. `loadPolicy` in `internal/jsadmission/server_test.go` is a local helper for admission tests; no shared fake exists. |
+| sides | Which sides does it touch? | Back end only: the operator process (controllers, dispatcher, admission server). No front end, no CLI. |
+| tie | If it touches more than one side: how do the sides stay in step? | n/a, because it touches one side. Searched `cmd`, `internal` and `test` for other users of `jsregistry`; all are in the operator process. |
+
+## How to use it
+
+1. In a controller, load the source and compute its hash, then call `Registry.GetOrLoad` with `BuildOptions` (source, hash, limits, host binder, `PostBuildHook`).
+2. Compute per-VM data in the `PostBuildHook` and read it from `ManagedVM.Extra`.
+3. Run JavaScript only through `Registry.Call`; on panic, memory limit or timeout call `jslifecycle.Rescue`.
+4. Drop the VM with `Registry.Drop` when the resource goes away.
+5. Add a test with `jsregistry.NewRegistry()` and carry the rule ID in a comment above it.
+
 ## Rules
 
 - **R1** Run user JavaScript at runtime only in the function passed to `Registry.Call`.
-  Why: one place for the call lock, panic recovery and outcome classification.
-  Gate: missing → GATE-4. See also js-execution R2.
+  Why: one place for the call lock, panic recovery and outcome classification (see also js-execution.R2).
+  Gate: missing → GATE-4.
 - **R2** Call `jslifecycle.Rescue` when `Registry.Call` reports panic, memory limit or timeout.
   Why: a VM in that state is not trusted; restarting it is the recovery path.
   Gate: `TestRescue_Success_EmitsRestarted`, `TestRescue_Failure_EmitsRescueFailed`, `TestRescue_NilEmitter_NoOps`.
@@ -79,6 +94,15 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 - **R11** Record every restart with its reason in the per-reason counters and the history ring.
   Why: operators need to see why a VM restarted.
   Gate: `TestRegistry_RestartHistory_RingAndCounters`.
+
+## Decisions
+
+- **A build runs user JavaScript under a per-key lock and never under the registry lock.** Status: accepted (carried over from the block, no date or name recorded).
+  Why: a slow build of one key must not block other keys. Not taken: not recorded anywhere.
+- **`Registry.Call` is the one place for lock, panic recovery and outcome classification.** Status: accepted (carried over from the block, no date or name recorded).
+  Why: the dispatcher and the admission server each had a copy. Not taken: not recorded anywhere.
+- **The registry caches the whole `BuildOptions` and never loads sources.** Status: accepted (carried over from the block, no date or name recorded).
+  Why: rescue callers hold no source. Not taken: not recorded anywhere.
 
 ## Open
 

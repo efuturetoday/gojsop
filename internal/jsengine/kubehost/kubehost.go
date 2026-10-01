@@ -21,7 +21,7 @@ const FieldManager = "gojsop"
 // One KubeHost is shared across all hook instances; all calls run in the
 // goroutine of the per-hook FIFO worker that's invoking handle(), so this
 // type does not need additional synchronisation.
-// Block: kube-access R7
+// kube-access.R7
 type KubeHost struct {
 	// Ctx is the parent context handed to every dynamic-client call. Letting
 	// it be cancelled (e.g. when the manager stops) propagates cancellation
@@ -50,7 +50,7 @@ type kubeListSpec struct {
 
 // Bind installs the full kube.{apply,get,list,delete} surface on globalThis.
 // Implements HostBinder. Used for JSHook VMs.
-// Block: kube-access R3
+// kube-access.R3
 func (h *KubeHost) Bind(ctx *qjs.Context) error {
 	if h.Dyn == nil || h.Mapper == nil {
 		return fmt.Errorf("KubeHost: Dyn and Mapper must be set")
@@ -79,7 +79,7 @@ type ReadOnlyKubeHost struct {
 }
 
 // Bind installs only the read-only subset on globalThis. Implements HostBinder.
-// Block: kube-access R2
+// kube-access.R2
 func (h *ReadOnlyKubeHost) Bind(ctx *qjs.Context) error {
 	if h.KubeHost == nil || h.Dyn == nil || h.Mapper == nil {
 		return fmt.Errorf("ReadOnlyKubeHost: embedded KubeHost must be set")
@@ -91,7 +91,7 @@ func (h *ReadOnlyKubeHost) Bind(ctx *qjs.Context) error {
 	return nil
 }
 
-// Block: kube-access R5
+// kube-access.R5
 func (h *KubeHost) callCtx() context.Context {
 	if h.Ctx != nil {
 		return h.Ctx
@@ -120,7 +120,7 @@ func (h *KubeHost) resourceFor(apiVersion, kind, namespace string) (dynamic.Reso
 // kube.apply({apiVersion, kind, metadata:{name,namespace}, ...}). Returns the
 // persisted object. The body is free-form K8s JSON, so we keep it as a generic
 // map and feed it directly into unstructured.Unstructured.
-// Block: kube-access R4
+// kube-access.R4
 func (h *KubeHost) apply(t *qjs.This) (*qjs.Value, error) {
 	args := t.Args()
 	if len(args) == 0 {

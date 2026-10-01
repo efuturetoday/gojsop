@@ -22,6 +22,7 @@ func newVMWithSource(t *testing.T, src string) *jsengine.VM {
 	return inst
 }
 
+// jsadmission.R2
 func TestHandle_Validate_Allow(t *testing.T) {
 	inst := newVMWithSource(t, `
 		function validate(req) {
@@ -42,6 +43,7 @@ func TestHandle_Validate_Allow(t *testing.T) {
 	}
 }
 
+// jsadmission.R5
 func TestHandle_Validate_Deny(t *testing.T) {
 	inst := newVMWithSource(t, `
 		function validate(req) {
@@ -91,6 +93,7 @@ func TestHandle_Mutate_AddLabel(t *testing.T) {
 	}
 }
 
+// jsadmission.R2
 func TestHandle_MissingExport(t *testing.T) {
 	inst := newVMWithSource(t, `function validate(req) { return {allowed:true}; }`)
 	_, err := jsadmission.Handle(context.Background(), inst, &jsadmission.AdmissionRequest{}, true)

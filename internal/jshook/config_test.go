@@ -8,6 +8,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jshook"
 )
 
+// jshook.R1
 func TestReadConfig_FromHookSource(t *testing.T) {
 	const src = `
 		function config() {
@@ -59,6 +60,7 @@ func TestReadConfig_FromHookSource(t *testing.T) {
 	}
 }
 
+// jshook.R1
 func TestReadConfig_MissingFunction(t *testing.T) {
 	inst, err := jsengine.New(jsengine.Limits{})
 	if err != nil {

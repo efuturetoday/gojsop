@@ -6,31 +6,28 @@ runs in QuickJS on wazero, embedded in the operator.
 
 ## Start here
 
-Project knowledge lives in [.agents/](.agents/README.md), one block per
-decision. Each block names the decision, the code that implements it, the
-rules and the gates that enforce it.
+gojsop follows the agentic SDLC library. Load the skill `sdlc-core` first; it
+explains areas, aspects, rule IDs, gates and open items.
 
-1. Read [.agents/README.md](.agents/README.md) and the blocks for the area you
+1. Read [.agents/README.md](.agents/README.md) and the areas and aspects you
    touch before you change code.
-2. Open items and their keys are in [.agents/backlog.md](.agents/backlog.md).
-   Name the key in the commit message when you close one.
-3. If a change breaks a block's decision, update the block in the same change.
-4. Write and change blocks as described in
-   [.agents/skills/write-block](.agents/skills/write-block/SKILL.md);
-   `make check-blocks` must pass.
-5. Write commit messages with the caveman-commit skill
-   ([.agents/skills/caveman-commit](.agents/skills/caveman-commit/SKILL.md)):
-   Conventional Commits, imperative subject, body only for the non-obvious
-   why. Name the backlog key when a commit closes an item.
+2. If a change breaks a rule or decision, update the area or aspect in the
+   same change (skills `sdlc-area`, `sdlc-aspect`).
+3. Open items live in [.agents/backlog.md](.agents/backlog.md) (skill
+   `sdlc-tracker-file-backlog`). Name the key in the commit that closes one.
+4. Go code and tests link to rules with comments such as `// js-execution.R4`
+   (skill `sdlc-stack-go`).
+5. `make sdlc-check` and `make test lint` must pass.
+6. Write commit messages with the skill `caveman-commit`.
 
 ## Critical rules
 
 - Never edit generated files: `**/zz_generated.*.go`, `config/crd/bases/`,
   `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`.
-  Details: [kubebuilder-scaffold](.agents/blocks/kubebuilder-scaffold.md).
+  Details: [kubebuilder-scaffold](.agents/aspects/kubebuilder-scaffold.md).
 - Never delete `// +kubebuilder:scaffold:*` comments.
 - Run user JavaScript only through `Registry.Call`
-  ([js-registry](.agents/blocks/js-registry.md)).
+  ([js-registry](.agents/aspects/js-registry.md)).
 - Run e2e tests only against an isolated Kind cluster.
 
 ## After making changes

@@ -63,6 +63,7 @@ func postReview(t *testing.T, h http.Handler, path string, req *admissionv1.Admi
 	return out.Response
 }
 
+// jsadmission.R14
 func TestServer_Validate_AllowedRoundtrip(t *testing.T) {
 	key := types.NamespacedName{Namespace: "default", Name: "policy-a"}
 	reg := loadPolicy(t, `function validate(req){ return {allowed: true}; }`, key)
@@ -82,6 +83,7 @@ func TestServer_Validate_AllowedRoundtrip(t *testing.T) {
 	}
 }
 
+// jsadmission.R9
 func TestServer_Validate_FailurePolicy_Fail_OnJSThrow(t *testing.T) {
 	key := types.NamespacedName{Namespace: "default", Name: "policy-fail"}
 	reg := loadPolicy(t, `function validate(req){ throw new Error("boom"); }`, key)
@@ -97,6 +99,7 @@ func TestServer_Validate_FailurePolicy_Fail_OnJSThrow(t *testing.T) {
 	}
 }
 
+// jsadmission.R9
 func TestServer_Validate_FailurePolicy_Ignore_OnJSThrow(t *testing.T) {
 	key := types.NamespacedName{Namespace: "default", Name: "policy-ignore"}
 	reg := loadPolicy(t, `function validate(req){ throw new Error("boom"); }`, key)
@@ -109,6 +112,7 @@ func TestServer_Validate_FailurePolicy_Ignore_OnJSThrow(t *testing.T) {
 	}
 }
 
+// jsadmission.R6
 func TestServer_Mutate_AddsLabel_AsJSONPatch(t *testing.T) {
 	key := types.NamespacedName{Namespace: "default", Name: "policy-mutate"}
 	src := `

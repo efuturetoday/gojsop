@@ -11,10 +11,12 @@ import (
 	"testing"
 )
 
+// api-design.R3
 // TestDefaultLimits_MatchKubebuilderTags pins the +kubebuilder:default tags on
 // api/v1alpha1.JSLimits to DefaultLimits(). Without this guard the two can
 // drift silently — the CRD would advertise one default while the engine
 // applies another, and users would only notice via mismatched behavior.
+// js-execution.R5
 func TestDefaultLimits_MatchKubebuilderTags(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

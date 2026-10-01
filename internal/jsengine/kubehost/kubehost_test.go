@@ -51,6 +51,8 @@ func runHook(t *testing.T, h *kubehost.KubeHost, source string) *jsengine.VM {
 	return inst
 }
 
+// kube-access.R3
+// kube-access.R4
 func TestKubeHost_ApplyCreatesAndUpdates(t *testing.T) {
 	h := newKubeHost(t)
 	const src = `
@@ -99,6 +101,7 @@ func TestKubeHost_ApplyCreatesAndUpdates(t *testing.T) {
 	}
 }
 
+// kube-access.R3
 func TestKubeHost_GetReturnsNullForMissing(t *testing.T) {
 	h := newKubeHost(t)
 	inst := runHook(t, h, ``)
@@ -113,6 +116,7 @@ func TestKubeHost_GetReturnsNullForMissing(t *testing.T) {
 	}
 }
 
+// kube-access.R3
 func TestKubeHost_ListReturnsItems(t *testing.T) {
 	cm1 := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",
@@ -141,6 +145,8 @@ func TestKubeHost_ListReturnsItems(t *testing.T) {
 // configmap-sync demo uses: a single handle() invocation calls kube.apply many
 // times in a row. This guards against an issue we saw in production where the
 // Nth call would receive an empty JSONStringify of args[0].
+// kube-access.R3
+// kube-access.R4
 func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
 	h := newKubeHost(t)
 	// Mirrors the configmap-sync demo: handle() reads evt.object.data and
@@ -201,6 +207,7 @@ func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
 	}
 }
 
+// kube-access.R3
 func TestKubeHost_DeleteRemovesResource(t *testing.T) {
 	cm := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",

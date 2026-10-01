@@ -7,7 +7,7 @@ entrypoints:
 
 # Kubebuilder Scaffold
 
-This block describes how gojsop is laid out as a Kubebuilder project and who
+This aspect describes how gojsop is laid out as a Kubebuilder project and who
 owns which file.
 
 gojsop is a Kubebuilder v4 project (`go.kubebuilder.io/v4`, CLI 4.11.1, see
@@ -27,7 +27,7 @@ recorded. The effect is that the output of `kubebuilder create` must be moved
 by hand.
 
 Integration tests (envtest) live in `test/integration/`, e2e tests (Kind) in
-`test/e2e/`. The [testing](testing.md) block covers them. The distribution
+`test/e2e/`. The [testing](testing.md) aspect covers them. The distribution
 path (Kustomize bundle or Helm chart) is not chosen yet.
 
 | Path | Owner | Regenerate with |
@@ -47,6 +47,30 @@ Generic references: [Kubebuilder Book](https://book.kubebuilder.io),
 [API Conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md),
 [controller-runtime FAQ](https://github.com/kubernetes-sigs/controller-runtime/blob/main/FAQ.md).
 
+## Parts
+
+| Part | Question | Answer |
+|---|---|---|
+| block | What code does the work, once? | The Kubebuilder CLI (`PROJECT`, `kubebuilder create api`, `kubebuilder create webhook`) scaffolds; controller-gen (`make manifests generate`, version `CONTROLLER_TOOLS_VERSION` in the `Makefile`) generates CRDs, RBAC, webhook manifests and deepcopy code. Searched `Makefile`, `PROJECT`, `config/`, `api/`. |
+| example | Which real use should others copy? | The `JSHook` kind: `api/v1alpha1/jshook_types.go`, controller in `internal/jshook/controller/`, sample in `config/samples/`. |
+| test helper | How does a test use the aspect without effort? | envtest loads the generated `config/crd/bases` in `test/integration` (suite `TestControllers`); no other helper. Searched `test/`, `Makefile`. |
+| sides | Which sides does it touch? | Back end only (Go types, controllers, webhook) plus infrastructure (CRD, RBAC and webhook YAML in `config/`). |
+| tie | How do the sides stay in step? | Generated: `make manifests generate` produces the YAML and deepcopy code from the Go types and markers. No check that the output is committed yet, GATE-14. |
+
+## How to use it
+
+Adding a kind:
+
+1. Run `kubebuilder create api --group core --version v1alpha1 --kind <Kind>`
+   (add `kubebuilder create webhook` when it needs one). R3, R7.
+2. Move the scaffolded controller from `internal/controller/` to the domain
+   package, like `internal/jshook/controller/`. R3.
+3. Edit the `*_types.go` file and its markers by hand, keep the
+   `// +kubebuilder:scaffold:*` comments. R5, R6.
+4. Run `make manifests generate` and commit the generated files. R1.
+5. Add a sample under `config/samples/`.
+6. Run `make lint-fix` and `make test`. R2.
+
 ## Rules
 
 - **R1** After editing `*_types.go`, `+kubebuilder:` markers or RBAC markers, run
@@ -55,12 +79,12 @@ Generic references: [Kubebuilder Book](https://book.kubebuilder.io),
   Gate: missing → GATE-14.
 - **R2** After editing Go code, run `make lint-fix` and `make test`.
   Why: `make test` regenerates, formats and vets before it runs the tests.
-  Gate: `make test` (runs in CI, `test.yml`).
+  Gate: `make test` (runs in CI).
 - **R3** Scaffold new kinds and webhooks with `kubebuilder create api` or
   `kubebuilder create webhook`, then move the controller next to its domain
   package like the existing ones.
   Why: the layout keeps controllers next to their domain code.
-  Gate: review only.
+  Gate: review only — the layout deviates from the scaffold and no tool knows where a controller belongs.
 - **R4** Run e2e tests only against an isolated Kind cluster (`make test-e2e`,
   `hack/e2e.sh`), never against a real cluster.
   Why: the tests create and delete cluster resources.
@@ -71,10 +95,18 @@ Generic references: [Kubebuilder Book](https://book.kubebuilder.io),
   Gate: missing → GATE-14.
 - **R6** Never delete `// +kubebuilder:scaffold:*` comments.
   Why: the Kubebuilder CLI injects new code at these markers.
-  Gate: review only — low value.
+  Gate: review only — a deleted marker only shows at the next scaffold run.
 - **R7** Never use `kubebuilder ... --force` without a backup of custom logic.
   Why: `--force` overwrites scaffolded files.
-  Gate: review only.
+  Gate: review only — the Kubebuilder CLI does not report an overwrite.
+
+## Decisions
+
+- **Controllers live next to their domain code, not in `internal/controller/`.**
+  Status: accepted (reason not recorded).
+  Why: not recorded. Not taken: the Kubebuilder default layout.
+- **The distribution path (Kustomize bundle or Helm chart) is not chosen.**
+  Status: proposed (OPS-4).
 
 ## Open
 

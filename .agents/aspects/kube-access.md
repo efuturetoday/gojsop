@@ -10,11 +10,11 @@ entrypoints:
 
 # Kube Access
 
-This block describes how user JavaScript reaches the Kubernetes API.
+This aspect describes how user JavaScript reaches the Kubernetes API.
 
 Scripts see one global object, `kube`. Hooks get `apply`, `get`, `list` and
 `delete`. Admission policies get `get` and `list`; `apply` and `delete` are
-`undefined` for them. The [js-execution](js-execution.md) block explains where
+`undefined` for them. The [js-execution](js-execution.md) aspect explains where
 `kube` sits in the VM.
 
 A `kubehost.Factory` mints the binder that installs `kube` into a VM.
@@ -47,6 +47,24 @@ Semantics of the four functions, each taking one JS object:
 An unknown kind fails with a RESTMapping error. Whether the manager's mapper
 sees CRDs installed after start is not verified.
 
+## Parts
+
+| Part | Question | Answer |
+|---|---|---|
+| block | What code does the work, once? | `kubehost.Factory`, with `kubehost.SharedFactory` as the only implementation, binds `kubehost.KubeHost` (full) or `kubehost.ReadOnlyKubeHost` into a VM. Searched `internal` and `cmd` for other uses of `dynamic` clients: only `cmd/main.go` builds one. |
+| example | Which real use should others copy? | `jshook` controller takes a `kubehost.Factory` and calls `ForHook`; the admission controller does the same with `ForAdmission`. |
+| test helper | How does a test use the aspect without effort? | `newKubeHost` in the kubehost tests builds a `kubehost.KubeHost` over a fake dynamic client and a test RESTMapper. |
+| sides | Which sides does it touch? | Back end only: operator process, Kubernetes API, and the generated RBAC role. |
+| tie | How do the sides stay in step? | n/a, because one side runs the code. The RBAC role is generated from markers (R6); no test checks it yet, see GATE-14. |
+
+## How to use it
+
+1. Add the function to `kubehost.KubeHost` and bind it in `Bind`.
+2. If it cannot write, bind it in `kubehost.ReadOnlyKubeHost.Bind` too.
+3. Add a `TestKubeHost_*` test and put `// kube-access.R3` above it.
+4. If it needs a new permission, add the `+kubebuilder:rbac` marker and run `make manifests`.
+5. Run `make test lint`.
+
 ## Rules
 
 - **R1** Reach the cluster from JavaScript only through `kube`, and obtain its
@@ -69,7 +87,8 @@ sees CRDs installed after start is not verified.
   Violated today → KUBE-1 (the `FieldManager` doc comment still says server-side apply).
 - **R5** Bound every `kube.*` call by the deadline of the running script call.
   Why: R3 of [js-execution](js-execution.md) promises a deadline for the whole call.
-  Gate: missing → GATE-24. Violated today → EXEC-2.
+  Gate: missing → GATE-24.
+  Violated today, see EXEC-2.
 - **R6** Put the `+kubebuilder:rbac` marker next to the code that needs the
   permission and run `make manifests`. `config/rbac/role.yaml` is generated.
   Why: the generated role must not drift from the code.
@@ -77,12 +96,27 @@ sees CRDs installed after start is not verified.
 - **R7** Do not read `kubehost.KubeHost` fields from another goroutine.
   Why: calls arrive on the per-hook worker goroutine, and the registry
   serialises calls per VM, so the type has no locking.
-  Gate: missing → GATE-3 (`-race`).
+  Gate: missing → GATE-3.
 
-## Rejected
+## Decisions
 
-- Typed clients instead of dynamic client plus RESTMapper: reason not recorded.
-- Server-side apply for `kube.apply`: deferred to Phase 2 (KUBE-1).
+- **Scripts reach the cluster through a dynamic client with a RESTMapper.**
+  Status: accepted (date and approver not recorded; migrated from block).
+  Why: it fits the free-form `apiVersion` and `kind` that scripts pass. Not
+  taken: typed clients; the reason is not recorded.
+- **Binders come from a `kubehost.Factory`, not a process-wide singleton.**
+  Status: accepted (date and approver not recorded; migrated from block).
+  Why: a per-ServiceAccount implementation (TokenRequest) can be swapped in
+  later. Not taken: the singleton field, because it blocks that swap.
+- **The operator's own ServiceAccount performs every call (MVP).**
+  Status: accepted (date and approver not recorded; migrated from block).
+  Why: per-hook identity and narrower RBAC are planned as "Phase 2" (OPS-2).
+  Not taken: per-hook ServiceAccounts now, because they need TokenRequest work.
+- **`kube.apply` is Get plus Create or JSON merge patch.**
+  Status: accepted (date and approver not recorded; migrated from block).
+  Why: server-side apply was deferred; Phase 2 may switch once only modern API
+  servers are supported (KUBE-1). Not taken: server-side apply, because it was
+  deferred.
 
 ## Open
 

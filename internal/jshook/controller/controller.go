@@ -106,7 +106,7 @@ func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message 
 // freshly built VM and stashes the *jshook.Config in ManagedVM.Extra. The
 // reconciler reads it back via configFromExtra. This keeps the config off the
 // engine and inside the feature package.
-// Block: hook-dispatch R1
+// jshook.R2
 func readConfig(ctx context.Context, vm *jsengine.VM) (any, error) {
 	if !vm.HasExport("config") {
 		return nil, &jsregistry.MissingExportError{Name: "config"}
@@ -131,10 +131,10 @@ func configFromExtra(extra any) *jshook.Config {
 	return nil
 }
 
-// Block: hook-dispatch R8
-// Block: status-conditions R1
-// Block: status-conditions R2
-// Block: status-conditions R5
+// jshook.R14
+// status-conditions.R1
+// status-conditions.R2
+// status-conditions.R5
 func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).WithValues("jshook", req.Name)
 
@@ -279,8 +279,8 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // the static, low-cardinality template (see plan's "Message stability"
 // section). conditionMsg may carry the verbose error string — that is
 // per-CR and not subject to the recorder's dedup window.
-// Block: status-conditions R1
-// Block: status-conditions R2
+// status-conditions.R1
+// status-conditions.R2
 func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, eventReason, eventMsg, conditionMsg string) (ctrl.Result, error) {
 	r.event(hook, corev1.EventTypeWarning, eventReason, eventMsg)
 	now := metav1.NewTime(time.Now())

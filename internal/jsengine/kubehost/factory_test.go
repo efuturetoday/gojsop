@@ -15,6 +15,7 @@ import (
 // TestSharedFactory_ForHook_FullSurface asserts ForHook hands out a *KubeHost
 // (which Bind installs the full apply/get/list/delete surface) over the
 // configured dynamic client and mapper.
+// kube-access.R1
 func TestSharedFactory_ForHook_FullSurface(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClient(scheme.Scheme)
 	mapper := meta.NewDefaultRESTMapper(nil)
@@ -40,6 +41,9 @@ func TestSharedFactory_ForHook_FullSurface(t *testing.T) {
 // out a *ReadOnlyKubeHost — the wrapping that restricts Bind to get/list.
 // The underlying client and mapper must match ForHook's so reads see the
 // same cluster state.
+// kube-access.R2
+// js-execution.R6
+// jsadmission.R13
 func TestSharedFactory_ForAdmission_ReadOnlySurface(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClient(scheme.Scheme)
 	mapper := meta.NewDefaultRESTMapper(nil)
@@ -64,6 +68,7 @@ func TestSharedFactory_ForAdmission_ReadOnlySurface(t *testing.T) {
 // TestSharedFactory_PerCallInstances ensures the factory hands out a fresh
 // *KubeHost per call — Phase 2's per-SA factory will too, so call sites
 // must not assume the binder is shared.
+// kube-access.R1
 func TestSharedFactory_PerCallInstances(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClient(scheme.Scheme)
 	mapper := meta.NewDefaultRESTMapper(nil)

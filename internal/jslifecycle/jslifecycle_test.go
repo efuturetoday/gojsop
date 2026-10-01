@@ -31,6 +31,8 @@ func loadInstance(t *testing.T, reg *jsregistry.Registry, key types.NamespacedNa
 	t.Cleanup(func() { reg.Drop(key) })
 }
 
+// js-registry.R2
+// status-conditions.R4
 func TestRescue_Success_EmitsRestarted(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Namespace: "ns", Name: "ok"}
@@ -64,6 +66,8 @@ func TestRescue_Success_EmitsRestarted(t *testing.T) {
 	}
 }
 
+// js-registry.R2
+// status-conditions.R4
 func TestRescue_Failure_EmitsRescueFailed(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	// Deliberately don't seed: RestartByKey on an unknown key returns an
@@ -92,6 +96,8 @@ func TestRescue_Failure_EmitsRescueFailed(t *testing.T) {
 	}
 }
 
+// js-registry.R2
+// status-conditions.R4
 func TestRescue_NilEmitter_NoOps(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Namespace: "ns", Name: "noemit"}

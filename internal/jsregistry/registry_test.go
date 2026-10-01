@@ -10,6 +10,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
 
+// js-registry.R5
 func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	t.Cleanup(func() { reg.Drop(types.NamespacedName{Name: "h1"}) })
@@ -52,6 +53,8 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	}
 }
 
+// js-registry.R3
+// js-sources.R3
 func TestRegistry_RestartOnSourceChange(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "h2"}
@@ -95,6 +98,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 // can rescue-rebuild an instance using the cached BuildOptions, without the
 // caller passing them again. This is the path the dispatcher takes on
 // memory/panic/timeout — it doesn't have the source bytes in hand.
+// js-registry.R4
 func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "rescue"}
@@ -141,9 +145,11 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	}
 }
 
+// status-conditions.R4
 // TestRegistry_RestartHistory_RingAndCounters proves the per-reason counter
 // increments correctly across many restarts and that History is capped at
 // historyCap (20) with the oldest event evicted on overflow.
+// js-registry.R11
 func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "ring"}
@@ -197,6 +203,7 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 	}
 }
 
+// js-registry.R4
 func TestRegistry_RestartByKey_UnknownHook(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	if _, err := reg.RestartByKey(types.NamespacedName{Name: "ghost"}, jsregistry.ReasonManual); err == nil {

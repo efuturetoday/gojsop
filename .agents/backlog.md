@@ -14,16 +14,16 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 | Aspect | Prefix | Block |
 |--------|--------|-------|
-| JS execution | EXEC | [js-execution](blocks/js-execution.md) |
-| JS registry and restarts | REG | [js-registry](blocks/js-registry.md) |
-| Status and conditions | STAT | [status-conditions](blocks/status-conditions.md) |
-| JS sources | SRC | [js-sources](blocks/js-sources.md) |
-| Hook dispatch and bindings | DISP | [hook-dispatch](blocks/hook-dispatch.md) |
-| Admission webhook | ADM | [admission-webhook](blocks/admission-webhook.md) |
-| Kubernetes access from JS | KUBE | [kube-access](blocks/kube-access.md) |
-| CRD API surface | API | [api-design](blocks/api-design.md) |
+| JS execution | EXEC | [js-execution](aspects/js-execution.md) |
+| JS registry and restarts | REG | [js-registry](aspects/js-registry.md) |
+| Status and conditions | STAT | [status-conditions](aspects/status-conditions.md) |
+| JS sources | SRC | [js-sources](aspects/js-sources.md) |
+| Hook dispatch and bindings | DISP | [jshook](areas/jshook.md) |
+| Admission webhook | ADM | [jsadmission](areas/jsadmission.md) |
+| Kubernetes access from JS | KUBE | [kube-access](aspects/kube-access.md) |
+| CRD API surface | API | [api-design](aspects/api-design.md) |
 | Operations (metrics, RBAC, reconcile) | OPS | planned |
-| Gates and test infrastructure | GATE | [testing](blocks/testing.md) |
+| Gates and test infrastructure | GATE | [testing](aspects/testing.md) |
 | Documentation | DOC | none |
 
 ## EXEC: JS execution
@@ -157,6 +157,16 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **ADM-8** `decision` When the patch diff fails, `fillResponse` allows the
   request. The reason is not recorded; confirm or deny instead.
+- **ADM-9** `gate` No test that the script receives every field of the
+  request (`uid`, `kind`, `resource`, `oldObject`, `userInfo`, `dryRun`, …)
+  through the server. Done when a server test asserts each field
+  (jsadmission.R3).
+- **ADM-10** `gate` No test that an omitted `allowed` denies, or that a `null`
+  or `undefined` return is a script failure. Done when both cases are tested
+  (jsadmission.R4).
+- **ADM-11** `gate` No test that a validating policy's `modifiedObject` is
+  ignored. Done when a server test shows no patch for a validating policy
+  (jsadmission.R7).
 ## KUBE: Kubernetes access from JS
 
 - **KUBE-1** `debt` `kube.apply` is not server-side apply. It does Get, then
@@ -281,3 +291,8 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`;
   `kubehost.FieldManager` calls itself a server-side-apply field manager
   (KUBE-1).
+- **GATE-25** `gate` CI cannot fetch the private module
+  `github.com/efuturetoday/agentic-sdlc` yet. `make sdlc-check` in
+  `lint.yml` needs `GOPRIVATE` plus a token with read access, set as a
+  repository secret once gojsop has a remote. Done when the lint job runs
+  the SDLC check green.

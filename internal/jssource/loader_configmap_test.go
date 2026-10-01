@@ -62,6 +62,7 @@ func TestConfigMapLoader_ExplicitKey(t *testing.T) {
 	}
 }
 
+// js-sources.R2
 func TestConfigMapLoader_MissingCM(t *testing.T) {
 	c := newReader(t).Build()
 	l := ConfigMapLoader{Reader: c}
@@ -79,6 +80,7 @@ func TestConfigMapLoader_MissingCM(t *testing.T) {
 	}
 }
 
+// js-sources.R2
 func TestConfigMapLoader_MissingKey(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "ns1"},
@@ -94,6 +96,7 @@ func TestConfigMapLoader_MissingKey(t *testing.T) {
 	}
 }
 
+// js-sources.R2
 func TestConfigMapLoader_EmptyValue(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "ns1"},
@@ -109,6 +112,7 @@ func TestConfigMapLoader_EmptyValue(t *testing.T) {
 	}
 }
 
+// js-sources.R2
 func TestConfigMapLoader_NoRefFallsThrough(t *testing.T) {
 	c := newReader(t).Build()
 	l := ConfigMapLoader{Reader: c}

@@ -8,6 +8,7 @@ import (
 // TestWrapOOM pins the engine boundary translation: raw qjs OOM strings get
 // lifted into ErrOOM, everything else passes through. Downstream code
 // classifies via errors.Is — never by sniffing the message.
+// js-execution.R4
 func TestWrapOOM(t *testing.T) {
 	if wrapEngineErr(nil, nil) != nil {
 		t.Fatal("nil must pass through")
@@ -25,6 +26,7 @@ func TestWrapOOM(t *testing.T) {
 	}
 }
 
+// js-execution.R4
 func TestIsOOMError_OnlyMatchesSentinel(t *testing.T) {
 	if IsOOMError(nil) {
 		t.Fatal("nil must not be OOM")

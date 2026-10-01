@@ -2,16 +2,46 @@
   "version": 1,
   "skills": {
     "caveman": {
-      "source": "juliusbrussee/caveman",
+      "source": "efuturetoday/agentic-sdlc",
       "sourceType": "github",
       "skillPath": "skills/caveman/SKILL.md",
-      "computedHash": "e9192d111aa44ea90bd214d5aa2b4f640195b0717faedd881e4b3927da9d88e2"
+      "computedHash": "d39dd330b630303fa0cd43d83c135a32a29d034dac41bdd9724ac23d2752677e"
     },
     "caveman-commit": {
-      "source": "juliusbrussee/caveman",
+      "source": "efuturetoday/agentic-sdlc",
       "sourceType": "github",
       "skillPath": "skills/caveman-commit/SKILL.md",
-      "computedHash": "b416cf134b0f33ddadeca7977aebdbb2d3db79a166d0fce2e1aabeec98132766"
+      "computedHash": "09bcbb045bb910a168630ef05d25636a341ceab4ab53e6848fcfa5079ac4ac5d"
+    },
+    "sdlc-area": {
+      "source": "efuturetoday/agentic-sdlc",
+      "sourceType": "github",
+      "skillPath": "skills/sdlc-area/SKILL.md",
+      "computedHash": "a331b3a3c2cf27b501182673110938a0ac8b721611e666c5288354475a69238f"
+    },
+    "sdlc-aspect": {
+      "source": "efuturetoday/agentic-sdlc",
+      "sourceType": "github",
+      "skillPath": "skills/sdlc-aspect/SKILL.md",
+      "computedHash": "c11e994a308ed2339df578daea68fe97de614512fee2244bcc48b29903dd3bcd"
+    },
+    "sdlc-core": {
+      "source": "efuturetoday/agentic-sdlc",
+      "sourceType": "github",
+      "skillPath": "skills/sdlc-core/SKILL.md",
+      "computedHash": "03d370f7ccec8d4a95f33bb5eae54cb2f91fbac3c20df84823389456c3aa7b06"
+    },
+    "sdlc-stack-go": {
+      "source": "efuturetoday/agentic-sdlc",
+      "sourceType": "github",
+      "skillPath": "skills/sdlc-stack-go/SKILL.md",
+      "computedHash": "a63724e60bac595b812e2b17e180618096cbe32270136013c803862c8a7d2d2f"
+    },
+    "sdlc-tracker-file-backlog": {
+      "source": "efuturetoday/agentic-sdlc",
+      "sourceType": "github",
+      "skillPath": "skills/sdlc-tracker-file-backlog/SKILL.md",
+      "computedHash": "bc8be3d1cab87f9ae7eb5e9f8d1d597eaddc2debfda97b4198a12165d309558a"
     }
   }
 }

@@ -28,7 +28,7 @@ type CABundleProvider func(ctx context.Context) ([]byte, error)
 
 // PolicyMeta is everything the registrar needs to write a single
 // webhooks[] entry into the central VWC/MWC.
-// Block: admission-webhook R3
+// jsadmission.R10
 type PolicyMeta struct {
 	Key            types.NamespacedName
 	Path           string
@@ -132,7 +132,6 @@ func (r *Registrar) scheduleSyncLocked() {
 
 // Sync rewrites both central WebhookConfigurations from the live policy map.
 // Side-effect: drops a config object when it has no entries left.
-// Block: admission-webhook R5
 func (r *Registrar) Sync(ctx context.Context) error {
 	r.mu.Lock()
 	policies := make([]PolicyMeta, 0, len(r.policies))

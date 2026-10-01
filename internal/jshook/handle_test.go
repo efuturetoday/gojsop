@@ -8,6 +8,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jshook"
 )
 
+// jshook.R7
 func TestHandle_ReceivesBindingContext(t *testing.T) {
 	const src = `
 		var lastEvent = null;

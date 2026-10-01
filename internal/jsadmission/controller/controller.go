@@ -105,10 +105,9 @@ func admissionPostBuild(mutating bool) jsregistry.PostBuildHook {
 	}
 }
 
-// Block: status-conditions R1
-// Block: status-conditions R2
-// Block: status-conditions R5
-// Block: admission-webhook R2
+// status-conditions.R1
+// status-conditions.R2
+// status-conditions.R5
 func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx).WithValues("jsadmission", req.Name)
 
@@ -285,8 +284,8 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // failAdmission emits a Warning event with the stable eventMsg template,
 // then writes a Failed condition carrying the verbose conditionMsg. Mirrors
 // JSHookReconciler.fail.
-// Block: status-conditions R1
-// Block: status-conditions R2
+// status-conditions.R1
+// status-conditions.R2
 func (r *JSAdmissionReconciler) failAdmission(ctx context.Context, pol *corev1alpha1.JSAdmission, eventReason, eventMsg, conditionMsg string) (ctrl.Result, error) {
 	r.event(pol, corev1.EventTypeWarning, eventReason, eventMsg)
 	now := metav1.NewTime(time.Now())

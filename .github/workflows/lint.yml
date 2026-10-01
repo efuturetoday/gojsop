@@ -22,5 +22,8 @@ jobs:
         with:
           version: v2.7.2
 
-      - name: Check agent blocks against the code
-        run: make check-blocks
+      - name: Check .agents against the SDLC method
+        run: make sdlc-check
+        env:
+          GOPRIVATE: github.com/efuturetoday
+          # needs a token with read access to efuturetoday/agentic-sdlc (GATE-25)

@@ -10,6 +10,7 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 )
 
+// js-sources.R4
 func TestJSHookConfigMapMapper_FansOutMatchingHooks(t *testing.T) {
 	hookA := &corev1alpha1.JSHook{
 		ObjectMeta: metav1.ObjectMeta{Name: "a"},
@@ -64,6 +65,7 @@ func TestJSHookConfigMapMapper_NoMatch(t *testing.T) {
 	}
 }
 
+// js-sources.R4
 func TestJSAdmissionConfigMapMapper_FansOutMatchingPolicies(t *testing.T) {
 	pol := &corev1alpha1.JSAdmission{
 		ObjectMeta: metav1.ObjectMeta{Name: "p"},

@@ -10,7 +10,7 @@ entrypoints:
 
 # JS Sources
 
-This block describes how gojsop turns `spec.source` of a JSHook or JSAdmission into the JavaScript text that a VM runs.
+This aspect describes how gojsop turns `spec.source` of a JSHook or JSAdmission into the JavaScript text that a VM runs.
 
 The controller resolves the source, not the registry. Each reconcile calls one shared `jssource.Chain` with `spec.source`. The chain asks its loaders in order, and the first loader that claims the source returns the bytes. The controller hashes the bytes (sha256) and passes the hash as `SourceHash` to `jsregistry.Registry.GetOrLoad`. A new hash rebuilds the VM. The same hash reuses it. The registry sees only bytes and a hash. See [js-registry](js-registry.md) for the rebuild itself.
 
@@ -21,6 +21,26 @@ ConfigMap edits reach the reconcile through a watch plus a mapper, not through p
 A load error sets `Ready=False`, writes the event `SourceLoadFailed` and requeues. The registry is not touched on this path. An existing VM probably keeps serving the previous source. This is inferred from the code and untested (SRC-5).
 
 The history records one reason: ConfigMap support was added with a watch because `configMapRef` was typed in the CRD but no loader served it. The reason for the `Loader` and `Chain` shape, and for the alternatives to the watch, is not recorded.
+
+## Parts
+
+| Part | Question | Answer |
+|---|---|---|
+| block | What code does the work, once, so nobody builds it a second time? | `jssource.Chain` with the loaders `jssource.InlineLoader` and `jssource.ConfigMapLoader`, built once in `cmd/main.go` and shared by both controllers. `jssource.Hash` makes the restart trigger. Searched `internal/` and `cmd/` for other loads of `spec.source`: none. |
+| example | Which real use in the code should others copy? | `jssource.ConfigMapLoader.Load` (the loader) and `jssource.JSHookConfigMapMapper` (the watch). |
+| test helper | How does a test use the aspect without effort? | `newReader` in the `jssource` tests builds a controller-runtime fake client with ConfigMaps for `jssource.ConfigMapLoader`; `jssource.NewChain(jssource.InlineLoader{})` is the loader of the controller integration tests. |
+| sides | Which sides does it touch? | Back end only: both controllers (`jshook`, `jsadmission`) and the registry. |
+| tie | How do the sides stay in step? | n/a, because one side only. Searched for a second consumer of `spec.source` outside the controllers: none. The CRD field against loader gap is rule R6 (GATE-10). |
+
+## How to use it
+
+Add a source kind (for example OCI, SRC-1):
+
+1. Add the field to `JSSource` in the CRD types and regenerate the manifests.
+2. Write a loader with `Load(ctx, src) ([]byte, bool, error)`: `claimed=false` only when its field is unset (R2).
+3. Register it in the `jssource.NewChain` call in `cmd/main.go`.
+4. If the source can change outside the CR, add a watch and a mapper like `jssource.JSHookConfigMapMapper` (R4).
+5. Add a test for each failure path, with the rule ID in a comment.
 
 ## Rules
 
@@ -38,17 +58,24 @@ The history records one reason: ConfigMap support was added with a watch because
   Gate: `TestJSHookConfigMapMapper_FansOutMatchingHooks`, `TestJSAdmissionConfigMapMapper_FansOutMatchingPolicies`. End to end missing → GATE-16.
 - **R5** Keep error text out of the `SourceLoadFailed` event message.
   Why: the recorder dedupes on reason plus message.
-  Gate: missing → GATE-16. See SRC-6 for the cost of this rule.
+  Gate: missing → GATE-16
+  See SRC-6 for the cost of this rule.
 - **R6** Add a CRD source field only together with its loader.
   Why: a typed field without a loader fails at runtime with "no loader matched".
-  Gate: missing → GATE-10. Violated today → SRC-1.
+  Gate: missing → GATE-10
+  Violated today → SRC-1.
 - **R7** Do not put secrets in `spec.source.inline`.
   Why: the CR is readable in etcd and by anyone with `get` on it.
   Gate: review only — a secret in a string cannot be detected reliably. Violated today → SRC-2 (no CRD warning).
 
-## Rejected
+## Decisions
 
-Mounted volumes, a poll interval and per-controller loaders were considered. Their reasons are not recorded.
+- **Mounted volumes are not used to deliver source.** Status: accepted (date and author not recorded).
+  Why: not recorded. Not taken: mounted volumes, because the reason is not recorded.
+- **ConfigMap edits are not detected by a poll interval.** Status: accepted (date and author not recorded).
+  Why: not recorded. Not taken: a poll interval, because the reason is not recorded.
+- **Loaders are not per controller.** Status: accepted (date and author not recorded).
+  Why: one shared `jssource.Chain` serves both controllers (R1); the original reasoning is not recorded. Not taken: per-controller loaders, because the reason is not recorded.
 
 ## Open
 

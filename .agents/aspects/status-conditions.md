@@ -9,7 +9,7 @@ entrypoints:
 
 # Status and Conditions
 
-This block describes how gojsop reports the state of a JSHook or JSAdmission in
+This aspect describes how gojsop reports the state of a JSHook or JSAdmission in
 its CRD status.
 
 Status holds only what the controller observed at reconcile time, plus a
@@ -38,6 +38,25 @@ Each reconciler is the only writer of the status of its own kind. The
 dispatcher, the admission server, the registry and the lifecycle code never
 write status.
 
+## Parts
+
+| Part | Question | Answer |
+|---|---|---|
+| block | What code does the work, once, so nobody builds it a second time? | `conditions.ClassifyBuildError` and the Reason constants of `internal/conditions` (`conditions.ReasonReconciled`, `conditions.ReasonFailed`), `jslifecycle.RestartHistoryFor` for restart data, `apimeta.SetStatusCondition` from apimachinery for the condition. Searched `internal/` for `SetStatusCondition`, `Status().Update`, `Reason:`; both reconcilers use only these. |
+| example | Which real use in the code should others copy? | `jshook/controller.JSHookReconciler.Reconcile` and its `fail` method. |
+| test helper | How does a test use the aspect without effort? | `jsregistry.NewRegistry` for the registry log in unit tests; the envtest suite in `test/integration` for reconcilers. No helper asserts a status condition. Searched `*_test.go` for `Conditions`, `ObservedGeneration`: no hit. |
+| sides | Which sides does it touch? | Back end only: the two reconcilers, the registry, and the CRD types in `api/v1alpha1`. Users read the result through kubectl. |
+| tie | How do the sides stay in step? | Generated: `make manifests` builds the CRD YAML from the Go types with controller-gen. The enum of `RestartReason` against the CRD is not checked, see API-5. |
+
+## How to use it
+
+Add a new failure cause to status:
+
+1. Add a sentinel error in `internal/jsregistry` and map it in `conditions.ClassifyBuildError` to an Event reason and message from the finite set.
+2. Call the `fail` method of the reconciler of the kind. It sets `Ready=False` with `conditions.ReasonFailed` and `ObservedGeneration`.
+3. Add a case to `TestClassifyBuildError`.
+4. Run `make test lint`.
+
 ## Rules
 
 - **R1** Set `Ready` with `apimeta.SetStatusCondition`, a Reason constant from
@@ -45,7 +64,7 @@ write status.
   failure.
   Why: users and tools compare `observedGeneration` with the generation to see
   whether status is current.
-  Gate: missing → GATE-8, GATE-9.
+  Gate: missing → GATE-8.
 - **R2** Write status only from the reconciler of that kind, and only with
   `Status().Update`.
   Why: one writer per status avoids conflicting updates. A further reason is
@@ -63,16 +82,23 @@ write status.
 - **R5** Put only the reconcile outcome into `lastReconcile`, never a runtime
   call result.
   Why: the removed fields lied about what the controller knew.
-  Gate: missing → GATE-9. Violated today → STAT-1.
+  Gate: missing → GATE-9.
 - **R6** Declare no CRD field that is neither implemented nor surfaced in
   status. This is a candidate project rule, not yet enforced.
   Why: not recorded.
   Gate: missing → GATE-10.
 
-## Rejected
+## Decisions
 
-Rejected alternatives are not recorded beyond the two commit messages named
-above.
+- **One condition type `Ready` with the reasons `Reconciled` and `Failed`.** Status: accepted (2026-10-01, migrated from the old block; original date not recorded).
+  Why: richer detail lives in typed status fields and Events. The original reason is not recorded.
+  Not taken: further condition types, because no source records a reason.
+- **Remove `LastExecution` and `LastReview` from status (commit c7d58ac).** Status: accepted (2026-10-01, migrated from the old block).
+  Why: the failure paths wrote fields documented as "last call" that no dispatcher wrote, so the schema lied.
+  Not taken: keep the fields until runtime telemetry exists, because they misreport state.
+- **Keep a counter per reason and a history capped at 20 entries (commit 025a482).** Status: accepted (2026-10-01, migrated from the old block).
+  Why: six triggers had collapsed into one counter and one string.
+  Not taken: a single counter and a single string, because they lose the cause.
 
 ## Open
 

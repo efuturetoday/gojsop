@@ -1,47 +1,32 @@
 # Project knowledge for agents and people
 
-Project knowledge lives here, one Markdown file per aspect. We call each file a
-**block**. A block records one decision and ties it to four things:
+gojsop follows the agentic SDLC library
+([efuturetoday/agentic-sdlc](https://github.com/efuturetoday/agentic-sdlc)).
+The method is in the skill `sdlc-core` (`.agents/skills/sdlc-core/SKILL.md`):
+what an area and an aspect are, rule IDs, gates and open items.
 
-- **Decision**: what holds and why.
-- **Code**: the API that implements it, the single allowed entry point.
-- **Rules**: what to do and what not to do when working on it.
-- **Gates**: tests, lint rules or CI jobs that enforce the decision.
+## Areas
 
-A block without a gate is an intention. A gate marked `missing` in a block is a
-commitment to add it.
+What gojsop promises the engineers who write JavaScript for it.
 
-## Working with blocks
+| Area | Covers |
+|---|---|
+| [jshook](areas/jshook.md) | JSHook: `config()` bindings, Synchronization and events, `handle()` |
+| [jsadmission](areas/jsadmission.md) | JSAdmission: which requests reach the script, its answer, failure policy |
 
-How to write a block: [skills/write-block](skills/write-block/SKILL.md).
+## Aspects
 
-1. Before you change code, find the blocks for the area you touch and read them.
-2. Follow their rules. If the change breaks a decision, update the block in the
-   same change (status `superseded` or a new decision), never silently.
-3. When you add a gate, replace `missing → GATE-n` with the real test or command.
-4. New facet: copy `blocks/_template.md`. Keep it short, start with a plain
-   introduction, and name code by symbol (`pkg.Type.Method`), never by file
-   and line.
-5. Open items live in [backlog.md](backlog.md) with stable keys. A block's
-   `Open` section only lists the keys.
-6. Mark the code that implements a rule with a comment
-   `// Block: <id> <rule>`, e.g. `// Block: js-execution R4`.
-7. `make check-blocks` (also in CI) fails when a block names a symbol or test
-   that no longer exists, a rule has no Gate line, or an anchor points
-   nowhere. It parses the code with `go/parser`, so line drift does not
-   matter. Blocks without front matter are not checked yet.
+Ways of doing things that both areas share.
 
-## Blocks
+| Aspect | Covers |
+|---|---|
+| [js-execution](aspects/js-execution.md) | QuickJS on wazero, limits, cancellation, host APIs |
+| [js-registry](aspects/js-registry.md) | One VM per resource, `Registry.Call`, build and restart |
+| [js-sources](aspects/js-sources.md) | `spec.source`, loaders, source hash |
+| [kube-access](aspects/kube-access.md) | `kube.*` from JavaScript, RBAC |
+| [status-conditions](aspects/status-conditions.md) | CRD status, `Ready`, restart bookkeeping |
+| [api-design](aspects/api-design.md) | CRD markers, validation, versioning |
+| [kubebuilder-scaffold](aspects/kubebuilder-scaffold.md) | Generated files, scaffold markers, layout |
+| [testing](aspects/testing.md) | Test layers, Make targets, CI |
 
-| Block | Status | Scope |
-|-------|--------|-------|
-| [js-execution](blocks/js-execution.md) | accepted | QuickJS on wazero via qjs, VM lifecycle, ctx cancellation, limits, host APIs, isolation |
-| [js-registry](blocks/js-registry.md) | accepted | One VM per resource key, `Registry.Call`, build and restart, locking |
-| [status-conditions](blocks/status-conditions.md) | accepted | CRD status fields, `Ready` condition, restart bookkeeping, who writes status |
-| [js-sources](blocks/js-sources.md) | accepted | `spec.source`, loaders, ConfigMap watch, source hash |
-| [hook-dispatch](blocks/hook-dispatch.md) | accepted | `config()` bindings, informers, queue, BindingContext, `handle()` |
-| [admission-webhook](blocks/admission-webhook.md) | accepted | Webhook registration, `review`, `validate()`, patches, TLS |
-| [kube-access](blocks/kube-access.md) | accepted | `kubehost.Factory`, `kube.*` semantics, RBAC |
-| [api-design](blocks/api-design.md) | accepted | CRD markers, validation, naming, versioning |
-| [kubebuilder-scaffold](blocks/kubebuilder-scaffold.md) | accepted | Generated files, scaffold markers, layout deviation |
-| [testing](blocks/testing.md) | accepted | Test layers, Make targets, CI workflows, coverage |
+Open items: [backlog.md](backlog.md). Check: `make sdlc-check`.

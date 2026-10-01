@@ -32,7 +32,7 @@ type ConfigMapLoader struct {
 // so Chain falls through to the next loader. A configured-but-broken ref
 // (missing CM, missing key, key value empty) returns an error so the
 // reconciler can surface SourceLoadFailed.
-// Block: js-sources R2
+// js-sources.R2
 func (l ConfigMapLoader) Load(ctx context.Context, src corev1alpha1.JSSource) ([]byte, bool, error) {
 	ref := src.ConfigMapRef
 	if ref == nil {

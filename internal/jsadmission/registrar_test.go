@@ -107,6 +107,7 @@ func TestRegistrar_MixedValidatingAndMutating(t *testing.T) {
 	}
 }
 
+// jsadmission.R1
 func TestRegistrar_RemoveLastEntry_DeletesConfig(t *testing.T) {
 	r, c := newFakeRegistrar(t)
 	ctx := context.Background()
@@ -124,6 +125,7 @@ func TestRegistrar_RemoveLastEntry_DeletesConfig(t *testing.T) {
 	}
 }
 
+// jsadmission.R1
 func TestRegistrar_Update_OverwritesEntry(t *testing.T) {
 	r, c := newFakeRegistrar(t)
 	ctx := context.Background()

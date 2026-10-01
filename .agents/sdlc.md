@@ -1,0 +1,3 @@
+---
+gate: make test lint
+---

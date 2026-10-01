@@ -26,6 +26,7 @@ func TestChain_NoSourceErrors(t *testing.T) {
 	}
 }
 
+// js-sources.R3
 func TestHash_Stable(t *testing.T) {
 	a := Hash([]byte("foo"))
 	b := Hash([]byte("foo"))
