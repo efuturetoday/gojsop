@@ -72,25 +72,25 @@ Adding a CRD field:
   come from the Go constants that implement them.
   Why: the API server rejects bad objects before the controller sees them.
   Gate: `TestDefaultLimits_MatchKubebuilderTags` holds the defaults; envtest
-  rejection cases for enums and CEL are tracked in GATE-15. Not met today: API-5
-  (restart reasons are a doc list, not an enum).
+  rejection cases for enums and CEL are tracked in GATE-15. Violated today →
+  API-5 (restart reasons are a doc list, not an enum).
 - **R4** Add `MaxLength` and `MaxItems` to every new string and list.
-  Why: not recorded; the backlog entry names the etcd object size limit. Not met today: API-7.
-  Gate: missing → GATE-15.
+  Why: not recorded; the backlog entry names the etcd object size limit.
+  Gate: missing → GATE-15. Violated today → API-7.
 - **R5** Write field comments that state what happens today.
-  Why: they become `kubectl explain` text. Not met today: API-2.
-  Gate: missing → GATE-10.
+  Why: they become `kubectl explain` text.
+  Gate: missing → GATE-10. Violated today → API-2.
 - **R6** Add no CRD field, `config()` key or status entry without an
   implementation, unless a doc comment or status marks it inactive.
-  Why: users must not rely on fields that do nothing. Not met today: API-1.
-  Gate: missing → GATE-10.
+  Why: users must not rely on fields that do nothing.
+  Gate: missing → GATE-10. Violated today → API-1.
 - **R7** Keep scope markers equal to `PROJECT`.
-  Why: two sources for one fact drift apart. Not met today: API-6.
-  Gate: missing → GATE-14.
+  Why: two sources for one fact drift apart.
+  Gate: missing → GATE-14. Violated today → API-6.
 - **R8** Update `config/samples` and the JS `config()` examples when a field
   changes.
-  Why: samples are the first thing users copy. Not met today: API-4.
-  Gate: missing → GATE-15.
+  Why: samples are the first thing users copy.
+  Gate: missing → GATE-15. Violated today → API-4.
 - **R9** Add no second API version and no conversion webhook without a
   recorded decision.
   Why: not recorded.

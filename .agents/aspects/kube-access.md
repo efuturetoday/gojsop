@@ -84,11 +84,11 @@ sees CRDs installed after start is not verified.
   field manager for conflict handling.
   Why: it is Get plus Create or merge patch; no field ownership is tracked.
   Gate: `TestKubeHost_ApplyCreatesAndUpdates`, `TestKubeHost_RepeatedApplyInLoop`.
-  Violated today → KUBE-1 (the `FieldManager` doc comment still says server-side apply).
+  Violated today → KUBE-1 (the `FieldManager` doc comment still says
+  server-side apply).
 - **R5** Bound every `kube.*` call by the deadline of the running script call.
   Why: R3 of [js-execution](js-execution.md) promises a deadline for the whole call.
-  Gate: missing → GATE-24.
-  Violated today, see EXEC-2.
+  Gate: missing → GATE-24. Violated today → EXEC-2.
 - **R6** Put the `+kubebuilder:rbac` marker next to the code that needs the
   permission and run `make manifests`. `config/rbac/role.yaml` is generated.
   Why: the generated role must not drift from the code.

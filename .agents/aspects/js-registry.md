@@ -62,8 +62,8 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 ## Rules
 
 - **R1** Run user JavaScript at runtime only in the function passed to `Registry.Call`.
-  Why: one place for the call lock, panic recovery and outcome classification (see also js-execution.R2).
-  Gate: missing → GATE-4.
+  Why: one place for the call lock, panic recovery and outcome classification.
+  Gate: missing → GATE-4. See also js-execution.R2.
 - **R2** Call `jslifecycle.Rescue` when `Registry.Call` reports panic, memory limit or timeout.
   Why: a VM in that state is not trusted; restarting it is the recovery path.
   Gate: `TestRescue_Success_EmitsRestarted`, `TestRescue_Failure_EmitsRescueFailed`, `TestRescue_NilEmitter_NoOps`.

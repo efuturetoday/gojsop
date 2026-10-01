@@ -62,8 +62,7 @@ Add a source kind (for example OCI, SRC-1):
   See SRC-6 for the cost of this rule.
 - **R6** Add a CRD source field only together with its loader.
   Why: a typed field without a loader fails at runtime with "no loader matched".
-  Gate: missing → GATE-10
-  Violated today → SRC-1.
+  Gate: missing → GATE-10. Violated today → SRC-1.
 - **R7** Do not put secrets in `spec.source.inline`.
   Why: the CR is readable in etcd and by anyone with `get` on it.
   Gate: review only — a secret in a string cannot be detected reliably. Violated today → SRC-2 (no CRD warning).

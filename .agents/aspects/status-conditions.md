@@ -64,7 +64,7 @@ Add a new failure cause to status:
   failure.
   Why: users and tools compare `observedGeneration` with the generation to see
   whether status is current.
-  Gate: missing → GATE-8.
+  Gate: missing → GATE-8, GATE-9.
 - **R2** Write status only from the reconciler of that kind, and only with
   `Status().Update`.
   Why: one writer per status avoids conflicting updates. A further reason is
@@ -82,7 +82,7 @@ Add a new failure cause to status:
 - **R5** Put only the reconcile outcome into `lastReconcile`, never a runtime
   call result.
   Why: the removed fields lied about what the controller knew.
-  Gate: missing → GATE-9.
+  Gate: missing → GATE-9. Violated today → STAT-1.
 - **R6** Declare no CRD field that is neither implemented nor surfaced in
   status. This is a candidate project rule, not yet enforced.
   Why: not recorded.
