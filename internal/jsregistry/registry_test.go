@@ -2,6 +2,7 @@ package jsregistry_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -256,8 +257,10 @@ func TestRegistry_Drop(t *testing.T) {
 }
 
 // js-registry.R4
+// js-execution.R3
 // js-execution.R4
-func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T) {
+// js-execution.R13
+func TestRegistry_CancelledCall_KeepsVMAndRestartStillRebuilds(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "k"}
 	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Spec{
@@ -266,6 +269,7 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 	}); err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
+	before, _ := reg.Get(jsrun.HookKey(key))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	res, _, err := reg.Call(ctx, jsrun.HookKey(key), func(ctx context.Context, vm *jsengine.VM) error {
@@ -279,8 +283,16 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 		t.Fatalf("outcome %v err %v, want cancelled / ErrCancelled", res.Outcome, res.Err)
 	}
 
-	// The module is closed; restart closes the dead VM without a panic and
-	// the rebuilt one runs.
+	// The deadline did not kill the VM: the next call runs on the same one.
+	res, mi, _ := reg.Call(context.Background(), jsrun.HookKey(key), func(ctx context.Context, vm *jsengine.VM) error {
+		_, err := vm.CallExport(ctx, "ok")
+		return err
+	})
+	if res.Outcome != jsrun.OutcomeOK || mi != before {
+		t.Fatalf("after timeout: outcome %v err %v, same VM %v", res.Outcome, res.Err, mi == before)
+	}
+
+	// A manual restart still rebuilds it.
 	if _, err := registrytest.Restart(reg, jsrun.HookKey(key), jsrun.ReasonTimeout); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
@@ -292,7 +304,7 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 		t.Fatalf("rebuilt VM: outcome %v err %v", res.Outcome, res.Err)
 	}
 
-	// Dropping a dead VM must not panic either.
+	// Dropping a VM after a timeout must not panic.
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel2()
 	_, _, _ = reg.Call(ctx2, jsrun.HookKey(key), func(ctx context.Context, vm *jsengine.VM) error {
@@ -568,6 +580,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 }
 
 // js-registry.R14
+// js-execution.R8
 func TestRegistry_SameNameInBothKindsCoexists(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	name := types.NamespacedName{Name: "foo"}
@@ -688,21 +701,35 @@ func TestRegistry_Invoke_ClassifiesOutcomes(t *testing.T) {
 	}
 }
 
-// A call that a deadline cancels needs no help from the caller: Invoke
-// rebuilds the dead VM itself and reports the reason in Result.Recovered. A
-// thrown error recovers nothing.
+// A timeout and the memory limit leave the VM usable: Invoke classifies the
+// outcome, recovers nothing and the top-level state of the script survives. A
+// wasm trap (here a panicking host function) leaves the module in an unknown
+// state: Invoke rebuilds the VM itself and reports the reason in
+// Result.Recovered. A thrown error recovers nothing.
 //
 // js-registry.R2
 // js-registry.R19
-func TestRegistry_Invoke_RecoversCancelledCallItself(t *testing.T) {
+// js-execution.R3
+// js-execution.R4
+func TestRegistry_Invoke_TimeoutAndOOMKeepVMTrapRecovers(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := jsrun.HookKey(types.NamespacedName{Name: "selfrescue"})
 	t.Cleanup(func() { reg.Drop(key) })
-	src := []byte(`function spin() { while (true) {} } function ok() { return 1 } function boom() { throw new Error("x") }`)
-	spec := jsrun.Spec{Source: src, SourceHash: "h"}
+	src := []byte(`globalThis.n = 0;
+function spin() { while (true) {} }
+function ok() { return ++n }
+function boom() { throw new Error("x") }
+function hog() { var a = []; for (;;) a.push(new Array(10000).fill(1)) }
+function crash() { crashNow() }`)
+	host := jsengine.HostBinderFunc(func(h *jsengine.Host) error {
+		h.Func("crashNow", func(context.Context, json.RawMessage) (any, error) { panic("host bug") })
+		return nil
+	})
+	spec := jsrun.Spec{Source: src, SourceHash: "h", Limits: jsrun.Limits{MemoryMB: 4}, Host: host}
 	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), key, spec); err != nil {
 		t.Fatalf("load: %v", err)
 	}
+	first, _ := reg.Get(key)
 
 	res, err := reg.Invoke(context.Background(), key, "boom", nil, nil)
 	if err != nil || res.Outcome != jsrun.OutcomeError || res.Recovered != "" {
@@ -712,21 +739,39 @@ func TestRegistry_Invoke_RecoversCancelledCallItself(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	res, err = reg.Invoke(ctx, key, "spin", nil, nil)
-	if err != nil || res.Outcome != jsrun.OutcomeCancelled {
+	if err != nil || res.Outcome != jsrun.OutcomeCancelled || !errors.Is(res.Err, jsengine.ErrCancelled) {
 		t.Fatalf("spin: res=%+v err=%v, want OutcomeCancelled", res, err)
 	}
-	if res.Recovered != jsrun.ReasonTimeout {
-		t.Fatalf("Recovered = %q, want %q", res.Recovered, jsrun.ReasonTimeout)
+	if res.Recovered != "" {
+		t.Fatalf("Recovered = %q after a timeout, want none", res.Recovered)
+	}
+
+	res, err = reg.Invoke(context.Background(), key, "hog", nil, nil)
+	if err != nil || res.Outcome != jsrun.OutcomeMemoryLimit || !errors.Is(res.Err, jsengine.ErrOOM) || res.Recovered != "" {
+		t.Fatalf("hog: res=%+v err=%v, want OutcomeMemoryLimit without recovery", res, err)
+	}
+
+	var n int
+	if res, err = reg.Invoke(context.Background(), key, "ok", nil, &n); err != nil || res.Outcome != jsrun.OutcomeOK || n != 1 {
+		t.Fatalf("same VM after timeout and OOM: res=%+v err=%v n=%d (state must survive)", res, err, n)
+	}
+	if now, _ := reg.Get(key); now != first {
+		t.Fatal("VM was replaced although it stayed usable")
+	}
+
+	res, err = reg.Invoke(context.Background(), key, "crash", nil, nil)
+	if err != nil || res.Outcome != jsrun.OutcomePanic || res.Recovered != jsrun.ReasonPanic {
+		t.Fatalf("crash: res=%+v err=%v, want OutcomePanic recovered as panic", res, err)
 	}
 	if _, err := reg.Invoke(context.Background(), key, "ok", nil, nil); !errors.Is(err, jsrun.ErrVMUnavailable) && err != nil {
 		t.Fatalf("while rebuilding: %v, want ErrVMUnavailable or success", err)
 	}
 	st := waitFor(t, reg, key, spec, jsrun.PhaseReady)
-	if got := st.Recoveries.ByReason[jsrun.ReasonTimeout]; got != 1 {
-		t.Fatalf("Recoveries[timeout] = %d, want 1", got)
+	if got := st.Recoveries.ByReason[jsrun.ReasonPanic]; got != 1 || len(st.Recoveries.Recent) != 1 {
+		t.Fatalf("Recoveries = %+v, want exactly one panic", st.Recoveries)
 	}
-	if res, err = reg.Invoke(context.Background(), key, "ok", nil, nil); err != nil || res.Outcome != jsrun.OutcomeOK {
-		t.Fatalf("rebuilt VM: res=%+v err=%v", res, err)
+	if res, err = reg.Invoke(context.Background(), key, "ok", nil, &n); err != nil || res.Outcome != jsrun.OutcomeOK || n != 1 {
+		t.Fatalf("rebuilt VM: res=%+v err=%v n=%d (fresh state)", res, err, n)
 	}
 }
 

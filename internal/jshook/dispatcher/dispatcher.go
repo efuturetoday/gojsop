@@ -467,14 +467,16 @@ func (s *subscription) runWorker(ctx context.Context) {
 // the outcome. The locking + recover + OOM/cancel classification lives in
 // jsrun.Runner.Invoke; the dispatcher only owns the policy table:
 //
-//   - panic / OOM / cancelled (timeout) → announce the recovery the runner
-//     started itself (Result.Recovered) + requeue
+//   - panic (or wasm trap) → announce the recovery the runner started itself
+//     (Result.Recovered) + requeue
+//   - OOM / cancelled (timeout) → Warning + requeue; the VM stays usable, so
+//     the runner recovers nothing
 //   - other error → log + emit Warning + requeue
 //   - ok → forget
 //
 // Cancellation: the runner bounds the call by spec.limits.timeoutSeconds and
-// it surfaces as OutcomeCancelled. wazero closes the module when the context
-// ends, so the VM is dead afterwards and the runner rebuilds it at once.
+// it surfaces as OutcomeCancelled. The engine stops the script through the
+// QuickJS interrupt handler; the VM keeps its state and serves the next call.
 // jshook.R10
 // jshook.R11
 // jshook.R12
@@ -501,20 +503,21 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		s.requeue(qkey, bc)
 
 	case jsrun.OutcomeMemoryLimit:
-		logger.Error(res.Err, "handle() hit memory limit — restarting instance",
+		logger.Error(res.Err, "handle() hit memory limit",
 			"binding", bc.Binding, "event", bc.WatchEvent)
+		s.publish(corev1.EventTypeWarning, conditions.EventHandleFailed,
+			"handle() exceeded its memory limit")
 		s.requeue(qkey, bc)
 
 	case jsrun.OutcomeCancelled:
-		// The call's context ended and wazero closed the module, so this VM
-		// is dead whatever ended the call: rebuild it at once. Only the
-		// per-call deadline is a timeout of the hook and earns a Warning; a
-		// cancelled parent means Subscribe or Drop is stopping this worker.
+		// The call's context ended. Only the per-call deadline is a timeout
+		// of the hook and earns a Warning; a cancelled parent means
+		// Subscribe or Drop is stopping this worker.
 		if parent.Err() == nil {
 			s.publish(corev1.EventTypeWarning, conditions.EventHandleTimeout,
 				"handle() exceeded its timeout")
 		}
-		logger.Info("handle() cancelled — restarting instance",
+		logger.Info("handle() cancelled",
 			"binding", bc.Binding, "event", bc.WatchEvent, "elapsed", res.Duration)
 		s.requeue(qkey, bc)
 

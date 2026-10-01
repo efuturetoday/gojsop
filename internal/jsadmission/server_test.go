@@ -25,7 +25,7 @@ import (
 // pathLabels is the JSON-patch path the diff tests expect for label changes.
 const pathLabels = "/metadata/labels"
 
-// loadPolicy starts a real qjs instance with the given JS source and parks
+// loadPolicy starts a real engine instance with the given JS source and parks
 // it in a fresh registry under `key`. Mirrors what the reconciler does.
 func loadPolicy(t *testing.T, src string, key types.NamespacedName) *jsregistry.Registry {
 	t.Helper()

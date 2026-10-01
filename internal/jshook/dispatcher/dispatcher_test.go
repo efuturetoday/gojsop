@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fastschema/qjs"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -55,6 +54,7 @@ type env struct {
 
 	entered atomic.Int32 // handle() calls started (JS reached enter())
 	ooms    atomic.Int32 // how many times oomNow() still answers true
+	crashes atomic.Int32 // how many times crashNow() still panics in the host
 
 	// hold, while set, blocks every build of the hook's VM until it is closed.
 	hold atomic.Pointer[chan struct{}]
@@ -79,15 +79,20 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 		e.watches <- struct{}{}
 		return true, w, err
 	})
-	binder := jsengine.HostBinderFunc(func(c *qjs.Context) error {
-		undef := func(t *qjs.This) (*qjs.Value, error) { return t.Context().NewUndefined(), nil }
-		c.Global().SetPropertyStr("enter", c.Function(func(t *qjs.This) (*qjs.Value, error) {
+	binder := jsengine.HostBinderFunc(func(h *jsengine.Host) error {
+		h.Func("enter", func(context.Context, json.RawMessage) (any, error) {
 			e.entered.Add(1)
-			return undef(t)
-		}))
-		c.Global().SetPropertyStr("oomNow", c.Function(func(t *qjs.This) (*qjs.Value, error) {
-			return t.Context().NewBool(e.ooms.Add(-1) >= 0), nil
-		}))
+			return nil, nil
+		})
+		h.Func("crashNow", func(context.Context, json.RawMessage) (any, error) {
+			if e.crashes.Add(-1) >= 0 {
+				panic("host function bug")
+			}
+			return false, nil
+		})
+		h.Func("oomNow", func(context.Context, json.RawMessage) (any, error) {
+			return e.ooms.Add(-1) >= 0, nil
+		})
 		return nil
 	})
 	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsrun.HookKey(e.key), jsrun.Spec{
@@ -432,7 +437,7 @@ function handle(c) {
 }
 
 // jshook.R12
-func TestDispatcher_MemoryLimit_RestartsAtOnceAndRetries(t *testing.T) {
+func TestDispatcher_MemoryLimit_WarnsKeepsVMAndRetries(t *testing.T) {
 	const src = `
 globalThis.log = [];
 function handle(c) {
@@ -444,16 +449,21 @@ function handle(c) {
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(jshook.KubernetesBinding{})
 
-	e.waitEmitted(conditions.EventRestarted, 1)
-	if ev := e.emitted()[0]; ev.Message != "restarted: "+string(jsrun.ReasonMemoryLimit) {
-		t.Fatalf("event %v, want restarted: memory-limit", ev)
+	e.waitEmitted(conditions.EventHandleFailed, 1)
+	if ev := e.emitted()[0]; ev.Type != corev1.EventTypeWarning || ev.Message != "handle() exceeded its memory limit" {
+		t.Fatalf("event %v, want the memory-limit Warning", ev)
 	}
-	cs := e.waitCalls(1)
+	cs := e.waitCalls(1) // the retry runs on the same VM
 	if cs[0]["type"] != bcSynchronization {
 		t.Fatalf("retried context %v", cs[0])
 	}
-	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now == first {
-		t.Fatal("VM was not replaced")
+	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now != first || len(now.Recoveries.Recent) != 0 {
+		t.Fatal("the memory limit must not replace the VM")
+	}
+	for _, ev := range e.emitted() {
+		if ev.Reason == conditions.EventRestarted {
+			t.Fatalf("memory limit must not restart the VM: %v", e.emitted())
+		}
 	}
 }
 
@@ -511,7 +521,8 @@ function handle(c) { enter(); log.push(c[0]); }`
 }
 
 // jshook.R11
-func TestDispatcher_Timeout_CancelsWarnsAndRestartsVM(t *testing.T) {
+// js-execution.R3
+func TestDispatcher_Timeout_CancelsWarnsAndKeepsVM(t *testing.T) {
 	const src = `
 globalThis.log = [];
 function handle(c) { enter(); while (true) {} }`
@@ -520,19 +531,18 @@ function handle(c) { enter(); while (true) {} }`
 	e.subscribe(jshook.KubernetesBinding{})
 
 	e.waitEmitted(conditions.EventHandleTimeout, 1)
-	e.waitEmitted(conditions.EventRestarted, 1)
 	for _, ev := range e.emitted() {
 		if ev.Reason == conditions.EventHandleTimeout && ev.Type != corev1.EventTypeWarning {
 			t.Fatalf("event %v is not a Warning", ev)
 		}
-		if ev.Reason == conditions.EventRestarted && ev.Message != "restarted: "+string(jsrun.ReasonTimeout) {
-			t.Fatalf("event %v, want restarted: timeout (cancelled, not panic)", ev)
+		if ev.Reason == conditions.EventRestarted {
+			t.Fatalf("a timeout must not restart the VM: %v", e.emitted())
 		}
 	}
-	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now == first {
-		t.Fatal("VM was not replaced after the timeout")
+	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now != first {
+		t.Fatal("VM was replaced after the timeout")
 	}
-	// The retried event reaches the rebuilt VM.
+	// The retried event reaches the same VM again.
 	n := e.entered.Load()
 	e.waitEntered(n)
 }
@@ -564,26 +574,16 @@ function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {
 
 // jshook.R12
 //
-// A VM whose module wazero closed (here: killed by a cancelled call nobody
-// rescued) makes the next handle() panic inside qjs with a live context. That
-// is a genuine panic: the worker must classify it as one, rebuild the VM
-// (closing the dead module must not panic again) and retry the event.
+// A host function that panics makes the wasm call trap: the module state is
+// unknown. The worker must classify it as a panic, rebuild the VM and retry
+// the event.
 func TestDispatcher_PanicInHandle_RestartsVMAndRetries(t *testing.T) {
 	const src = `
 globalThis.log = [];
-function handle(c) { log.push(c[0]); }
-function spin() { while (true) {} }`
+function handle(c) { crashNow(); log.push(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
+	e.crashes.Store(1)
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	res, _, err := e.reg.Call(ctx, jsrun.HookKey(e.key), func(ctx context.Context, vm *jsengine.VM) error {
-		_, err := vm.CallExport(ctx, "spin")
-		return err
-	})
-	if err != nil || res.Outcome != jsrun.OutcomeCancelled {
-		t.Fatalf("killing call: outcome %v err %v, want cancelled", res.Outcome, err)
-	}
 	e.subscribe(jshook.KubernetesBinding{})
 
 	e.waitEmitted(conditions.EventRestarted, 1)

@@ -3,10 +3,10 @@ module github.com/o-haase/gojsop
 go 1.25.3
 
 require (
-	github.com/fastschema/qjs v0.0.6
 	github.com/go-logr/logr v1.4.3
 	github.com/onsi/ginkgo/v2 v2.27.2
 	github.com/onsi/gomega v1.38.2
+	github.com/tetratelabs/wazero v1.9.0
 	gomodules.xyz/jsonpatch/v2 v2.4.0
 	k8s.io/api v0.35.0
 	k8s.io/apimachinery v0.35.0
@@ -56,7 +56,6 @@ require (
 	github.com/spf13/cobra v1.10.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/stoewer/go-strcase v1.3.0 // indirect
-	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect

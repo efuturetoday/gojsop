@@ -121,6 +121,7 @@ type runFlags struct {
 	enableHTTP2          bool
 	buildBackoffBase     time.Duration
 	buildBackoffMax      time.Duration
+	engineCacheDir       string
 	zap                  zap.Options
 }
 
@@ -176,6 +177,10 @@ func parseFlagSet(fs *flag.FlagSet, args []string) (runFlags, error) {
 		"Base delay before a failed JS build is retried; doubles with every failed attempt in a row.")
 	fs.DurationVar(&f.buildBackoffMax, "build-backoff-max", 5*time.Minute,
 		"Upper bound of the delay between retries of a failed JS build.")
+	fs.StringVar(&f.engineCacheDir, "engine-cache-dir", "",
+		"Directory for the compiled machine code of the JS engine (engine.wasm). With it the first JS VM after a "+
+			"restart starts in about 15 ms instead of 320 ms. Must be private to the operator, e.g. an emptyDir. "+
+			"Empty keeps the cache in memory only.")
 	f.zap.BindFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return f, err
@@ -279,6 +284,10 @@ func main() {
 		os.Exit(1)
 	}
 	managerCtx := ctrl.SetupSignalHandler()
+	if err := jsregistry.ConfigureEngine(f.engineCacheDir); err != nil {
+		setupLog.Error(err, "unable to start the JS engine", "engineCacheDir", f.engineCacheDir)
+		os.Exit(1)
+	}
 	registry := jsregistry.NewRegistry()
 	// One factory per process. SharedFactory hands every reconcile a binder
 	// over the same dynamic client + RESTMapper; ForHook returns the full

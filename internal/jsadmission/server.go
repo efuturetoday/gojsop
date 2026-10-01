@@ -203,11 +203,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, prefix string, mu
 	}
 }
 
-// publishEntry forwards a Warning/Normal event to the emitter on entry, if
-// any. Static, low-cardinality messages only — see plan/Message stability.
-func publishEntry(entry PolicyEntry, eventType, reason, message string) {
+// publishWarning forwards a Warning event to the emitter on entry, if any.
+// Static, low-cardinality messages only — see plan/Message stability.
+func publishWarning(entry PolicyEntry, reason, message string) {
 	if entry.Emit != nil {
-		entry.Emit(eventType, reason, message)
+		entry.Emit(corev1.EventTypeWarning, reason, message)
 	}
 }
 
@@ -216,10 +216,9 @@ func publishEntry(entry PolicyEntry, eventType, reason, message string) {
 //
 // Uses the Runner, which serializes calls, applies the per-call deadline and
 // classifies the outcome (panic / OOM / cancelled / error / ok) under one
-// roof. The previous goroutine + time.NewTimer dance is gone because wazero now actually cancels the
-// in-flight wasm call when the deadline fires (CloseOnContextDone), so we
-// can rescue the VM on timeout — which the old "leave the goroutine
-// running" approach couldn't do safely.
+// roof. The engine stops the script at the deadline through the QuickJS
+// interrupt handler and the VM stays usable, so a timeout or the memory limit
+// rebuilds nothing; only a panic (wasm trap) does.
 // jsadmission.R12
 // jsadmission.R14
 func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
@@ -254,30 +253,33 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	switch res.Outcome {
 	case jsrun.OutcomePanic:
 		log.Error(fmt.Errorf("panic in admission handler: %v", res.Panic),
-			"admission JS call panicked — rescuing")
-		publishEntry(entry, corev1.EventTypeWarning,
+			"admission JS call panicked — instance is prepared again")
+		publishWarning(entry,
 			conditions.EventReviewPanicked,
 			"panic in admission handler")
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("panic in admission handler: %v", res.Panic))
 		return resp
 
 	case jsrun.OutcomeMemoryLimit:
-		log.Error(res.Err, "admission JS call hit memory limit — rescuing")
+		log.Error(res.Err, "admission JS call hit memory limit")
+		publishWarning(entry,
+			conditions.EventReviewFailed,
+			"review exceeded its memory limit")
 		applyFailurePolicy(resp, entry.FailurePolicy, res.Err.Error())
 		return resp
 
 	case jsrun.OutcomeCancelled:
 		// Distinguish the two cancellation sources: client disconnect vs
-		// our deadline. Client disconnect is benign and the VM is fine —
-		// don't rescue. Our deadline tripped → VM is genuinely stuck on a
-		// bad call; rescue it so the next request gets a fresh runtime.
+		// our deadline. Client disconnect is benign. Our deadline tripped →
+		// the script ran too long; the interrupt handler stopped it and the
+		// VM keeps serving.
 		if r.Context().Err() != nil && callCtx.Err() != nil && r.Context().Err() == context.Canceled {
 			log.Info("client disconnected during admission review")
 			applyFailurePolicy(resp, entry.FailurePolicy, "client disconnected")
 			return resp
 		}
-		log.Info("admission JS call exceeded timeout — rescuing", "timeout", timeout)
-		publishEntry(entry, corev1.EventTypeWarning,
+		log.Info("admission JS call exceeded timeout", "timeout", timeout)
+		publishWarning(entry,
 			conditions.EventReviewTimeout,
 			fmt.Sprintf("review exceeded %s", timeout))
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("timeout after %s", timeout))
@@ -285,9 +287,9 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 
 	case jsrun.OutcomeError:
 		// Regular JS Error from validate()/mutate(): the policy author
-		// returned/threw. Don't rescue — the VM is still healthy.
+		// returned/threw. The VM is still healthy.
 		log.Error(res.Err, "admission JS call failed")
-		publishEntry(entry, corev1.EventTypeWarning,
+		publishWarning(entry,
 			conditions.EventReviewFailed,
 			"review returned an error")
 		applyFailurePolicy(resp, entry.FailurePolicy, res.Err.Error())

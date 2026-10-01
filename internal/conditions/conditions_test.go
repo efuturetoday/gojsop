@@ -51,7 +51,7 @@ func TestClassifyBuildError(t *testing.T) {
 		},
 		{
 			"new VM -> BuildFailed new vm",
-			fmt.Errorf("%w: %v", jsrun.ErrNewVM, errors.New("qjs init failed")),
+			fmt.Errorf("%w: %v", jsrun.ErrNewVM, errors.New("engine init failed")),
 			EventBuildFailed,
 			"build failed: new vm",
 		},

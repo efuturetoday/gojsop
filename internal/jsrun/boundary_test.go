@@ -18,7 +18,7 @@ import (
 const (
 	modPath    = "github.com/o-haase/gojsop/"
 	enginePkg  = modPath + "internal/jsengine"
-	qjsPkg     = "github.com/fastschema/qjs"
+	oldQJSPkg  = "github.com/fastschema/qjs" // replaced by our own build (EXEC-8)
 	wazeroPkg  = "github.com/tetratelabs/wazero"
 	registry   = modPath + "internal/jsregistry"
 	sourcePkg  = modPath + "internal/jssource"
@@ -80,7 +80,7 @@ func TestImportBoundary_CallersUseOnlyRunnerPort(t *testing.T) {
 			continue
 		}
 		seen++
-		for _, banned := range []string{enginePkg, qjsPkg, wazeroPkg, registry} {
+		for _, banned := range []string{enginePkg, wazeroPkg, registry} {
 			// the host adapters under jsengine/ (kubehost) are not the engine.
 			if slices.Contains(imps, banned) || (banned != enginePkg && importsPkg(imps, banned)) {
 				t.Errorf("%s imports %s: reach script execution through jsrun.Runner", pkg, banned)
@@ -97,8 +97,11 @@ func TestImportBoundary_CallersUseOnlyRunnerPort(t *testing.T) {
 func TestImportBoundary_EngineStaysBehindRegistry(t *testing.T) {
 	for pkg, imps := range imports(t) {
 		inEngine := pkg == enginePkg || strings.HasPrefix(pkg, enginePkg+"/")
-		if !inEngine && (importsPkg(imps, qjsPkg) || importsPkg(imps, wazeroPkg)) {
-			t.Errorf("%s imports qjs or wazero: only internal/jsengine/** may", pkg)
+		if !inEngine && importsPkg(imps, wazeroPkg) {
+			t.Errorf("%s imports wazero: only internal/jsengine/** may", pkg)
+		}
+		if importsPkg(imps, oldQJSPkg) {
+			t.Errorf("%s imports fastschema/qjs: the engine is our own QuickJS-ng build", pkg)
 		}
 		if slices.Contains(imps, enginePkg) && pkg != registry && pkg != kubehost {
 			t.Errorf("%s imports internal/jsengine: only jsregistry and kubehost may", pkg)

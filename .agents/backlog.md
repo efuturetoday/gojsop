@@ -29,13 +29,26 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## EXEC: JS execution
 
-- **EXEC-2** `bug` `kube.*` calls not bound by `timeoutSeconds`. `KubeHost`
-  uses its own parent `h.Ctx` (`internal/jsengine/kubehost/kubehost.go:91-96`),
-  not the per-call deadline. Not verified at runtime.
-- **EXEC-3** `gate` `CloseOnContextDone` overhead unmeasured. The planned
-  benchmark never ran. Fallback if too slow: fork qjs for QuickJS interrupts.
-- **EXEC-4** `gap` JS runtime errors are one truncated string. `handle()` and
-  `validate()` errors have no stack, line number or export name.
+- **EXEC-9** `decision` Single shot (a fresh VM per call from a snapshot) instead
+  of long-lived VMs. Spike `hack/spikes/quickjs-wasm` (own QuickJS-ng build,
+  Apple M1 Pro, wazero 1.9.0, pod request of 4 KB): build, load the policy,
+  call `validate`, close takes 0.47 ms from source (small policy), 0.44 ms from
+  bytecode, 0.28 ms from a memory snapshot (1.3 MB per policy); with lodash
+  (544 KB) 21.7 ms from source, 4.0 ms from bytecode (1.37 MB, 124 KB without
+  source text) and 0.44 ms from a snapshot (4.0 MB); 0.14 ms and 0.17 ms per
+  shot on 10 goroutines. Costs and gaps: (1) top-level state no longer
+  survives between calls, which breaks js-registry.R5 and the promise to hook
+  authors, so it is a product decision; (2) restored VMs share one random
+  state: two VMs from one snapshot return the same `Math.random()` and share
+  `hash_seed`, and QuickJS-ng has no reseed API, so the build needs a small
+  patch (`JS_SetRandomSeed`) and a reseed after every restore (not done in the
+  spike); (3) bytecode (`JS_WriteObject`) is bound to the exact `engine.wasm`
+  and `JS_ReadObject` does not validate, so only bytecode the operator wrote
+  itself may be read, never from a CR or ConfigMap; (4) a snapshot is 1.3 to
+  4 MB of Go heap per policy (a sparse snapshot would shrink it). The port
+  (`jsrun.Runner`, `jsrun.Scripts`) already fits: `Ensure` prepares, `Invoke`
+  runs. Done when the decision is taken: keep long-lived VMs (close with the
+  reason), or add a per-script opt-in single-shot mode behind the port.
 
 ## REG: JS registry and restarts
 
@@ -43,11 +56,15 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
   already declares `jshooks/finalizers`.
-- **REG-4** `decision` Restart contract: five triggers (OOM, panic, timeout,
-  manual, source-changed), one user knob (`restart` annotation). No
-  `spec.restartPolicy`. Since the DISP-12 fix every timeout restarts at once,
-  so `ReasonTimeoutStreak` is never set but still a CRD enum value (violates
-  API-1). Decide: drop it from the enum, or give it a meaning again.
+- **REG-4** `decision` Restart contract: triggers are a panic or wasm trap,
+  manual and source-changed (plus limits-changed); since EXEC-8 a timeout or
+  the memory limit alone leave the VM usable and restart nothing. One user knob
+  (`restart` annotation). No `spec.restartPolicy`. `ReasonTimeoutStreak` is
+  still never set but still a CRD enum value (violates API-1), and
+  `ReasonTimeout` and `ReasonMemoryLimit` are set only when a trap came with
+  the call. Decide: drop `timeout-streak` from the enum, or give it a meaning
+  again (the VM survives timeouts now, so a script whose state makes every call
+  hang would time out for ever: restart after N timeouts in a row).
 - **REG-5** `decision` Uncommitted debug logging in `Registry.Drop` and
   "cleanup started/done" logs in both controllers. Keep, lower to V(1), or
   remove.
@@ -164,12 +181,12 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **KUBE-1** `debt` `kube.apply` is not server-side apply. It does Get, then
   Create or JSON merge patch (lists replaced). The Get/Create race returns
-  AlreadyExists with no retry (`internal/jsengine/kubehost/kubehost.go:136-158`).
+  AlreadyExists with no retry (`KubeHost.apply` in `internal/jsengine/kubehost/kubehost.go`).
 - **KUBE-2** `gap` `Factory` ignores `ctx`, `key` and `sa`; both callers pass
   `sa=""`. No per-hook identity (`kubehost/factory.go:46,53`,
   `internal/jshook/controller/controller.go:163`). Prerequisite for OPS-2.
 - **KUBE-3** `gap` `kube.list` has no limit or pagination; an empty namespace on
-  a namespaced kind lists cluster-wide (`kubehost.go:201`).
+  a namespaced kind lists cluster-wide (`KubeHost.list` in `kubehost.go`).
 - **KUBE-4** `bug` A nil kube factory on a reconciler gives a VM without `kube`
   global and no error (`internal/jshook/controller/controller.go:162`,
   `internal/jsadmission/controller/controller.go:142`). Not verified.
@@ -239,9 +256,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-1** Add `make gates`: one target that runs all gates, identical in CI.
 - **GATE-4** `TestRegistry_Call_*`: outcomes OK, panic, cancelled, OOM, error,
   unknown key. No test references `Registry.Call` today.
-- **GATE-5** Test in `internal/jsengine`: `for(;;){}` with a 100 ms deadline
-  returns `ErrCancelled`, VM still closable.
-- **GATE-6** Isolation test: a global set in VM A is not visible in VM B.
 - **GATE-7** Check that admission VMs are built with `Factory.ForAdmission`
   (no `kube.apply` or `kube.delete`).
 - **GATE-8** Status rules: `Reason:` only from `internal/conditions`
@@ -284,8 +298,13 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   over 3 MiB), and `Registrar.mergeNSSelector`.
 - **GATE-23** e2e case that runs a JSAdmission against a real apiserver over
   TLS with cert-manager.
-- **GATE-24** Test that a `kube.*` call from JS ends at the script deadline
-  (needs EXEC-2).
+- **GATE-25** CI check that the committed `internal/jsengine/engine.wasm` equals a
+  rebuild: run `make engine-wasm` and fail on a diff of `engine.wasm`. Needs the
+  pinned toolchain of `glue/versions.env` on the runner (wasi-sdk 34, QuickJS-ng
+  0.17.0, binaryen 129) and a check that the output is identical across macOS and
+  Linux (the same build gave identical bytes twice on macOS arm64; Linux is
+  untried). Rule: js-execution.R14.
+
 ## DOC: Documentation
 
 - **DOC-1** README is the Kubebuilder template with `TODO(user)` placeholders.

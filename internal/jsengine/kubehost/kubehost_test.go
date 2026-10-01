@@ -2,13 +2,16 @@ package kubehost_test
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/fake"
 
 	"github.com/o-haase/gojsop/internal/jsengine"
@@ -224,5 +227,98 @@ func TestKubeHost_DeleteRemovesResource(t *testing.T) {
 		Namespace("default").Get(context.Background(), "doomed", metav1.GetOptions{})
 	if err == nil {
 		t.Fatal("expected NotFound after delete, got nil")
+	}
+}
+
+// blockingDyn is a dynamic client whose Get waits for its context, the way a
+// slow API server does.
+type blockingDyn struct {
+	dynamic.Interface
+	got chan context.Context
+}
+
+func (b *blockingDyn) Resource(schema.GroupVersionResource) dynamic.NamespaceableResourceInterface {
+	return &blockingRes{b: b}
+}
+
+type blockingRes struct {
+	dynamic.NamespaceableResourceInterface
+	b *blockingDyn
+}
+
+func (r *blockingRes) Namespace(string) dynamic.ResourceInterface { return r }
+
+func (r *blockingRes) Get(ctx context.Context, _ string, _ metav1.GetOptions, _ ...string) (*unstructured.Unstructured, error) {
+	r.b.got <- ctx
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(30 * time.Second):
+		return nil, errors.New("api server answered after 30s: the call context did not bound the request")
+	}
+}
+
+// kube-access.R5
+// js-execution.R11
+// A kube.* call that hangs on the API server ends at the deadline of the JS
+// call (EXEC-2), although the KubeHost parent context lives on.
+// kube-access.R3
+func TestKubeHost_CallIsBoundByJSCallDeadline(t *testing.T) {
+	dyn := &blockingDyn{got: make(chan context.Context, 1)}
+	h := &kubehost.KubeHost{Ctx: context.Background(), Dyn: dyn, Mapper: testMapper()}
+	inst := runHook(t, h, `function f() { return kube.get({apiVersion: "v1", kind: "ConfigMap", namespace: "d", name: "x"}) }`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := inst.Invoke(ctx, "f", nil, nil)
+	if err == nil {
+		t.Fatal("expected the call to fail at the deadline")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("kube.get ran %s past a 150ms deadline", d)
+	}
+	if h.Ctx.Err() != nil {
+		t.Fatal("the parent context must not be touched")
+	}
+	if !inst.Usable() {
+		t.Fatal("VM must stay usable")
+	}
+}
+
+// kube-access.R5
+// The parent context of the KubeHost (manager shutdown) ends a call too.
+// kube-access.R3
+func TestKubeHost_ParentContextEndsCall(t *testing.T) {
+	dyn := &blockingDyn{got: make(chan context.Context, 1)}
+	parent, stop := context.WithCancel(context.Background())
+	h := &kubehost.KubeHost{Ctx: parent, Dyn: dyn, Mapper: testMapper()}
+	inst := runHook(t, h, `function f() { return kube.get({apiVersion: "v1", kind: "ConfigMap", namespace: "d", name: "x"}) }`)
+	go func() { <-dyn.got; stop() }()
+	start := time.Now()
+	if err := inst.Invoke(context.Background(), "f", nil, nil); err == nil {
+		t.Fatal("expected an error")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %s", d)
+	}
+}
+
+// kube-access.R2
+// The read-only binder leaves apply and delete undefined for the script.
+// js-execution.R6
+func TestReadOnlyKubeHost_ScriptSeesOnlyGetAndList(t *testing.T) {
+	h := &kubehost.ReadOnlyKubeHost{KubeHost: newKubeHost(t)}
+	inst, err := jsengine.New(jsengine.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(inst.Close)
+	if err := inst.BindHost(h); err != nil {
+		t.Fatal(err)
+	}
+	got, err := inst.Eval(context.Background(), "ro.js", `[typeof kube.get, typeof kube.list, typeof kube.apply, typeof kube.delete].join()`)
+	if err != nil || got != "function,function,undefined,undefined" {
+		t.Fatalf("got %q, %v", got, err)
 	}
 }

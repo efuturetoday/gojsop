@@ -41,4 +41,5 @@ explains areas, aspects, rule IDs, gates and open items.
 make manifests generate   # after *_types.go or marker changes
 make lint-fix             # after Go changes
 make test                 # unit and envtest integration tests
+make engine-wasm          # after changes to internal/jsengine/glue/glue.c; commit the new engine.wasm
 ```

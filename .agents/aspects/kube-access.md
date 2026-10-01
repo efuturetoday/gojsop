@@ -17,7 +17,10 @@ Scripts see one global object, `kube`. Hooks get `apply`, `get`, `list` and
 `undefined` for them. The [js-execution](js-execution.md) aspect explains where
 `kube` sits in the VM.
 
-A `kubehost.Factory` mints the binder that installs `kube` into a VM.
+A `kubehost.Factory` mints the binder that registers `kube` for a VM. The
+functions cross into wasm through the one import `env.host_call`; the engine
+defines `kube.get` and the others as JavaScript functions over it, and only
+registered names exist.
 `ForHook` returns the full surface, `ForAdmission` the read-only one. Today's
 only implementation, `kubehost.SharedFactory`, hands out binders over one
 process-wide dynamic client and RESTMapper. It ignores its context, key and
@@ -39,7 +42,9 @@ Semantics of the four functions, each taking one JS object:
   concurrent creator makes it fail with AlreadyExists; there is no retry.
   Server-side apply was deferred; the code says Phase 2 may switch once only
   modern API servers are supported.
-- `kube.get` returns `null` for a missing object and throws on other errors.
+- `kube.get` returns `null` for a missing object and throws on other errors. A
+  failed call is a JavaScript exception with the error text; a script may
+  catch it.
 - `kube.list` issues one List without limit or pagination. An empty namespace on
   a namespaced kind lists across all namespaces.
 - `kube.delete` treats NotFound as success and uses default delete options.
@@ -59,7 +64,7 @@ sees CRDs installed after start is not verified.
 
 ## How to use it
 
-1. Add the function to `kubehost.KubeHost` and bind it in `Bind`.
+1. Add the function to `kubehost.KubeHost` as a `jsengine.HostFunc` (JSON in, JSON out, the call context first) and register it in `Bind` with `Host.Func("kube.<name>", ...)`.
 2. If it cannot write, bind it in `kubehost.ReadOnlyKubeHost.Bind` too.
 3. Add a `TestKubeHost_*` test and put `// kube-access.R3` above it.
 4. If it needs a new permission, add the `+kubebuilder:rbac` marker and run `make manifests`.
@@ -88,7 +93,9 @@ sees CRDs installed after start is not verified.
   server-side apply).
 - **R5** Bound every `kube.*` call by the deadline of the running script call.
   Why: R3 of [js-execution](js-execution.md) promises a deadline for the whole call.
-  Gate: missing → GATE-24. Violated today → EXEC-2.
+  Gate: `TestKubeHost_CallIsBoundByJSCallDeadline`, `TestKubeHost_ParentContextEndsCall`.
+  The engine hands the host function the context of the running call
+  (js-execution.R11); `KubeHost.Ctx` (manager shutdown) ends a call too.
 - **R6** Put the `+kubebuilder:rbac` marker next to the code that needs the
   permission and run `make manifests`. `config/rbac/role.yaml` is generated.
   Why: the generated role must not drift from the code.
@@ -120,4 +127,4 @@ sees CRDs installed after start is not verified.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): KUBE-1 to KUBE-4, EXEC-2, OPS-2; gates GATE-7, GATE-14, GATE-24.
+Tracked in [backlog](../backlog.md): KUBE-1 to KUBE-4, OPS-2; gates GATE-7, GATE-14.

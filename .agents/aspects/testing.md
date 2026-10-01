@@ -18,7 +18,7 @@ built image on an isolated Kind cluster. They carry the build tag `e2e`, so a
 plain `go test ./...` skips them.
 
 `make test` runs unit and envtest tests together and writes `cover.out`, which
-is gitignored. It does not use `-race`. `make test-e2e` creates the Kind
+is gitignored. It runs with `-race`. `make test-e2e` creates the Kind
 cluster, runs the e2e tests and removes the cluster. `make lint` runs
 golangci-lint; the version is the same in the Makefile and in CI. CI runs
 `make test`, `make lint` and `make test-e2e` on every push and pull request.

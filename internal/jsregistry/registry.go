@@ -41,8 +41,8 @@ type ManagedVM struct {
 	VM   *jsengine.VM
 	Opts jsrun.Spec
 
-	// CallMu serializes calls into the qjs runtime. qjs is not goroutine-safe,
-	// and a JSHook + JSAdmission could converge on the same VM in a future
+	// CallMu serializes calls into the QuickJS instance. A VM is not
+	// goroutine-safe, and a JSHook + JSAdmission could converge on the same VM in a future
 	// phase. Today the dispatcher and the admission server both go through
 	// Registry.Invoke, which acquires this mutex.
 	CallMu sync.Mutex
@@ -97,6 +97,14 @@ type slot struct {
 	// restart log, carried over every installed VM.
 	restarts map[jsrun.RecoveryReason]int32
 	history  []jsrun.Recovery
+}
+
+// ConfigureEngine sets up the process-wide JS engine before the first VM, so the
+// compilation of engine.wasm happens at start-up. cacheDir keeps the compiled
+// machine code across restarts (empty: in memory only, see
+// jsengine.Options.CacheDir). Without a call the engine starts on first use.
+func ConfigureEngine(cacheDir string) error {
+	return jsengine.Configure(jsengine.Options{CacheDir: cacheDir})
 }
 
 func NewRegistry() *Registry {
@@ -464,15 +472,21 @@ func (r *Registry) restart(key jsrun.Key, only *ManagedVM, reason jsrun.Recovery
 }
 
 // recoveryReason maps the outcome of a call to the reason to rebuild the
-// script, or false if the script is fine. A cancelled call closed the module
-// whatever ended it (deadline, client, shutdown), so the VM is dead.
-func recoveryReason(o jsrun.Outcome) (jsrun.RecoveryReason, bool) {
-	switch o {
-	case jsrun.OutcomePanic:
+// script, or false if the script is fine. A panic always rebuilds: the state
+// behind it is unknown. A timeout or the memory limit end the call through the
+// engine (interrupt handler, JS_SetMemoryLimit) and leave the VM usable, so
+// they rebuild only when the VM is not (a wasm trap came with them).
+//
+// js-registry.R2
+func recoveryReason(o jsrun.Outcome, usable bool) (jsrun.RecoveryReason, bool) {
+	switch {
+	case o == jsrun.OutcomePanic:
 		return jsrun.ReasonPanic, true
-	case jsrun.OutcomeMemoryLimit:
+	case usable:
+		return "", false
+	case o == jsrun.OutcomeMemoryLimit:
 		return jsrun.ReasonMemoryLimit, true
-	case jsrun.OutcomeCancelled:
+	case o == jsrun.OutcomeCancelled:
 		return jsrun.ReasonTimeout, true
 	default:
 		return "", false
@@ -481,13 +495,14 @@ func recoveryReason(o jsrun.Outcome) (jsrun.RecoveryReason, bool) {
 
 // Call runs fn under mi.CallMu with a panic-safe wrapper. The result classifies
 // the outcome (panic / OOM / cancelled / other error / ok) so callers don't
-// reimplement the same recover + errors.Is dance. Call never waits for a build:
-// it returns ErrVMUnavailable at once while the key holds no VM (Building or
+// reimplement the same recover + errors.Is dance. A wasm trap
+// (jsengine.TrapError) counts as a panic. Call never waits for a build: it
+// returns ErrVMUnavailable at once while the key holds no VM (Building or
 // Broken), and ErrUnknownKey if the key is not registered at all.
 //
 // fn receives the same ctx Call was called with; pass a context with deadline
-// to enforce a per-call timeout (wazero observes the runtime's embedded ctx
-// because qjs.New was constructed with CloseOnContextDone).
+// to enforce a per-call timeout: the engine answers its interrupt handler from
+// that context, so the script stops and the VM stays usable.
 //
 // jsrun.Result.Duration is wall-clock from CallMu acquisition to fn return —
 // the lock-wait time is included intentionally so a "stuck" VM shows up as
@@ -497,21 +512,26 @@ func recoveryReason(o jsrun.Outcome) (jsrun.RecoveryReason, bool) {
 // js-registry.R1
 // js-registry.R19
 func (r *Registry) Call(ctx context.Context, key jsrun.Key, fn func(ctx context.Context, vm *jsengine.VM) error) (jsrun.Result, *ManagedVM, error) {
+	res, mi, _, err := r.call(ctx, key, fn)
+	return res, mi, err
+}
+
+// call is Call plus whether the VM can serve another call, read under CallMu.
+func (r *Registry) call(ctx context.Context, key jsrun.Key, fn func(ctx context.Context, vm *jsengine.VM) error) (res jsrun.Result, mi *ManagedVM, usable bool, err error) {
 	mi, known := r.lookup(key)
 	if mi == nil {
 		if known {
-			return jsrun.Result{}, nil, fmt.Errorf("%w: %s", jsrun.ErrVMUnavailable, key)
+			return jsrun.Result{}, nil, false, fmt.Errorf("%w: %s", jsrun.ErrVMUnavailable, key)
 		}
-		return jsrun.Result{}, nil, fmt.Errorf("%w: %s", jsrun.ErrUnknownKey, key)
+		return jsrun.Result{}, nil, false, fmt.Errorf("%w: %s", jsrun.ErrUnknownKey, key)
 	}
 
 	mi.CallMu.Lock()
 	defer mi.CallMu.Unlock()
 	if mi.closed { // replaced or dropped while this call waited for the lock
-		return jsrun.Result{}, nil, fmt.Errorf("%w: %s", jsrun.ErrVMUnavailable, key)
+		return jsrun.Result{}, nil, false, fmt.Errorf("%w: %s", jsrun.ErrVMUnavailable, key)
 	}
 
-	res := jsrun.Result{}
 	start := time.Now()
 	func() {
 		defer func() {
@@ -521,9 +541,13 @@ func (r *Registry) Call(ctx context.Context, key jsrun.Key, fn func(ctx context.
 			}
 		}()
 		err := fn(ctx, mi.VM)
+		var trap *jsengine.TrapError
 		switch {
 		case err == nil:
 			res.Outcome = jsrun.OutcomeOK
+		case errors.As(err, &trap):
+			res.Outcome = jsrun.OutcomePanic
+			res.Panic = err
 		case errors.Is(err, jsengine.ErrCancelled), ctx.Err() != nil:
 			res.Outcome = jsrun.OutcomeCancelled
 			res.Err = err
@@ -536,15 +560,16 @@ func (r *Registry) Call(ctx context.Context, key jsrun.Key, fn func(ctx context.
 		}
 	}()
 	res.Duration = time.Since(start)
-	return res, mi, nil
+	return res, mi, mi.VM.Usable(), nil
 }
 
 // Invoke implements jsrun.Runner: it calls export on the VM of key through
 // Call, so lock, panic recovery and outcome classification are Call's. The
-// call is bounded by the timeout limit of the VM. A panic, the memory limit or
-// a cancellation leaves the VM untrusted or dead: Invoke starts the rebuild
-// itself and reports the reason in Result.Recovered. The rebuild does not
-// wait; until it ends the key holds no VM.
+// call is bounded by the timeout limit of the VM. A panic or wasm trap leaves
+// the VM untrusted: Invoke starts the rebuild itself and reports the reason in
+// Result.Recovered. A timeout or the memory limit leave the VM usable and
+// rebuild nothing (see recoveryReason). The rebuild does not wait; until it
+// ends the key holds no VM.
 //
 // js-execution.R2
 // js-execution.R3
@@ -556,13 +581,13 @@ func (r *Registry) Invoke(ctx context.Context, key jsrun.Key, export string, in,
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(mi.Limits.TimeoutSeconds)*time.Second)
 		defer cancel()
 	}
-	res, mi, err := r.Call(ctx, key, func(ctx context.Context, vm *jsengine.VM) error {
+	res, mi, usable, err := r.call(ctx, key, func(ctx context.Context, vm *jsengine.VM) error {
 		return vm.Invoke(ctx, export, in, out)
 	})
 	if err != nil {
 		return res, err
 	}
-	if reason, ok := recoveryReason(res.Outcome); ok {
+	if reason, ok := recoveryReason(res.Outcome, usable); ok {
 		started, rerr := r.restart(key, mi, reason)
 		if rerr == nil && started {
 			res.Recovered = reason

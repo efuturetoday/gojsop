@@ -58,8 +58,8 @@ A policy decides on a request and must not change the cluster, so it can read ot
 - **Steps**:
   1. The request cannot get a decision from the script.
   2. With `Ignore` the request is admitted with a warning; otherwise it is denied with code 500.
-  3. After a crash, memory overrun or timeout the script instance is rebuilt in the background; until it is ready `failurePolicy` decides every request (jsadmission.R19), and the policy shows `Ready=False` (jsadmission.R18).
-- **Exceptions**: a plain script error does not restart the instance (jsadmission.R12)
+  3. After a crash (a wasm trap) the script instance is rebuilt in the background; until it is ready `failurePolicy` decides every request (jsadmission.R19), and the policy shows `Ready=False` (jsadmission.R18).
+- **Exceptions**: a plain script error, a memory overrun or a timeout does not restart the instance (jsadmission.R12)
 - **Result**: the author gets the availability or the enforcement they chose
 
 ### jsadmission.UC5 Change or remove a policy
@@ -88,7 +88,7 @@ A policy decides on a request and must not change the cluster, so it can read ot
 | jsadmission.R9 | On every script failure `failurePolicy` decides: `Ignore` allows with a warning, anything else denies with code 500. | `api/v1alpha1/jsadmission_types.go` (`FailurePolicy`) | `TestServer_Validate_FailurePolicy_Fail_OnJSThrow`, `TestServer_Validate_FailurePolicy_Ignore_OnJSThrow` |
 | jsadmission.R10 | `failurePolicy` and `timeoutSeconds` are the same for the apiserver (operator unreachable) and for the handler. | `Registrar` and `PolicyEntry` in `internal/jsadmission` | missing → GATE-17 |
 | jsadmission.R11 | A call that runs longer than the timeout (default 5 s) is a script failure. | `api/v1alpha1/jsadmission_types.go` (`TimeoutSeconds`); which field wins is open in ADM-5 | missing → GATE-22 |
-| jsadmission.R12 | After a panic, a memory overrun or a timeout the script instance is rebuilt in the background; after a plain script error or a client disconnect it is kept. | `Server.review` in `server.go` | missing → GATE-22 |
+| jsadmission.R12 | After a panic (a wasm trap) the script instance is rebuilt in the background; after a plain script error, a memory overrun, a timeout or a client disconnect it is kept (the engine stops the script and the VM stays usable). | `Server.review` in `server.go` | missing → GATE-22 |
 | jsadmission.R13 | A policy can only read the cluster (`kube.get`, `kube.list`); `kube.apply` and `kube.delete` are not available. | admission runs with `sideEffects: None` | `TestSharedFactory_ForAdmission_ReadOnlySurface` |
 | jsadmission.R14 | Every response carries the UID of its request. | admission.k8s.io/v1 | `TestServer_Validate_AllowedRoundtrip` |
 | jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `cmd/main.go` (`excludeNamespaces`); extent open in ADM-6 | missing → ADM-6 |
@@ -114,7 +114,7 @@ A policy decides on a request and must not change the cluster, so it can read ot
 - **The webhook entry is named `<ns>-<name>.policies.gojsop.io` (cluster-scoped: `<name>.policies.gojsop.io`).** Status: accepted (2026-05, project). Why: unique per policy inside one configuration.
 - **The operator serves the webhook over TLS with a cert-manager certificate, and the `Registrar` reads the CA bundle on every sync.** Status: accepted (2026-05, project). Why: without `--webhook-cert-path` controller-runtime self-signs and the apiserver rejects that certificate. Open: CA rotation reaches the configurations only on the next policy change (ADM-4).
 - **Admission VMs are built only by `SharedFactory.ForAdmission`, and scripts run only through `jsrun.Runner.Invoke`.** Status: accepted (2026-05, project). Why: one place for the read-only surface and for lock, panic recovery and result classification (see aspects). Not taken: binding `kube.apply` and `kube.delete`, because admission runs under `sideEffects: None`.
-- **After a timeout the VM is rescued instead of leaving the goroutine running.** Status: accepted (2026-05, project). Why: wazero gained context cancellation, and a stuck VM could not be rescued safely before. Not taken: leaving the goroutine running.
+- **After a timeout the script is stopped inside the engine instead of leaving the goroutine running.** Status: accepted (2026-05, project; changed 2026-10-01 with EXEC-8). Why: the QuickJS interrupt handler ends the script at the deadline and the VM stays usable, so no rebuild is needed; before, wazero closed the module and the VM was rescued. Not taken: leaving the goroutine running.
 - **The scaffolded Kubebuilder webhook for the `JSAdmission` CRD is an empty stub and validates nothing.** Status: proposed. Open: ADM-7.
 
 ## Open

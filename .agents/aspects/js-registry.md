@@ -27,7 +27,7 @@ prepare and drop VMs. The dispatcher and the admission server only call them.
 All runtime execution goes through `Runner.Invoke`, which the registry
 implements with `Registry.Call`: it takes the per-VM
 lock, bounds the call by the timeout limit, recovers panics and classifies the
-outcome as ok, panic, cancelled, memory limit or error. The port also fits an
+outcome as ok, panic, cancelled, memory limit or error (a wasm trap counts as a panic). The port also fits an
 engine that prepares a script once and invokes it statelessly: `Ensure` is the
 prepare, `Invoke` the run. The port names no VM, restart or instance: `State`
 (Phase Preparing, Ready or Failed, Err, Attempts, NextAttempt, PreparedAt, Meta,
@@ -46,12 +46,16 @@ registry caches the whole `jsrun.Spec`, so it can rebuild without
 the controller. This is how a recovery works inside `Invoke`, whose callers hold no source.
 
 A recovery has one of six reasons: source changed, limits changed, memory limit,
-panic, timeout or manual (the CRD enum still lists `timeout-streak`, which nothing sets: a
-cancelled call closes the module, so every timeout recovers, REG-4). The manual
+panic, timeout or manual (the CRD enum still lists `timeout-streak`, which nothing sets, REG-4).
+Since the own engine (EXEC-8) a timeout or the memory limit end only the call:
+the VM stays usable and keeps its state, so they recover nothing; the reasons
+`timeout` and `memory-limit` are set only when such a call came with a wasm
+trap, which leaves the VM unusable. The manual
 restart annotation reaches the port as `Spec.ResetToken`: a new value rebuilds
 like a changed source, with reason manual. A panic, the memory limit or a
-cancelled call ends `Runner.Invoke` with the matching outcome; the adapter then
-recovers on its own, inside `Invoke`, and sets `Result.Recovered`. Callers only
+cancelled call ends `Runner.Invoke` with the matching outcome; if the VM is not
+usable afterwards (always after a panic or trap), the adapter recovers on its
+own, inside `Invoke`, and sets `Result.Recovered`. Callers only
 announce it with `jslifecycle.Announce` (the `Restarted` event); they never
 trigger it, and no `Restart` exists on the port. A recovery does not build in the caller: it closes the VM and starts the same background build as `Ensure`, so until it ends the key holds no VM and `Runner.Invoke` returns `ErrVMUnavailable`. Per-VM data that a controller needs
 (for example the parsed JSHook config) is computed in a `PostBuildHook` and
@@ -74,7 +78,7 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 
 1. In a controller, load the source and compute its hash, then call `Scripts.Ensure` with `jsrun.Spec` (source, hash, limits, host, `PostBuildHook`, `ResetToken`, backoff). Preparing: write `Ready=False`/`Building` and return; the runner notifies the controller through `Scripts.Watch` when the build ends. Failed: write `Ready=False`/`BuildFailed` and requeue after the backoff. Ready: continue.
 2. Compute per-VM data in the `PostBuildHook` and read it from `State.Meta`.
-3. Run JavaScript only through `Runner.Invoke` (typed wrappers: `jshook.Handle`, `jsadmission.Handle`); a panic, memory limit or timeout is recovered by the adapter inside `Invoke`, so only announce `Result.Recovered` with `jslifecycle.Announce`; handle `ErrVMUnavailable` from `Runner.Invoke` by retrying later (events) or by your failure policy (admission), and `ErrUnknownKey` as "dropped".
+3. Run JavaScript only through `Runner.Invoke` (typed wrappers: `jshook.Handle`, `jsadmission.Handle`); a panic (and a trap that comes with a memory limit or timeout) is recovered by the adapter inside `Invoke`, so only announce `Result.Recovered` with `jslifecycle.Announce`; handle `ErrVMUnavailable` from `Runner.Invoke` by retrying later (events) or by your failure policy (admission), and `ErrUnknownKey` as "dropped".
 4. Drop the VM with `Scripts.Drop` when the resource goes away.
 5. Add a test with `jsregistry.NewRegistry()` (or a `jsrun.Runner` of your own) and carry the rule ID in a comment above it.
 
@@ -83,15 +87,15 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 - **R1** Run user JavaScript at runtime only through `Runner.Invoke` (the registry runs it in the function passed to `Registry.Call`).
   Why: one place for the call lock, panic recovery and outcome classification.
   Gate: missing → GATE-4. See also js-execution.R2.
-- **R2** Recover a script inside `Runner.Invoke` when the call ends in panic, memory limit or cancellation, and report it in `Result.Recovered`; callers only announce it with `jslifecycle.Announce` and never ask the port for a restart.
-  Why: a VM in that state is not trusted or dead; the recovery is the adapter's business, so a runner without persistent VMs needs none, and no caller has to know the cause-to-restart table.
-  Gate: `TestRegistry_Invoke_RecoversCancelledCallItself`, `TestAnnounce_Recovery_EmitsRestarted`, `TestAnnounce_NoRecovery_PublishesNothing`, `TestAnnounce_NilEmitter_NoOps`.
+- **R2** Recover a script inside `Runner.Invoke` when the call ends in a panic (a wasm trap included), or in a memory limit or cancellation that left the VM unusable, and report it in `Result.Recovered`; callers only announce it with `jslifecycle.Announce` and never ask the port for a restart. A timeout or the memory limit alone keep the VM, which keeps its state.
+  Why: a VM in that state is not trusted or dead; the engine says so (`jsengine.VM.Usable`). The recovery is the adapter's business, so a runner without persistent VMs needs none, and no caller has to know the cause-to-restart table.
+  Gate: `TestRegistry_Invoke_TimeoutAndOOMKeepVMTrapRecovers`, `TestAnnounce_Recovery_EmitsRestarted`, `TestAnnounce_NoRecovery_PublishesNothing`, `TestAnnounce_NilEmitter_NoOps`.
 - **R3** Resolve and hash the source in the controller, never in the registry.
   Why: the registry stays independent of source loading; the hash drives rebuilds.
   Gate: `TestRegistry_RestartOnSourceChange`.
 - **R4** Rebuild a recovered VM from its cached `jsrun.Spec`, and rebuild when `Spec.ResetToken` changes.
   Why: `Invoke` callers hold no source, limits or host binder; the manual restart annotation is a token, not a call.
-  Gate: `TestRegistry_RestartByKey_RebuildsFromCachedSource`, `TestRegistry_RestartByKey_UnknownHook`, `TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM`, `TestRegistry_Ensure_ResetTokenRebuildsAsManual`.
+  Gate: `TestRegistry_RestartByKey_RebuildsFromCachedSource`, `TestRegistry_RestartByKey_UnknownHook`, `TestRegistry_CancelledCall_KeepsVMAndRestartStillRebuilds`, `TestRegistry_Ensure_ResetTokenRebuildsAsManual`.
 - **R5** Keep one VM per key across reconciles while the source hash is unchanged.
   Why: scripts keep top-level state between calls (see js-execution).
   Gate: `TestRegistry_PersistsAcrossLoads`.
@@ -102,7 +106,7 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
   Why: two reconciles of one key must not race on construction.
   Gate: `TestRegistry_Concurrent_CallRestartDrop`.
 - **R8** Take the old VM's `ManagedVM.CallMu` before closing or replacing it.
-  Why: the qjs runtime is not goroutine-safe, and closing during a call races in wazero.
+  Why: a VM instance is not goroutine-safe, and closing during a call races in wazero.
   Gate: `TestRegistry_Concurrent_CallRestartDrop`.
 - **R9** Touch `ManagedVM.VM` and `ManagedVM.CallMu` only inside `internal/jsregistry`; callers see only `jsrun.State`.
   Why: the fields are exported, but the lock protocol lives in the registry. Callers cannot reach them, because they may not import the registry (js-execution.R10). Tests and `cmd` may.
@@ -136,7 +140,7 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
   Why: reconciles do not wait, so the controller of the kind needs the event to publish the new state.
   Gate: `TestRegistry_Ensure_BuildsAsyncAndNotifies`, `TestRegistry_Watch_DeliversOnlyOwnKind`.
 - **R19** Hold no VM in a Failed entry or in one that a recovery or a changed reset token sent to rebuild, and let `Runner.Invoke` return `ErrVMUnavailable` at once for it. A build for changed options keeps the old VM serving until the new one is installed; every failed build drops the old VM.
-  Why: a VM after a timeout is dead, and calls on it panic and trigger one rescue each (a loop of rescues); callers must see "not ready" and apply their own policy (requeue, `failurePolicy`).
+  Why: a VM after a trap is in an unknown state, and a rebuild that failed must not leave it serving; callers must see "not ready" and apply their own policy (requeue, `failurePolicy`).
   Gate: `TestRegistry_Call_WithoutVM_IsErrVMUnavailable`, `TestRegistry_RestartByKey_BuildHasDeadlineAndFailureHoldsNoVM`.
 
 ## Decisions
@@ -150,8 +154,8 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 
 - **Builds run asynchronously; a newer build cancels a running one.** Status: proposed.
   Why: a build runs user JavaScript that may hang; a reconcile or call that waits for it stalls other hooks, and a stuck build blocks the fix. Every key is in one phase, Ready, Preparing or Failed, and `Scripts.Ensure` reports it without waiting.
-  A recovery after a call (panic, memory limit, timeout) or a changed reset token closes the VM and builds in the background too; a failed build leaves the key Failed without a VM, so no dead VM serves calls and no call triggers a rescue. Callers meet `ErrVMUnavailable`: the dispatcher requeues the event, the admission server applies `failurePolicy`.
-  Not taken: a synchronous build with a reconcile deadline, because the build lock stays held by the hanging build and the reconcile worker still waits. Keeping the old VM after a failed rescue build, because after a timeout it is dead.
+  A recovery after a call (a panic, or a memory limit or timeout that left the VM unusable) or a changed reset token closes the VM and builds in the background too; a failed build leaves the key Failed without a VM, so no broken VM serves calls and no call triggers a rescue. Callers meet `ErrVMUnavailable`: the dispatcher requeues the event, the admission server applies `failurePolicy`.
+  Not taken: a synchronous build with a reconcile deadline, because the build lock stays held by the hanging build and the reconcile worker still waits. Keeping the old VM after a failed rescue build, because after a trap it is in an unknown state.
 
 - **Callers depend on the port `jsrun.Runner`, and the registry is its first adapter.** Status: accepted (2026-10, project, EXEC-6).
   Why: the dispatcher, the admission server, the controllers and `jslifecycle` named `jsregistry.Registry` and `jsengine.VM`, so no other engine could run behind them. The spike `spike/quickjs-wasm` shows an engine that runs single-shot calls from a snapshot next to long-lived VMs; the port (ensure, invoke by key and export, restart, drop, watch) fits both and hides VMs, locks and the engine.
@@ -160,6 +164,10 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 - **Split the port into `jsrun.Runner` (data path) and `jsrun.Scripts` (lifecycle), and keep persistent-VM words out of it.** Status: proposed (2026-10-01, open).
   Why: the dispatcher and the admission server need only `Invoke`; controllers need only `Ensure`, `Drop` and `Watch`; one wide interface made every caller depend on the other half and leaked the VM model (`Instance`, `StartedAt`, `Restart`, `Known`). `Restart` is gone: the manual annotation is `Spec.ResetToken`, a change of it prepares again like a changed source, and a rescue after panic, memory limit or cancellation happens inside `Invoke` of the adapter (`Result.Recovered`); `Instance` is replaced by the neutral `State` that `Ensure` returns (`Meta` was `Extra`, `Recoveries` was the restart log); `Known` is `ErrUnknownKey` of `Invoke`. A cancelled call is recovered whatever ended it, so a client disconnect at the admission server now recovers too (the module is closed then anyway). The CRD keeps `status.instance.restartsByReason` and `recentRestarts`; the controllers map `Recoveries` onto them (API-10).
   Not taken: a `State(key)` method on `Scripts`, because no caller needs it. One wide interface with documented "controllers only" methods, because the compiler cannot hold the boundary then.
+
+- **`Runner.Invoke` recovers a VM only when the engine reports it unusable.** Status: proposed (2026-10-01, open) (EXEC-8).
+  Why: the own engine stops a call through the QuickJS interrupt handler and keeps the VM, so a timeout or the memory limit alone need no rebuild, and the top-level state of the script survives them. A panic (a wasm trap included) always rebuilds. Before, every cancelled call closed the module and every timeout rebuilt the VM (REG-4).
+  Not taken: rebuilding after every timeout as before, because it throws away script state for nothing. A restart after N timeouts in a row is left to REG-4.
 
 ## Open
 

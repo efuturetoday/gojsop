@@ -49,3 +49,15 @@ func TestFlags_BuildBackoffRejectsNonsense(t *testing.T) {
 		}
 	}
 }
+
+// js-execution.R12
+func TestFlags_EngineCacheDir_DefaultsToInMemory(t *testing.T) {
+	def, err := parse(t)
+	if err != nil || def.engineCacheDir != "" {
+		t.Fatalf("default engineCacheDir = %q, %v; want empty (in-memory cache)", def.engineCacheDir, err)
+	}
+	f, err := parse(t, "--engine-cache-dir=/var/cache/engine")
+	if err != nil || f.engineCacheDir != "/var/cache/engine" {
+		t.Fatalf("engineCacheDir = %q, %v", f.engineCacheDir, err)
+	}
+}
