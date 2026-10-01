@@ -27,13 +27,13 @@ them. Per-reason restart counters and the history ring on the VM were added for
 observability. See Decisions for the choices behind the build lock.
 
 The registry never loads sources. A controller loads the bytes, hashes them and
-passes both in `BuildOptions`. A changed hash makes `GetOrLoad` rebuild. The
+passes both in `BuildOptions`. A changed hash or changed effective limits make `GetOrLoad` rebuild. The
 registry caches the whole `BuildOptions`, so `RestartByKey` can rebuild without
 the controller. This is how a rescue works from the dispatcher or the admission
 server, which hold no source.
 
-A restart has one of five reasons: source changed, memory limit, panic, timeout
-or manual (the CRD enum still lists `timeout-streak`, which nothing sets: a
+A restart has one of six reasons: source changed, limits changed, memory limit,
+panic, timeout or manual (the CRD enum still lists `timeout-streak`, which nothing sets: a
 cancelled call closes the module, so every timeout restarts, REG-4). `jslifecycle.Rescue` wraps `RestartByKey` and emits
 the `Restarted` and `RescueFailed` events. Per-VM data that a controller needs
 (for example the parsed JSHook config) is computed in a `PostBuildHook` and
@@ -76,16 +76,16 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
   Gate: `TestRegistry_RestartByKey_RebuildsFromCachedSource`, `TestRegistry_RestartByKey_UnknownHook`, `TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM`.
 - **R5** Keep one VM per key across reconciles while the source hash is unchanged.
   Why: scripts keep top-level state between calls (see js-execution).
-  Gate: `TestRegistry_PersistsAcrossLoads`. Violated today → REG-7.
+  Gate: `TestRegistry_PersistsAcrossLoads`.
 - **R6** Hold the registry lock only for map access, never while user JavaScript runs.
   Why: a slow build or call of one key must not block other keys.
-  Gate: missing → GATE-26.
+  Gate: `TestRegistry_Concurrent_CallRestartDrop`.
 - **R7** Serialise builds and restarts per key with the build lock.
   Why: two reconciles of one key must not race on construction.
-  Gate: missing → GATE-26.
+  Gate: `TestRegistry_Concurrent_CallRestartDrop`.
 - **R8** Take the old VM's `ManagedVM.CallMu` before closing or replacing it.
   Why: the qjs runtime is not goroutine-safe, and closing during a call races in wazero.
-  Gate: missing → GATE-26.
+  Gate: `TestRegistry_Concurrent_CallRestartDrop`.
 - **R9** Touch `ManagedVM.VM` and `ManagedVM.CallMu` only inside `internal/jsregistry`.
   Why: the fields are exported, but the lock protocol lives in the registry.
   Gate: missing → GATE-2.
@@ -95,6 +95,12 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 - **R11** Record every restart with its reason in the per-reason counters and the history ring.
   Why: operators need to see why a VM restarted.
   Gate: `TestRegistry_RestartHistory_RingAndCounters`.
+- **R12** Rebuild a VM when `GetOrLoad` gets other effective limits, even with an unchanged source hash.
+  Why: a changed `spec.limits` must take effect; zero fields count as the defaults, so an explicit default is no change. The restart reason is `limits-changed`.
+  Gate: `TestRegistry_GetOrLoad_RebuildsOnLimitsChange`.
+- **R13** Bound the rescue build of `RestartByKey` by the VM's timeout limit.
+  Why: a hanging module or `PostBuild` must not hold the per-key build lock forever; a failed rescue build keeps the old VM.
+  Gate: `TestRegistry_RestartByKey_BuildHasDeadline`.
 
 ## Decisions
 
@@ -107,4 +113,4 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-1 to REG-7; gates GATE-2, GATE-4, GATE-26.
+Tracked in [backlog](../backlog.md): REG-1, REG-3 to REG-6; gates GATE-2, GATE-4.

@@ -28,6 +28,7 @@ type RestartReason string
 //   - ReasonTimeout:       handle() exceeded the per-call deadline (admission, dispatcher)
 //   - ReasonTimeoutStreak: no longer set: a cancelled call closes the module, so every timeout restarts with ReasonTimeout; kept as CRD enum value
 //   - ReasonManual:        gojsop.io/restart annotation changed on the JSHook (reconciler)
+//   - ReasonLimitsChanged: spec.limits changed with the source hash unchanged (Registry.GetOrLoad)
 const (
 	ReasonSourceChanged RestartReason = "source-changed"
 	ReasonMemoryLimit   RestartReason = "memory-limit"
@@ -35,6 +36,7 @@ const (
 	ReasonTimeout       RestartReason = "timeout"
 	ReasonTimeoutStreak RestartReason = "timeout-streak"
 	ReasonManual        RestartReason = "manual"
+	ReasonLimitsChanged RestartReason = "limits-changed"
 )
 
 // PostBuildHook is invoked once per fresh VM after the source has loaded. It
@@ -225,8 +227,17 @@ func (r *Registry) build(ctx context.Context, key types.NamespacedName, opts Bui
 	}, nil
 }
 
+// optsChanged reports whether opts needs a different VM than cur: another
+// source hash or other effective limits (zero fields count as the defaults).
+// Binder and PostBuild are funcs and cannot be compared; they follow the
+// source.
+func optsChanged(cur, opts BuildOptions) bool {
+	return cur.SourceHash != opts.SourceHash ||
+		cur.Limits.WithDefaults() != opts.Limits.WithDefaults()
+}
+
 // GetOrLoad returns the live ManagedVM for key. If nothing exists yet, or if
-// opts.SourceHash differs from the last load, a fresh QuickJS runtime is
+// opts.SourceHash or opts.Limits differ from the last load, a fresh QuickJS runtime is
 // started, the source is evaluated, and the previous VM (if any) is closed.
 // The boolean reports whether a (re)start happened on this call.
 //
@@ -245,7 +256,7 @@ func (r *Registry) build(ctx context.Context, key types.NamespacedName, opts Bui
 func (r *Registry) GetOrLoad(ctx context.Context, key types.NamespacedName, opts BuildOptions) (*ManagedVM, bool, error) {
 	// 1. fast path
 	r.mu.Lock()
-	if existing, ok := r.vms[key]; ok && existing.Opts.SourceHash == opts.SourceHash {
+	if existing, ok := r.vms[key]; ok && !optsChanged(existing.Opts, opts) {
 		r.mu.Unlock()
 		return existing, false, nil
 	}
@@ -258,11 +269,16 @@ func (r *Registry) GetOrLoad(ctx context.Context, key types.NamespacedName, opts
 
 	// 3. double-check after acquiring the build lock
 	r.mu.Lock()
-	if existing, ok := r.vms[key]; ok && existing.Opts.SourceHash == opts.SourceHash {
+	existing, ok := r.vms[key]
+	if ok && !optsChanged(existing.Opts, opts) {
 		r.mu.Unlock()
 		return existing, false, nil
 	}
 	r.mu.Unlock()
+	reason := ReasonSourceChanged
+	if ok && existing.Opts.SourceHash == opts.SourceHash {
+		reason = ReasonLimitsChanged
+	}
 
 	// 4. heavy lifting — runs user JS, no global lock held
 	mi, err := r.build(ctx, key, opts)
@@ -272,7 +288,7 @@ func (r *Registry) GetOrLoad(ctx context.Context, key types.NamespacedName, opts
 
 	// 5. install. Swap under r.mu, then drain the old VM's CallMu before
 	//    Close so we don't race active wasm.
-	old := r.installNew(key, mi, ReasonSourceChanged, nil)
+	old := r.installNew(key, mi, reason, nil)
 	if old != nil {
 		old.CallMu.Lock()
 		old.VM.Close()
@@ -365,12 +381,13 @@ func (r *Registry) Drop(key types.NamespacedName) {
 // old VM's CallMu is acquired before vm.Close so we don't race in-flight
 // wasm.
 //
-// The build context comes from a background context: rescue is driven by
-// the dispatcher / admission server, not by a per-reconcile deadline, and
-// blocking the rescue on a request context that's about to be cancelled
-// would mean every timeout-rescue starts from a half-built VM.
+// The build context derives from a background context, not from the caller's
+// request context (about to be cancelled on a timeout rescue), but is bounded
+// by the VM's own timeout limit, so a hanging module or PostBuild cannot hold
+// the build lock forever. A failed build keeps the old VM installed.
 //
 // js-registry.R4
+// js-registry.R13
 // js-registry.R7
 // js-registry.R8
 func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) (*ManagedVM, error) {
@@ -385,7 +402,10 @@ func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) 
 		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
 	}
 
-	mi, err := r.build(context.Background(), key, existing.Opts)
+	ctx, cancel := context.WithTimeout(context.Background(),
+		time.Duration(existing.Opts.Limits.WithDefaults().TimeoutSeconds)*time.Second)
+	defer cancel()
+	mi, err := r.build(ctx, key, existing.Opts)
 	if err != nil {
 		return nil, err
 	}

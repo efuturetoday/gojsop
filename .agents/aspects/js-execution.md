@@ -93,7 +93,7 @@ Add a new kind of resource that runs JavaScript:
   Gate: `TestSharedFactory_ForAdmission_ReadOnlySurface`.
 - **R7** Close a VM only while you hold its call lock.
   Why: closing during a running call races inside wazero.
-  Gate: missing → GATE-26.
+  Gate: `TestRegistry_Concurrent_CallRestartDrop`.
 - **R8** Never share one VM between two resources.
   Why: isolation between scripts depends on it.
   Gate: missing → GATE-6.
@@ -120,7 +120,6 @@ EXEC-2
 EXEC-3
 EXEC-4
 GATE-2
-GATE-26
 GATE-4
 GATE-5
 GATE-6

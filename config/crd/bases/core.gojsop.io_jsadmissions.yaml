@@ -450,8 +450,8 @@ spec:
                           type: string
                         reason:
                           description: |-
-                            Reason is one of: source-changed, memory-limit, panic, timeout,
-                            timeout-streak, manual.
+                            Reason is one of: source-changed, limits-changed, memory-limit, panic,
+                            timeout, timeout-streak, manual.
                           type: string
                         time:
                           description: Time is when the new instance was installed.
@@ -466,8 +466,8 @@ spec:
                       type: integer
                     description: |-
                       RestartsByReason aggregates RecentRestarts. Keys are restart reasons
-                      (source-changed, memory-limit, panic, timeout, timeout-streak,
-                      manual); values are counts since the resource was created.
+                      (source-changed, limits-changed, memory-limit, panic, timeout,
+                      timeout-streak, manual); values are counts since the resource was created.
                     type: object
                   sourceHash:
                     description: |-

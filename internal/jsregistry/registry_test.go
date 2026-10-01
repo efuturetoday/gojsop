@@ -3,6 +3,9 @@ package jsregistry_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -295,4 +298,254 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 		return err
 	})
 	reg.Drop(key)
+}
+
+// js-registry.R5
+// js-registry.R12
+func TestRegistry_GetOrLoad_RebuildsOnLimitsChange(t *testing.T) {
+	reg := jsregistry.NewRegistry()
+	key := types.NamespacedName{Name: "lim"}
+	t.Cleanup(func() { reg.Drop(key) })
+	src := []byte(`function ok(){return 1}`)
+	opts := jsregistry.BuildOptions{Source: src, SourceHash: "same", Limits: jsengine.Limits{MemoryMB: 16, TimeoutSeconds: 5}}
+
+	mi, _, err := reg.GetOrLoad(context.Background(), key, opts)
+	if err != nil {
+		t.Fatalf("GetOrLoad: %v", err)
+	}
+
+	same := opts
+	same.Limits = jsengine.Limits{MemoryMB: 16, TimeoutSeconds: 5}
+	if mi2, restarted, _ := reg.GetOrLoad(context.Background(), key, same); restarted || mi2 != mi {
+		t.Fatalf("identical limits must not rebuild (restarted=%v)", restarted)
+	}
+
+	opts.Limits.MemoryMB = 64
+	mi3, restarted, err := reg.GetOrLoad(context.Background(), key, opts)
+	if err != nil {
+		t.Fatalf("GetOrLoad changed limits: %v", err)
+	}
+	if !restarted || mi3 == mi {
+		t.Fatal("changed limits must rebuild the VM")
+	}
+	if got := mi3.VM.Limits().MemoryMB; got != 64 {
+		t.Errorf("rebuilt VM MemoryMB = %d, want 64", got)
+	}
+	if got := mi3.LastRestart().Reason; got != jsregistry.ReasonLimitsChanged {
+		t.Errorf("restart reason = %q, want %q", got, jsregistry.ReasonLimitsChanged)
+	}
+}
+
+// js-registry.R13
+func TestRegistry_RestartByKey_BuildHasDeadline(t *testing.T) {
+	reg := jsregistry.NewRegistry()
+	key := types.NamespacedName{Name: "dl"}
+	t.Cleanup(func() { reg.Drop(key) })
+	builds := 0
+	opts := jsregistry.BuildOptions{
+		Source:     []byte(`function ok(){return 1}`),
+		SourceHash: "h",
+		Limits:     jsengine.Limits{TimeoutSeconds: 1},
+		// The first build passes; every later build hangs until its ctx ends.
+		PostBuild: func(ctx context.Context, vm *jsengine.VM) (any, error) {
+			builds++
+			if builds == 1 {
+				return nil, nil
+			}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	mi, _, err := reg.GetOrLoad(context.Background(), key, opts)
+	if err != nil {
+		t.Fatalf("GetOrLoad: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { _, err := reg.RestartByKey(key, jsregistry.ReasonManual); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("RestartByKey: want error from the timed-out build")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("RestartByKey did not return: rescue build has no deadline")
+	}
+	if cur, _ := reg.Get(key); cur != mi {
+		t.Error("failed rescue build must keep the old VM installed")
+	}
+}
+
+// TestRegistry_Concurrent_CallRestartDrop runs N goroutines on Registry.Call
+// against concurrent RestartByKey, GetOrLoad rebuilds and Drop, under -race
+// (make test).
+//
+// js-registry.R6
+// js-registry.R7
+// js-registry.R8
+// js-execution.R7
+func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
+	const (
+		callers       = 8
+		callsPerCall  = 15
+		restarts      = 4
+		limitRebuilds = 3
+		dropCycles    = 3
+	)
+	reg := jsregistry.NewRegistry()
+	keyA := types.NamespacedName{Name: "conc-a"}
+	keyB := types.NamespacedName{Name: "conc-b"}
+	t.Cleanup(func() { reg.Drop(keyA); reg.Drop(keyB) })
+
+	var (
+		builds, maxBuilds atomic.Int32 // concurrent PostBuild runs for keyA (R7)
+		inCall            sync.Map     // *jsengine.VM -> *atomic.Int32 (R8, js-execution.R7)
+		overlap           atomic.Int32 // two calls on one VM at once
+	)
+	optsA := func(mem int32) jsregistry.BuildOptions {
+		return jsregistry.BuildOptions{
+			Source:     []byte(`function ping(){ return 1 }`),
+			SourceHash: "conc",
+			Limits:     jsengine.Limits{MemoryMB: mem, TimeoutSeconds: 30},
+			PostBuild: func(ctx context.Context, vm *jsengine.VM) (any, error) {
+				n := builds.Add(1)
+				for {
+					m := maxBuilds.Load()
+					if n <= m || maxBuilds.CompareAndSwap(m, n) {
+						break
+					}
+				}
+				time.Sleep(5 * time.Millisecond)
+				builds.Add(-1)
+				return nil, nil
+			},
+		}
+	}
+	if _, _, err := reg.GetOrLoad(context.Background(), keyA, optsA(16)); err != nil {
+		t.Fatalf("GetOrLoad A: %v", err)
+	}
+	if _, _, err := reg.GetOrLoad(context.Background(), keyB, jsregistry.BuildOptions{
+		Source: []byte(`function ping(){ return 1 }`), SourceHash: "b",
+	}); err != nil {
+		t.Fatalf("GetOrLoad B: %v", err)
+	}
+
+	call := func(key types.NamespacedName) error {
+		res, _, err := reg.Call(context.Background(), key, func(ctx context.Context, vm *jsengine.VM) error {
+			c, _ := inCall.LoadOrStore(vm, new(atomic.Int32))
+			if c.(*atomic.Int32).Add(1) > 1 {
+				overlap.Add(1)
+			}
+			defer c.(*atomic.Int32).Add(-1)
+			_, err := vm.CallExport(ctx, "ping")
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if res.Outcome != jsregistry.OutcomeOK {
+			return fmt.Errorf("outcome %v panic %v err %v", res.Outcome, res.Panic, res.Err)
+		}
+		return nil
+	}
+
+	// R6: a call blocked on key B's VM lock-free path must not stall key A's
+	// registry operations; hold B inside a call while A is used and rebuilt.
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	bDone := make(chan struct{})
+	go func() {
+		defer close(bDone)
+		_, _, _ = reg.Call(context.Background(), keyB, func(ctx context.Context, vm *jsengine.VM) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	// Phase 1: no Drop, so the build lock of keyA stays one mutex.
+	errc := make(chan error, 1024)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Go(func() {
+			for range callsPerCall {
+				if err := call(keyA); err != nil {
+					errc <- fmt.Errorf("call: %w", err)
+					return
+				}
+			}
+		})
+	}
+	for range 2 {
+		wg.Go(func() {
+			for range restarts {
+				if _, err := reg.RestartByKey(keyA, jsregistry.ReasonManual); err != nil {
+					errc <- fmt.Errorf("restart: %w", err)
+					return
+				}
+			}
+		})
+	}
+	wg.Go(func() {
+		for i := range limitRebuilds {
+			if _, _, err := reg.GetOrLoad(context.Background(), keyA, optsA(int32(24+i))); err != nil {
+				errc <- fmt.Errorf("getorload: %w", err)
+				return
+			}
+		}
+	})
+	// Key B is busy in a call the whole time; key A's work above and a Get
+	// on B must still complete.
+	wg.Go(func() {
+		for range 100 {
+			reg.Get(keyB)
+			reg.Len()
+		}
+	})
+	wg.Wait()
+	close(release)
+	<-bDone
+	if got := maxBuilds.Load(); got > 1 {
+		t.Errorf("R7: %d concurrent builds for one key, want 1", got)
+	}
+
+	// Phase 2: Drop and reload while calls run. A call may find the key
+	// gone (ErrUnknownKey); anything else is a failure.
+	var wg2 sync.WaitGroup
+	for range callers {
+		wg2.Go(func() {
+			for range callsPerCall {
+				if err := call(keyA); err != nil && !errors.Is(err, jsregistry.ErrUnknownKey) {
+					errc <- fmt.Errorf("call after drop: %w", err)
+					return
+				}
+			}
+		})
+	}
+	wg2.Go(func() {
+		for range dropCycles {
+			reg.Drop(keyA)
+			if _, _, err := reg.GetOrLoad(context.Background(), keyA, optsA(16)); err != nil {
+				errc <- fmt.Errorf("reload: %w", err)
+				return
+			}
+		}
+	})
+	wg2.Go(func() {
+		for range restarts {
+			if _, err := reg.RestartByKey(keyA, jsregistry.ReasonManual); err != nil && !errors.Is(err, jsregistry.ErrUnknownKey) {
+				errc <- fmt.Errorf("restart after drop: %w", err)
+				return
+			}
+		}
+	})
+	wg2.Wait()
+	close(errc)
+	for err := range errc {
+		t.Error(err)
+	}
+	if n := overlap.Load(); n != 0 {
+		t.Errorf("R8: %d overlapping calls on one VM", n)
+	}
 }

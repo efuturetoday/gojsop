@@ -95,8 +95,8 @@ sees CRDs installed after start is not verified.
   Gate: missing → GATE-14.
 - **R7** Do not read `kubehost.KubeHost` fields from another goroutine.
   Why: calls arrive on the per-hook worker goroutine, and the registry
-  serialises calls per VM, so the type has no locking.
-  Gate: missing → GATE-26.
+  serialises calls per VM (held by js-registry.R8), so the type has no locking.
+  Gate: review only — no machine can tell which goroutine reads a field.
 
 ## Decisions
 
@@ -120,4 +120,4 @@ sees CRDs installed after start is not verified.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): KUBE-1 to KUBE-4, EXEC-2, OPS-2; gates GATE-7, GATE-26, GATE-14, GATE-24.
+Tracked in [backlog](../backlog.md): KUBE-1 to KUBE-4, EXEC-2, OPS-2; gates GATE-7, GATE-14, GATE-24.

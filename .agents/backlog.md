@@ -46,8 +46,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **REG-1** `bug` Build-time hangs leak. A top-level `while(true)` or one in
   `config()` holds the per-key build lock, no event fires. `RestartByKey` needs
   one successful build first.
-- **REG-2** `bug` Rescue build has no deadline. `RestartByKey` builds with
-  `context.Background()` (`internal/jsregistry/registry.go:362`).
 - **REG-3** `gap` No finalizer on JSHook / JSAdmission. Deletion is seen via
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
@@ -64,9 +62,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   queue plus FIFO worker, JSAdmission is a synchronous webhook. Document the
   asymmetry in the js-registry block.
 
-- **REG-7** `bug` `GetOrLoad` rebuilds only on a `SourceHash` change. A changed
-  `spec.limits` or other `BuildOptions` field does not rebuild the VM
-  (`internal/jsregistry/registry.go:233,246`). Not verified at runtime.
 ## STAT: Status and conditions
 
 - **STAT-1** `bug` `status.lastReconcile` not written on success. An old
@@ -240,9 +235,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `jsengine` used only by `jsregistry`, `jshook`, `jsadmission`; `jsregistry`
   does not import `jssource`; `ManagedVM.VM` and `ManagedVM.CallMu` are not
   touched outside `jsregistry` (needs a `go/analysis` check). Blocked by EXEC-1.
-- **GATE-26** Test with N goroutines on `Registry.Call` and concurrent
-  `RestartByKey` / `Drop`, run under `-race` by `make test`. Split from the
-  closed GATE-3; no such concurrent test exists today.
 - **GATE-4** `TestRegistry_Call_*`: outcomes OK, panic, cancelled, OOM, error,
   unknown key. No test references `Registry.Call` today.
 - **GATE-5** Test in `internal/jsengine`: `for(;;){}` with a 100 ms deadline

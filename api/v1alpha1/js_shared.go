@@ -115,8 +115,8 @@ type JSRestartEvent struct {
 	// +optional
 	Time *metav1.Time `json:"time,omitempty"`
 
-	// Reason is one of: source-changed, memory-limit, panic, timeout,
-	// timeout-streak, manual.
+	// Reason is one of: source-changed, limits-changed, memory-limit, panic,
+	// timeout, timeout-streak, manual.
 	// +optional
 	Reason string `json:"reason,omitempty"`
 
@@ -141,8 +141,8 @@ type JSInstanceStatus struct {
 	SourceHash string `json:"sourceHash,omitempty"`
 
 	// RestartsByReason aggregates RecentRestarts. Keys are restart reasons
-	// (source-changed, memory-limit, panic, timeout, timeout-streak,
-	// manual); values are counts since the resource was created.
+	// (source-changed, limits-changed, memory-limit, panic, timeout,
+	// timeout-streak, manual); values are counts since the resource was created.
 	// +optional
 	RestartsByReason map[string]int32 `json:"restartsByReason,omitempty"`
 

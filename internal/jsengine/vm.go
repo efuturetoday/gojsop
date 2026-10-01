@@ -36,6 +36,10 @@ func DefaultLimits() Limits {
 	return Limits{MemoryMB: 32, TimeoutSeconds: 30}
 }
 
+// WithDefaults returns l with zero fields replaced by DefaultLimits. Callers
+// compare or read limits through it so "unset" and "explicit default" agree.
+func (l Limits) WithDefaults() Limits { return l.applyDefaults() }
+
 // applyDefaults fills in zero fields from DefaultLimits.
 func (l Limits) applyDefaults() Limits {
 	d := DefaultLimits()
