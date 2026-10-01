@@ -19,6 +19,8 @@ explains areas, aspects, rule IDs, gates and open items.
    (skill `sdlc-stack-go`).
 5. `make sdlc-check` and `make test lint` must pass.
 6. Write commit messages with the skill `caveman-commit`.
+7. The `golang-*` skills give general Go guidance. Where one contradicts an
+   area or aspect of this repository, the area or aspect wins.
 
 ## Critical rules
 
