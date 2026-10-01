@@ -67,6 +67,11 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   one `RescueFailed` event per call, until a build succeeds. No crash, but a
   loop. Decide: keep, drop the VM and report the hook as not ready, or back
   off. Done when decided and held by a test.
+- **REG-9** `bug` One registry is shared by both controllers (`cmd/main.go`),
+  keyed by `types.NamespacedName`. Both kinds are cluster-scoped, so a JSHook
+  `foo` and a JSAdmission `foo` share the key `/foo` and replace each other's
+  VM. Not verified at runtime. Done when keys carry the kind and a test with
+  one name in both kinds passes.
 
 ## STAT: Status and conditions
 
