@@ -1,10 +1,11 @@
 // Package jslifecycle centralizes the bits of lifecycle plumbing that JSHook's
 // dispatcher and JSAdmission's HTTP server share verbatim: the EventEmitter
 // callback shape both packages use to publish corev1.Events about their
-// owning resource without depending on controller-runtime, and the projection
-// of the runner's recovery log onto the CRD status shape (RestartHistoryFor).
+// owning resource without depending on controller-runtime, the projection
+// of the runner's recovery log onto the CRD status shape (RestartHistoryFor),
+// and status.lastReconcile after a success (ReconcileSucceeded).
 //
-// A runner's Invoke never recovers a script itself (backlog REG-4): a panic,
+// A runner's Invoke never recovers a script itself: a panic,
 // a trap, a timeout or the memory limit just end that call, and the next call
 // gets a fresh instance from the same prepared script. Only Ensure prepares a
 // script again (source changed, limits changed, manual reset), and that is
@@ -12,6 +13,8 @@
 package jslifecycle
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
@@ -27,6 +30,19 @@ import (
 // reconciles. The (eventType, reason, message) tuple is forwarded verbatim;
 // message stability rules (see internal/conditions) are the caller's job.
 type EventEmitter func(eventType, reason, message string)
+
+// ReconcileSucceeded returns status.lastReconcile after a successful
+// reconcile: the error of an earlier failure is cleared and the time set to
+// now; a status that already reports success is returned unchanged, so a
+// steady reconcile does not write status again and trigger itself.
+// status-conditions.R5
+func ReconcileSucceeded(prev *corev1alpha1.JSReconcileStatus, now time.Time) *corev1alpha1.JSReconcileStatus {
+	if prev != nil && prev.Time != nil && prev.Error == "" {
+		return prev
+	}
+	t := metav1.NewTime(now)
+	return &corev1alpha1.JSReconcileStatus{Time: &t}
+}
 
 // RestartHistoryFor projects the runner's recovery log onto the CRD
 // status shape: RestartsByReason as string-keyed counters and RecentRestarts

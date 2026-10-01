@@ -52,6 +52,14 @@ func TestReadConfig_PostBuildRejectsMissingExports(t *testing.T) {
 	}
 }
 
+// kube-access.R8
+func TestSetupWithManager_RequiresKubeHost(t *testing.T) {
+	r := &JSHookReconciler{Scripts: jsregistry.NewRegistry()}
+	if err := r.SetupWithManager(nil); err == nil {
+		t.Fatal("SetupWithManager without a kubehost.Factory must fail")
+	}
+}
+
 func newTestReconciler(t *testing.T, backoff jsrun.Backoff, hooks ...*corev1alpha1.JSHook) (*JSHookReconciler, client.Client) {
 	t.Helper()
 	scheme := runtime.NewScheme()

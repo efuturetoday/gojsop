@@ -33,6 +33,7 @@ import (
 	"github.com/o-haase/gojsop/internal/conditions"
 	jshookctrl "github.com/o-haase/gojsop/internal/jshook/controller"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsrun"
 	"github.com/o-haase/gojsop/internal/jssource"
 )
 
@@ -165,4 +166,60 @@ var _ = Describe("JSHook Controller", func() {
 		Entry("no handle", "no-handle-hook", `function config() { return {}; }`, "handle"),
 		Entry("no config", "no-config-hook", `function handle() {}`, "config"),
 	)
+
+	It("clears lastReconcile.error after fail-then-fix and keeps a steady status", func() {
+		// status-conditions.R1
+		// status-conditions.R5
+		ctx := context.Background()
+		nn := types.NamespacedName{Name: "fail-then-fix"}
+		Expect(k8sClient.Create(ctx, &corev1alpha1.JSHook{
+			ObjectMeta: metav1.ObjectMeta{Name: nn.Name},
+			Spec:       corev1alpha1.JSHookSpec{Source: corev1alpha1.JSSource{Inline: `throw new Error("boom")`}},
+		})).To(Succeed())
+		DeferCleanup(func() {
+			hook := &corev1alpha1.JSHook{}
+			Expect(k8sClient.Get(ctx, nn, hook)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, hook)).To(Succeed())
+		})
+		reg := jsregistry.NewRegistry()
+		DeferCleanup(func() { reg.Drop(jsrun.HookKey(nn)) })
+		reconciler := &jshookctrl.JSHookReconciler{
+			Client:  k8sClient,
+			Scheme:  k8sClient.Scheme(),
+			Loader:  jssource.NewChain(jssource.InlineLoader{}),
+			Scripts: reg,
+		}
+		reconcileUntil := func(reason string) *corev1alpha1.JSHook {
+			got := &corev1alpha1.JSHook{}
+			Eventually(func(g Gomega) {
+				_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(k8sClient.Get(ctx, nn, got)).To(Succeed())
+				cond := apimeta.FindStatusCondition(got.Status.Conditions, conditions.Ready)
+				g.Expect(cond).NotTo(BeNil())
+				g.Expect(cond.Reason).To(Equal(reason))
+			}, "10s", "20ms").Should(Succeed())
+			return got
+		}
+
+		failed := reconcileUntil(conditions.ReasonBuildFailed)
+		Expect(failed.Status.ObservedGeneration).To(Equal(failed.Generation))
+		Expect(failed.Status.LastReconcile).NotTo(BeNil())
+		Expect(failed.Status.LastReconcile.Error).NotTo(BeEmpty())
+
+		failed.Spec.Source.Inline = `function config() { return {}; } function handle() {}`
+		Expect(k8sClient.Update(ctx, failed)).To(Succeed())
+		fixed := reconcileUntil(conditions.ReasonReconciled)
+		Expect(fixed.Status.ObservedGeneration).To(Equal(fixed.Generation))
+		Expect(fixed.Status.LastReconcile).NotTo(BeNil())
+		Expect(fixed.Status.LastReconcile.Error).To(BeEmpty())
+		Expect(fixed.Status.LastReconcile.Time).NotTo(BeNil())
+
+		// A further reconcile of the healthy hook writes no status.
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+		Expect(err).NotTo(HaveOccurred())
+		again := &corev1alpha1.JSHook{}
+		Expect(k8sClient.Get(ctx, nn, again)).To(Succeed())
+		Expect(again.ResourceVersion).To(Equal(fixed.ResourceVersion))
+	})
 })

@@ -57,12 +57,14 @@ type JSAdmissionReconciler struct {
 
 	// Loader resolves spec.source to JS bytes (defaults to inline-only).
 	Loader *jssource.Chain
-	// Registry owns the per-policy persistent JS instances.
+	// Registry owns the per-policy prepared scripts.
 	Scripts jsrun.Scripts
 	// KubeHost mints the host-function surface installed on every JSAdmission VM.
 	// ForAdmission returns a read-only binder — admission policies must not
 	// write to the cluster from the apiserver request path (sideEffects:
 	// None contract), so apply/delete are intentionally not bound.
+	// SetupWithManager requires it; a reconciler built bare in a unit test
+	// gives scripts no kube global.
 	KubeHost kubehost.Factory
 	// Server holds the live policy table the HTTP webhook handler consults.
 	Server *jsadmission.Server
@@ -199,14 +201,14 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	manual := !restarted && resetToken != prevToken && last.Reason == jsrun.ReasonManual
 	if restarted || manual {
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(st.Recoveries.Recent), "reason", last.Reason)
-		if conditions.WasBuilding(pol.Status.Conditions) && last.Reason.ReportedByReconcile() {
+		if conditions.WasBuilding(pol.Status.Conditions) && last.Reason != "" {
 			r.event(&pol, corev1.EventTypeNormal, conditions.EventRestarted,
 				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
 		}
 	}
 
 	path := jsadmission.PathFor(req.NamespacedName, mutating)
-	timeout := time.Duration(orInt32(pol.Spec.TimeoutSeconds, 5)) * time.Second
+	timeout := callTimeout(pol.Spec.TimeoutSeconds, lim)
 
 	// Publish to the HTTP server first — once the central VWC/MWC points at us,
 	// requests start arriving and a missing entry would 404 under FailurePolicy.
@@ -274,6 +276,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		ObservedGeneration: pol.Generation,
 	})
 	pol.Status.ObservedGeneration = pol.Generation
+	pol.Status.LastReconcile = jslifecycle.ReconcileSucceeded(pol.Status.LastReconcile, time.Now())
 	pol.Status.WebhookPath = path
 	if mutating {
 		pol.Status.WebhookConfigName = jsadmission.MutatingConfigName
@@ -392,6 +395,16 @@ func admissionLimitsFromSpec(r *corev1alpha1.JSLimits) jsrun.Limits {
 	return jsrun.Limits{MemoryMB: r.MemoryMB, TimeoutSeconds: r.TimeoutSeconds}
 }
 
+// callTimeout is the deadline of one review: the smaller of the webhook
+// timeout (spec.timeoutSeconds, default 5) and the call limit
+// (spec.limits.timeoutSeconds, default 30). The runner applies the limit on
+// its own; the server needs the smaller value to report a timeout correctly.
+// jsadmission.R11
+func callTimeout(webhookSeconds int32, lim jsrun.Limits) time.Duration {
+	s := min(orInt32(webhookSeconds, 5), lim.WithDefaults().TimeoutSeconds)
+	return time.Duration(s) * time.Second
+}
+
 func orInt32(v, def int32) int32 {
 	if v <= 0 {
 		return def
@@ -409,6 +422,10 @@ func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if r.Scripts == nil {
 		return errors.New("jsrun.Scripts is required")
+	}
+	// kube-access.R8
+	if r.KubeHost == nil {
+		return errors.New("kubehost.Factory is required: without it policies get no kube global")
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSAdmission{}).

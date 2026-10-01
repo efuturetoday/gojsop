@@ -43,7 +43,7 @@ The project does not yet bound strings and lists. No field has `MaxLength` or
 | example | Which real use should others copy? | `v1alpha1.JSLimits` (default, Minimum, Maximum) and `v1alpha1.JSSource` (XValidation with message, MinLength). |
 | test helper | How does a test use the aspect without effort? | The envtest suite `integration.TestControllers` loads `config/crd/bases` into a real API server. It has no helper for rejection cases yet (GATE-15). |
 | sides | Which sides does it touch? | Go types, generated CRD YAML, RBAC and webhook manifests, `config/samples`, `PROJECT`, the engine defaults in `jsengine.DefaultLimits`, JS `config()` examples. |
-| tie | How do the sides stay in step? | Generated from the Go types by controller-gen; the generated-diff check is missing (GATE-14). Engine defaults are tied by `TestDefaultLimits_MatchKubebuilderTags`. Samples, `PROJECT` and the restart-reason doc list have no tie (API-4, API-6, API-5). |
+| tie | How do the sides stay in step? | Generated from the Go types by controller-gen; the generated-diff check is missing (GATE-14). Engine defaults are tied by `TestDefaultLimits_MatchKubebuilderTags`, the restart-reason enum by `TestRecoveryReasons_MatchCRDEnum`. Samples and `PROJECT` have no tie (API-4, API-6). |
 
 ## How to use it
 
@@ -71,9 +71,9 @@ Adding a CRD field:
   `XValidation` and a `message`. Declare `+listType` on every slice. Enum values
   come from the Go constants that implement them.
   Why: the API server rejects bad objects before the controller sees them.
-  Gate: `TestDefaultLimits_MatchKubebuilderTags` holds the defaults; envtest
-  rejection cases for enums and CEL are tracked in GATE-15. Violated today →
-  API-5 (restart reasons are a doc list, not an enum).
+  Gate: `TestDefaultLimits_MatchKubebuilderTags` holds the defaults,
+  `TestRecoveryReasons_MatchCRDEnum` the restart-reason enum; envtest
+  rejection cases for enums and CEL are tracked in GATE-15.
 - **R4** Add `MaxLength` and `MaxItems` to every new string and list.
   Why: not recorded; the backlog entry names the etcd object size limit.
   Gate: missing → GATE-15. Violated today → API-7.
@@ -110,4 +110,4 @@ Adding a CRD field:
 
 ## Open
 
-API-1, API-2, API-4, API-5, API-6, API-7, API-8, GATE-10, GATE-11, GATE-14, GATE-15
+API-1, API-2, API-4, API-6, API-7, API-8, GATE-10, GATE-14, GATE-15

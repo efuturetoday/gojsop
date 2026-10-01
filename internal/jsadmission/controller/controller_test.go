@@ -163,3 +163,34 @@ func TestReconcile_BuildStates_ShowBuildingThenBuildFailed(t *testing.T) {
 		t.Fatalf("RequeueAfter = %v, want the backoff derived from the configured base", res.RequeueAfter)
 	}
 }
+
+// The server reports a timeout after the smaller of spec.timeoutSeconds and
+// spec.limits.timeoutSeconds, defaults applied.
+//
+// jsadmission.R11
+func TestCallTimeout_SmallerOfWebhookAndLimits(t *testing.T) {
+	cases := []struct {
+		name    string
+		webhook int32
+		lim     jsrun.Limits
+		want    time.Duration
+	}{
+		{"defaults", 0, jsrun.Limits{}, 5 * time.Second},
+		{"webhook smaller", 10, jsrun.Limits{TimeoutSeconds: 20}, 10 * time.Second},
+		{"limits smaller", 10, jsrun.Limits{TimeoutSeconds: 2}, 2 * time.Second},
+		{"limit default above webhook max", 30, jsrun.Limits{}, 30 * time.Second},
+	}
+	for _, tc := range cases {
+		if got := callTimeout(tc.webhook, tc.lim); got != tc.want {
+			t.Errorf("%s: callTimeout(%d, %+v) = %v, want %v", tc.name, tc.webhook, tc.lim, got, tc.want)
+		}
+	}
+}
+
+// kube-access.R8
+func TestSetupWithManager_RequiresKubeHost(t *testing.T) {
+	r := &JSAdmissionReconciler{Scripts: jsregistry.NewRegistry()}
+	if err := r.SetupWithManager(nil); err == nil {
+		t.Fatal("SetupWithManager without a kubehost.Factory must fail")
+	}
+}

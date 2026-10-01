@@ -106,7 +106,7 @@ stays at tens of microseconds, a timeout costs its deadline).
 - **R2** Run user JavaScript only through `jsrun.Runner.Invoke`, which the registry runs inside `Registry.Call`. The only
   exception is building a VM inside the registry (module load and `config()`).
   Why: one place for the call semaphore, panic recovery and result classification.
-  Gate: missing → GATE-4.
+  Gate: `TestImportBoundary_CallersUseOnlyRunnerPort`, `TestRegistry_Invoke_ClassifiesOutcomes`.
 - **R3** Give every call, and every build (module load and `config()`), a context with a deadline from
   `spec.limits.timeoutSeconds`; the adapter applies it inside `Runner.Invoke`, so the dispatcher and the admission server (which add a tighter deadline of their own) need not know the limit.
   Why: without a deadline an endless loop holds the VM forever. A build that runs into its deadline leaves the hook `Ready=False` with reason `BuildFailed` (status-conditions.R7).
@@ -164,7 +164,7 @@ stays at tens of microseconds, a timeout costs its deadline).
   Why: `fastschema/qjs` (v0.0.6) is unmaintained, its execution time limit does nothing, and it converts every value field by field through many wasm calls. Our build (`glue.c`, QuickJS-ng v0.17.0, wasi-sdk 34, 0.95 MB) has a JSON ABI. Spike numbers (Apple M1 Pro, Go 1.26.1, wazero 1.9.0, a pod admission request of 4 KB): a warm call on a long-lived VM takes 65 µs with 14 allocations instead of 1.04 ms with 5727 (about 16x); building a VM, loading the sample policy and calling `validate` once takes 0.47 ms instead of 5.41 ms, and with the 544 KB lodash policy 21.7 ms instead of 107.2 ms. After the port, a warm call of the benchmark policy is 11 µs (`BenchmarkVM_WarmCall`).
   Not taken: staying on `fastschema/qjs`, because it blocks the interrupt handler and costs the speed above. A fork of `fastschema/qjs`, because it would keep the field-by-field conversion and make us maintain a binding we do not use.
 - **Cancel calls with the QuickJS interrupt handler, not with `CloseOnContextDone`.** Status: proposed (2026-10-01, open) (EXEC-8; replaces the accepted decision "Cancel calls with the wazero option `CloseOnContextDone`", closes EXEC-3).
-  Why: spike numbers, same engine with the option off and on: a warm `validate` on the large policy 81 µs against 304 µs (3.8x), a busy loop of 2M iterations 140 ms against 996 ms (7.1x), eval of lodash 22 ms against 114 ms (5.1x). With a deadline and the interrupt handler the busy loop stays at 136 ms. The module survives a timeout, so a timeout needs no rebuild (REG-4).
+  Why: spike numbers, same engine with the option off and on: a warm `validate` on the large policy 81 µs against 304 µs (3.8x), a busy loop of 2M iterations 140 ms against 996 ms (7.1x), eval of lodash 22 ms against 114 ms (5.1x). With a deadline and the interrupt handler the busy loop stays at 136 ms. The module survives a timeout, so a timeout needs no rebuild.
   Not taken: `CloseOnContextDone`, as above. A watchdog goroutine that closes the module, because it kills the VM like `CloseOnContextDone` does.
 - **Run every call single shot from a snapshot.** Status: proposed (2026-10-01, open) (EXEC-9).
   Why: every call starts from the same prepared state, so calls of one key run in parallel and a failed call leaves nothing behind; a call costs about 0.24 ms (`BenchmarkSnapshot_Shot`, 2.8 MB allocated). Scripts keep no top-level state between calls. Details and the semaphore: js-registry Decisions.
@@ -179,6 +179,5 @@ stays at tens of microseconds, a timeout costs its deadline).
 
 ## Open
 
-GATE-4
 GATE-7
 GATE-27

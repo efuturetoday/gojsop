@@ -86,9 +86,9 @@ A policy decides on a request and must not change the cluster, so it can read ot
 | jsadmission.R7 | A `modifiedObject` returned by a validating policy is ignored. | `AdmissionResult.ModifiedObject` comment in `handle.go` | missing → ADM-11 |
 | jsadmission.R8 | When the patch cannot be computed the request stays allowed and gets a warning. | `fillResponse` in `server.go`; reason open in ADM-8 | missing → ADM-8 |
 | jsadmission.R9 | On every script failure `failurePolicy` decides: `Ignore` allows with a warning, anything else denies with code 500. | `api/v1alpha1/jsadmission_types.go` (`FailurePolicy`) | `TestServer_Validate_FailurePolicy_Fail_OnJSThrow`, `TestServer_Validate_FailurePolicy_Ignore_OnJSThrow` |
-| jsadmission.R10 | `failurePolicy` and `timeoutSeconds` are the same for the apiserver (operator unreachable) and for the handler. | `Registrar` and `PolicyEntry` in `internal/jsadmission` | missing → GATE-17 |
-| jsadmission.R11 | A call that runs longer than the timeout (default 5 s) is a script failure. | `api/v1alpha1/jsadmission_types.go` (`TimeoutSeconds`); which field wins is open in ADM-5 | missing → GATE-22 |
-| jsadmission.R12 | After a panic (a wasm trap) the script instance is rebuilt in the background; after a plain script error, a memory overrun, a timeout or a client disconnect it is kept (the engine stops the script and the VM stays usable). | `Server.review` in `server.go` | missing → GATE-22 |
+| jsadmission.R10 | `failurePolicy` is the same for the apiserver (operator unreachable) and for the handler, and the handler's deadline is never longer than the `timeoutSeconds` the apiserver waits. | `Registrar` and `PolicyEntry` in `internal/jsadmission` | missing → GATE-17 |
+| jsadmission.R11 | A call that runs longer than the smaller of `spec.timeoutSeconds` (default 5 s) and `spec.limits.timeoutSeconds` (default 30 s) is a script failure. | `callTimeout` in `internal/jsadmission/controller`; the runner applies the limit on its own | `TestCallTimeout_SmallerOfWebhookAndLimits`; the failure path: missing → GATE-22 |
+| jsadmission.R12 | A panic (a wasm trap), a plain script error, a memory overrun, a timeout or a client disconnect end only that request; the next request starts on a fresh instance and nothing is rebuilt. | `Server.review` in `server.go`, js-registry.R2 | missing → GATE-22 |
 | jsadmission.R13 | A policy can only read the cluster (`kube.get`, `kube.list`); `kube.apply` and `kube.delete` are not available. | admission runs with `sideEffects: None` | `TestSharedFactory_ForAdmission_ReadOnlySurface` |
 | jsadmission.R14 | Every response carries the UID of its request. | admission.k8s.io/v1 | `TestServer_Validate_AllowedRoundtrip` |
 | jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `cmd/main.go` (`excludeNamespaces`); extent open in ADM-6 | missing → ADM-6 |
@@ -100,7 +100,7 @@ A policy decides on a request and must not change the cluster, so it can read ot
 ## Aspects
 
 - [js-execution](../aspects/js-execution.md): how script calls run, with deadline, memory limit and error classes
-- [js-registry](../aspects/js-registry.md): one script instance per policy, its rebuild and rescue
+- [js-registry](../aspects/js-registry.md): the prepared script per policy and its rebuild
 - [js-sources](../aspects/js-sources.md): where the script comes from
 - [kube-access](../aspects/kube-access.md): the `kube` object, read-only for admission
 - [status-conditions](../aspects/status-conditions.md): how the policy reports its state
@@ -119,4 +119,4 @@ A policy decides on a request and must not change the cluster, so it can read ot
 
 ## Open
 
-ADM-3, ADM-4, ADM-5, ADM-6, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, ADM-9, ADM-10, ADM-11
+ADM-3, ADM-4, ADM-6, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, ADM-9, ADM-10, ADM-11

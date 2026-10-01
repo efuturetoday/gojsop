@@ -88,18 +88,19 @@ type OCISource struct {
 	Digest string `json:"digest,omitempty"`
 }
 
-// JSLimits caps what the persistent JS instance is allowed to consume.
+// JSLimits caps what one call into the script may consume. Every call runs on
+// its own instance restored from the prepared script.
 type JSLimits struct {
-	// MemoryMB is the hard limit on the QuickJS heap in megabytes.
+	// MemoryMB is the hard limit on the QuickJS heap of one call in megabytes.
 	// +kubebuilder:default=32
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=512
 	// +optional
 	MemoryMB int32 `json:"memoryMB,omitempty"`
 
-	// TimeoutSeconds bounds a single call into JS.
-	// On timeout the call is interrupted; the persistent instance survives
-	// unless timeouts repeat (see status.instance.lastRestartReason).
+	// TimeoutSeconds bounds a single call into JS, and the build (module load
+	// and config()). On timeout the call is interrupted; the next call starts
+	// from a fresh instance.
 	// +kubebuilder:default=30
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=300
@@ -107,42 +108,42 @@ type JSLimits struct {
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 }
 
-// JSRestartEvent records one transition from old VM to new for a hook or
-// admission policy. Mirrored from the registry's internal log so users can
-// see the recent restart trail without `kubectl logs` on the operator.
+// JSRestartEvent records one time the operator prepared the script of a hook
+// or admission policy again. Mirrored from the registry's log so users can
+// see the recent trail without `kubectl logs` on the operator.
 type JSRestartEvent struct {
-	// Time is when the new instance was installed.
+	// Time is when the newly prepared script was installed.
 	// +optional
 	Time *metav1.Time `json:"time,omitempty"`
 
-	// Reason is one of: source-changed, limits-changed, memory-limit, panic,
-	// timeout, timeout-streak, manual.
+	// Reason is what made the operator prepare the script again: the source
+	// changed, the limits changed, or the gojsop.io/restart annotation got a
+	// new value.
+	// +kubebuilder:validation:Enum=source-changed;limits-changed;manual
 	// +optional
 	Reason string `json:"reason,omitempty"`
 
-	// Error is the diagnostic that triggered a rescue restart (panic / OOM /
-	// timeout). Empty for source-changed and manual.
+	// Error is a diagnostic recorded with the event, if any.
 	// +optional
 	Error string `json:"error,omitempty"`
 }
 
-// JSInstanceStatus reports the lifecycle state of the persistent JS instance
-// backing a hook or admission policy. Identical shape for both kinds — the
-// same Registry produces it. Users rely on this to know whether their
-// globalThis state is still alive.
+// JSInstanceStatus reports the prepared script backing a hook or admission
+// policy. Identical shape for both kinds; the same registry produces it.
+// Every call runs on a fresh instance restored from this prepared script, so
+// no state survives between calls.
 type JSInstanceStatus struct {
-	// StartedAt is when the current persistent instance was created.
+	// StartedAt is when the current script was prepared.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 
-	// SourceHash is a sha256 of the loaded JS source. A change here triggers
-	// a controlled instance restart.
+	// SourceHash is a sha256 of the loaded JS source. A change here prepares
+	// the script again.
 	// +optional
 	SourceHash string `json:"sourceHash,omitempty"`
 
-	// RestartsByReason aggregates RecentRestarts. Keys are restart reasons
-	// (source-changed, limits-changed, memory-limit, panic, timeout,
-	// timeout-streak, manual); values are counts since the resource was created.
+	// RestartsByReason aggregates RecentRestarts. Keys are the reasons of
+	// RecentRestarts; values are counts since the operator started.
 	// +optional
 	RestartsByReason map[string]int32 `json:"restartsByReason,omitempty"`
 
@@ -161,15 +162,17 @@ type JSInstanceStatus struct {
 	ManualRestartToken string `json:"manualRestartToken,omitempty"`
 }
 
-// JSReconcileStatus reports the outcome of the most recent reconcile loop
-// for the resource. Distinct from runtime call telemetry — this records
-// whether the controller could *load and register* the hook/policy, not
-// whether handle()/validate()/mutate() actually ran.
+// JSReconcileStatus reports the outcome of the most recent change of the
+// reconcile result for the resource. Distinct from runtime call telemetry —
+// this records whether the controller could *load and register* the
+// hook/policy, not whether handle()/validate()/mutate() actually ran.
 type JSReconcileStatus struct {
+	// Time is when the reconcile result last changed: a failure, or the first
+	// success after a failure.
 	// +optional
 	Time *metav1.Time `json:"time,omitempty"`
 	// Error is non-empty when the last reconcile failed (source load,
-	// build, subscribe, manual restart). Empty on a successful reconcile.
+	// build, subscribe, webhook sync). Empty on a successful reconcile.
 	// +optional
 	Error string `json:"error,omitempty"`
 }

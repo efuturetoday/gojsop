@@ -103,9 +103,8 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 
 // A ResetToken change rebuilds the script the same way a source change does,
 // without the caller resupplying anything but the token: effective limits and
-// the rest of the cached spec carry over. This replaces the old
-// Restart-by-key rescue path, which no longer exists: a prepared script is
-// only ever (re)built through Ensure.
+// the rest of the cached spec carry over. A prepared script is only ever
+// (re)built through Ensure.
 //
 // js-registry.R4
 // js-registry.R9

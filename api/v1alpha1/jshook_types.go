@@ -45,13 +45,13 @@ type JSHookStatus struct {
 	// +optional
 	Bindings []string `json:"bindings,omitempty"`
 
-	// Instance reports the lifecycle of the persistent JS runtime.
+	// Instance reports the prepared script every call starts from.
 	// +optional
 	Instance *JSInstanceStatus `json:"instance,omitempty"`
 
-	// LastReconcile reports when the controller last ran for this resource
-	// and what went wrong (if anything). Distinct from runtime call
-	// telemetry — a successful reconcile here does NOT mean handle() ran.
+	// LastReconcile reports when the reconcile result last changed and what
+	// went wrong (if anything). Distinct from runtime call telemetry — a
+	// successful reconcile here does NOT mean handle() ran.
 	// +optional
 	LastReconcile *JSReconcileStatus `json:"lastReconcile,omitempty"`
 

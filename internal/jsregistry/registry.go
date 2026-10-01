@@ -24,8 +24,9 @@ import (
 const historyCap = 20
 
 // DefaultMaxConcurrentCalls is the process-wide number of calls that may run
-// at once when Options.MaxConcurrentCalls is zero.
-const DefaultMaxConcurrentCalls = 16
+// at once when Options.MaxConcurrentCalls is zero. With the default memory
+// limit of 32 MB per call it fits the 512Mi of config/manager (js-registry.R20).
+const DefaultMaxConcurrentCalls = 8
 
 // Prepared is the registry's view of a prepared script: the snapshot every
 // call starts from, and what callers see of it through jsrun.State. Opts is

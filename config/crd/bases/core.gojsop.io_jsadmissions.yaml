@@ -83,8 +83,8 @@ spec:
                 properties:
                   memoryMB:
                     default: 32
-                    description: MemoryMB is the hard limit on the QuickJS heap in
-                      megabytes.
+                    description: MemoryMB is the hard limit on the QuickJS heap of
+                      one call in megabytes.
                     format: int32
                     maximum: 512
                     minimum: 1
@@ -92,9 +92,9 @@ spec:
                   timeoutSeconds:
                     default: 30
                     description: |-
-                      TimeoutSeconds bounds a single call into JS.
-                      On timeout the call is interrupted; the persistent instance survives
-                      unless timeouts repeat (see status.instance.lastRestartReason).
+                      TimeoutSeconds bounds a single call into JS, and the build (module load
+                      and config()). On timeout the call is interrupted; the next call starts
+                      from a fresh instance.
                     format: int32
                     maximum: 300
                     minimum: 1
@@ -423,7 +423,8 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               instance:
-                description: Instance reports the lifecycle of the persistent JS runtime.
+                description: Instance reports the prepared script every call starts
+                  from.
                 properties:
                   manualRestartToken:
                     description: |-
@@ -439,22 +440,27 @@ spec:
                       columns can show the latest reason without index-from-end gymnastics.
                     items:
                       description: |-
-                        JSRestartEvent records one transition from old VM to new for a hook or
-                        admission policy. Mirrored from the registry's internal log so users can
-                        see the recent restart trail without `kubectl logs` on the operator.
+                        JSRestartEvent records one time the operator prepared the script of a hook
+                        or admission policy again. Mirrored from the registry's log so users can
+                        see the recent trail without `kubectl logs` on the operator.
                       properties:
                         error:
-                          description: |-
-                            Error is the diagnostic that triggered a rescue restart (panic / OOM /
-                            timeout). Empty for source-changed and manual.
+                          description: Error is a diagnostic recorded with the event,
+                            if any.
                           type: string
                         reason:
                           description: |-
-                            Reason is one of: source-changed, limits-changed, memory-limit, panic,
-                            timeout, timeout-streak, manual.
+                            Reason is what made the operator prepare the script again: the source
+                            changed, the limits changed, or the gojsop.io/restart annotation got a
+                            new value.
+                          enum:
+                          - source-changed
+                          - limits-changed
+                          - manual
                           type: string
                         time:
-                          description: Time is when the new instance was installed.
+                          description: Time is when the newly prepared script was
+                            installed.
                           format: date-time
                           type: string
                       type: object
@@ -465,34 +471,34 @@ spec:
                       format: int32
                       type: integer
                     description: |-
-                      RestartsByReason aggregates RecentRestarts. Keys are restart reasons
-                      (source-changed, limits-changed, memory-limit, panic, timeout,
-                      timeout-streak, manual); values are counts since the resource was created.
+                      RestartsByReason aggregates RecentRestarts. Keys are the reasons of
+                      RecentRestarts; values are counts since the operator started.
                     type: object
                   sourceHash:
                     description: |-
-                      SourceHash is a sha256 of the loaded JS source. A change here triggers
-                      a controlled instance restart.
+                      SourceHash is a sha256 of the loaded JS source. A change here prepares
+                      the script again.
                     type: string
                   startedAt:
-                    description: StartedAt is when the current persistent instance
-                      was created.
+                    description: StartedAt is when the current script was prepared.
                     format: date-time
                     type: string
                 type: object
               lastReconcile:
                 description: |-
-                  LastReconcile reports when the controller last ran for this policy
-                  and what went wrong (if anything). Distinct from runtime call
-                  telemetry — a successful reconcile here does NOT mean
-                  validate()/mutate() ran.
+                  LastReconcile reports when the reconcile result last changed and what
+                  went wrong (if anything). Distinct from runtime call telemetry — a
+                  successful reconcile here does NOT mean validate()/mutate() ran.
                 properties:
                   error:
                     description: |-
                       Error is non-empty when the last reconcile failed (source load,
-                      build, subscribe, manual restart). Empty on a successful reconcile.
+                      build, subscribe, webhook sync). Empty on a successful reconcile.
                     type: string
                   time:
+                    description: |-
+                      Time is when the reconcile result last changed: a failure, or the first
+                      success after a failure.
                     format: date-time
                     type: string
                 type: object

@@ -35,29 +35,15 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
   already declares `jshooks/finalizers`.
-- **REG-4** `decision` Recovery reasons: a call never prepares a script again
-  (js-registry.R2), so only source-changed, limits-changed and manual are set.
-  The CRD enum also lists `panic`, `timeout`, `memory-limit` and
-  `timeout-streak`, which nothing sets (violates
-  API-1). Decide: drop them from the enum and the `RecoveryReason` constants,
-  or count call outcomes somewhere else (metrics, OPS-1).
 - **REG-5** `decision` Uncommitted debug logging in `Registry.Drop` and
   "cleanup started/done" logs in both controllers. Keep, lower to V(1), or
   remove.
 
 ## STAT: Status and conditions
 
-- **STAT-1** `bug` `status.lastReconcile` not written on success. An old
-  `lastReconcile.error` stays after recovery, `time` only set on failure
-  (`internal/jshook/controller/controller.go:242-259`,
-  `internal/jsadmission/controller/controller.go:242-264`). Not verified at
-  runtime. Gate: GATE-9.
 - **STAT-2** `decision` Only one condition type `Ready`, `Ready=False` has the
   single reason `Failed`. Users must read `message` or Events to tell causes
   apart.
-- **STAT-3** `debt` Stale comments reference the removed
-  `status.instance.lastRestartReason` (`api/v1alpha1/js_shared.go:102`,
-  `internal/jsregistry/registry.go:20`).
 - **STAT-4** `gap` No runtime telemetry in status. `lastExecution` and
   `lastReview` were removed in c7d58ac; users cannot see whether `handle()` or
   `validate()` runs or how long it takes. Replaces the stale TODO.md item
@@ -110,9 +96,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **DISP-7** `doc` Precedence of `namespace.nameSelector` versus binding-level
   `nameSelector` not written down.
 
-- **DISP-9** `bug` Rescue rebuilds the VM, but the subscription keeps the
-  `config()` result from Subscribe time. A changed config after rebuild is not
-  applied (`dispatcher.go:523`, `internal/jshook/controller/controller.go:224`).
 - **DISP-10** `debt` Failed events are requeued with `AddRateLimited` and no
   retry cap; a poison event retries forever (`dispatcher.go`, `requeue`). The
   same holds for events of a hook that has no VM (`noVM`): they wait, folded
@@ -128,9 +111,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `internal/jsadmission/controller/controller.go:227-238`).
 - **ADM-4** `debt` cert-manager CA rotation reaches the webhook configs only on
   the next policy change, contrary to the comment (`cmd/main.go:84-85`).
-- **ADM-5** `bug` Admission uses `spec.timeoutSeconds` (default 5 s), not
-  `spec.limits.timeoutSeconds` (`server.go:241-245`,
-  `controller.go:138,195`). Not verified; decide which field wins.
 - **ADM-6** `decision` `ExcludeNamespaces` holds only the operator namespace,
   although the registrar comment names kube-system and cert-manager
   (`cmd/main.go:282`, `registrar.go:59-62`).
@@ -160,9 +140,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `internal/jshook/controller/controller.go:163`). Prerequisite for OPS-2.
 - **KUBE-3** `gap` `kube.list` has no limit or pagination; an empty namespace on
   a namespaced kind lists cluster-wide (`KubeHost.list` in `kubehost.go`).
-- **KUBE-4** `bug` A nil kube factory on a reconciler gives a VM without `kube`
-  global and no error (`internal/jshook/controller/controller.go:162`,
-  `internal/jsadmission/controller/controller.go:142`). Not verified.
 
 ## API: CRD API surface
 
@@ -179,9 +156,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **API-4** `debt` `config/samples/core_v1alpha1_jshook.yaml` uses fields without
   effect (schedule, jqFilter, queue, allowFailure). Samples should match what
   works.
-- **API-5** `debt` `RecoveryReason` constants and the CRD doc list
-  (`api/v1alpha1/js_shared.go:118`) can drift. Use a kubebuilder `Enum`
-  marker. Gate: GATE-11.
 
 - **API-6** `debt` Scope mismatch: markers and CRDs say `scope=Cluster`
   (`api/v1alpha1/jshook_types.go:67`, `jsadmission_types.go:156`), `PROJECT`
@@ -223,30 +197,17 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **OPS-6** `decision` Audit log. scrippy kept an audit trail of what hooks
   did to the cluster (`kube.apply`, `kube.delete`). Decide whether gojsop
   needs one and where it lives. Done when decided and recorded in an aspect.
-- **OPS-7** `bug` Manager resources do not fit single shot. Every running call
-  has its own VM with up to `spec.limits.memoryMB` (default 32 MB) of heap,
-  and `--max-concurrent-calls` (default 16) calls may run at once, so the
-  worst case is 16 × 32 MB = 512 MB of wasm memory plus one sparse snapshot per
-  script, while `config/manager/manager.yaml` limits the container to 128Mi.
-  Decide the defaults together (memory limit of the pod, `memoryMB` default,
-  `--max-concurrent-calls`) and document the sizing formula. Done when the
-  manifest and the defaults match and the formula is in an aspect.
 
 ## GATE: Gates and test infrastructure
 
 - **GATE-1** Add `make gates`: one target that runs all gates, identical in CI.
-- **GATE-4** `TestRegistry_Call_*`: outcomes OK, panic, cancelled, OOM, error,
-  unknown key. No test references `Registry.Call` today.
 - **GATE-7** Check that admission VMs are built with `Factory.ForAdmission`
   (no `kube.apply` or `kube.delete`).
 - **GATE-8** Status rules: `Reason:` only from `internal/conditions`
   constants, `Status()` only in `*/controller/`. Both hold today, nothing
   enforces them.
-- **GATE-9** envtest: `observedGeneration == generation` after a ready
-  reconcile; `lastReconcile.error` cleared after fail-then-fix (STAT-1).
 - **GATE-10** Table test that lists every spec field with an owner (code path
   or status field) (API-1).
-- **GATE-11** Test that `RecoveryReason` constants match the CRD enum (API-5).
 - **GATE-12** Coverage floor per package. Unit run 2026-10-01: conditions 100,
   jssource 88.1, jshook 75.0, kubehost 67.5, jsregistry 67.4, jsadmission
   66.2, jsengine 49.3, jslifecycle 36.4; 0 for both controllers, the
@@ -265,7 +226,8 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-17** Test for jsadmission.R10. The registrar's `timeoutSeconds` and
   `failurePolicy` are testable in envtest, but the handler's copy sits in
   `Server.policies` with no accessor.
-  Done when a test shows both sides get the same values.
+  Done when a test shows both sides get the same `failurePolicy` and the
+  handler's timeout is not longer than the registrar's.
 - **GATE-18** Webhook envtest suite lives in `internal/`
   (`internal/jsadmission/webhook/v1alpha1/webhook_suite_test.go:76`) and may
   skip silently without `KUBEBUILDER_ASSETS`. Move to `test/integration` or
@@ -274,9 +236,10 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   and `make lint-config`.
 - **GATE-20** e2e hygiene: `make test-e2e` leaves the Kind cluster on failure
   (`Makefile:89-92`, unverified); `test-e2e.yml:20` installs kind unpinned.
-- **GATE-22** Edge tests for `jsadmission.Server`: timeout, panic and memory
-  limit in `review` (with rescue), bad requests in `serve` (405, 400, body
-  over 3 MiB), and `Registrar.mergeNSSelector`.
+- **GATE-22** Edge tests for `jsadmission.Server`: a timeout, a panic and the
+  memory limit in `review` each apply `failurePolicy` and the next request
+  runs on a fresh instance (jsadmission.R11, R12); bad requests in `serve`
+  (405, 400, body over 3 MiB); `Registrar.mergeNSSelector`.
 - **GATE-23** e2e case that runs a JSAdmission against a real apiserver over
   TLS with cert-manager.
 - **GATE-27** CI check that the committed `internal/jsengine/engine.wasm` equals a
@@ -291,7 +254,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **DOC-1** README is the Kubebuilder template with `TODO(user)` placeholders.
 - **DOC-2** "Synchronization" is shell-operator jargon, explained nowhere a
   user looks (README, CRD description, sample).
-- **DOC-4** Stale comments beyond STAT-3: `status.lastExecution.error` in
+- **DOC-4** Stale comments: `status.lastExecution.error` in
   `internal/jshook/dispatcher/dispatcher.go:495`; `BindingContext.Type` lists
   "Schedule", never produced (`internal/jshook/bindingctx.go:11`); "MVP wires
   only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`;

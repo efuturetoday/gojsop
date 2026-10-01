@@ -1,10 +1,18 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/yaml"
 
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsrun"
@@ -60,6 +68,48 @@ func TestFlags_EngineCacheDir_DefaultsToInMemory(t *testing.T) {
 	f, err := parse(t, "--engine-cache-dir=/var/cache/engine")
 	if err != nil || f.engineCacheDir != "/var/cache/engine" {
 		t.Fatalf("engineCacheDir = %q, %v", f.engineCacheDir, err)
+	}
+}
+
+// The memory limit of the manager container holds the default number of
+// concurrent calls at the default memory limit, the snapshot budget and the
+// base of the process (the sizing formula of js-registry.R20).
+//
+// js-registry.R20
+func TestManagerManifest_MemoryFitsDefaultCalls(t *testing.T) {
+	const baseMiB, snapshotsMiB = 128, 128
+	f, err := os.Open(filepath.Join("..", "config", "manager", "manager.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	dec := yaml.NewYAMLOrJSONDecoder(f, 4096)
+	var limit *resource.Quantity
+	for {
+		var d appsv1.Deployment
+		if err := dec.Decode(&d); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		if d.Kind != "Deployment" {
+			continue
+		}
+		for _, c := range d.Spec.Template.Spec.Containers {
+			if c.Name == "manager" {
+				q := c.Resources.Limits[corev1.ResourceMemory]
+				limit = &q
+			}
+		}
+	}
+	if limit == nil || limit.IsZero() {
+		t.Fatal("no memory limit on the manager container")
+	}
+	needMiB := int64(jsregistry.DefaultMaxConcurrentCalls)*int64(jsrun.DefaultLimits().MemoryMB) + snapshotsMiB + baseMiB
+	if got := limit.Value() >> 20; got < needMiB {
+		t.Fatalf("manager memory limit %s (%d Mi) < %d calls x %d MB + %d Mi snapshots + %d Mi base = %d Mi",
+			limit, got, jsregistry.DefaultMaxConcurrentCalls, jsrun.DefaultLimits().MemoryMB,
+			snapshotsMiB, baseMiB, needMiB)
 	}
 }
 

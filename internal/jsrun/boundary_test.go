@@ -70,7 +70,9 @@ func isCaller(pkg string) bool {
 	return pkg == modPath+"internal/jslifecycle" || pkg == modPath+"internal/conditions"
 }
 
+// js-execution.R2
 // js-execution.R10
+// js-registry.R1
 // js-registry.R9
 func TestImportBoundary_CallersUseOnlyRunnerPort(t *testing.T) {
 	pkgs := imports(t)

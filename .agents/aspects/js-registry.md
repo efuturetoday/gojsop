@@ -51,9 +51,8 @@ A call never recovers or rebuilds anything: a panic, a trap, a timeout or the
 memory limit end that call with the matching outcome, its VM is thrown away,
 and the next call starts fresh from the same snapshot. So a recovery (an entry
 in `State.Recoveries`) comes only from `Ensure`, with one of three reasons:
-source changed, limits changed or manual. The CRD enum also lists
-`memory-limit`, `panic`, `timeout` and `timeout-streak`, which nothing sets
-(REG-4). The manual restart annotation reaches the port as
+source changed, limits changed or manual. The CRD enum of the reason lists
+exactly these three. The manual restart annotation reaches the port as
 `Spec.ResetToken`: a new value prepares again like a changed source, with
 reason manual. No `Restart` exists on the port. Per-script data that a
 controller needs (for example the parsed JSHook config) is computed in a
@@ -64,7 +63,7 @@ changes does not reach the calls.
 
 JSHook calls arrive from an informer queue and a FIFO worker per
 subscription. JSAdmission calls arrive from a synchronous webhook. Both share
-the process-wide call semaphore (`--max-concurrent-calls`, default 16), which
+the process-wide call semaphore (`--max-concurrent-calls`, default 8), which
 bounds the memory all running calls take together.
 
 ## Parts
@@ -89,7 +88,7 @@ bounds the memory all running calls take together.
 
 - **R1** Run user JavaScript at runtime only through `Runner.Invoke` (the registry runs it in the function passed to `Registry.Call`), each call on its own VM restored from the snapshot of the key; calls of one key run in parallel.
   Why: one place for the call semaphore, panic recovery and outcome classification; a VM per call needs no per-key lock, so a slow call does not hold up the next one.
-  Gate: `TestRegistry_CallsOfOneKeyRunInParallel`; that nobody runs JS around the port is missing → GATE-4. See also js-execution.R2.
+  Gate: `TestRegistry_CallsOfOneKeyRunInParallel`, `TestRegistry_Invoke_ClassifiesOutcomes`; callers reach JS only through the port: `TestImportBoundary_CallersUseOnlyRunnerPort`. See also js-execution.R2.
 - **R2** Throw the VM of a call away whatever the outcome, and never recover or rebuild a script after a call. A panic, a trap, a timeout or the memory limit end only that call; the next call starts fresh from the same snapshot, and `State.Recoveries` does not change.
   Why: a VM after a trap is in an unknown state, and a fresh one costs a quarter of a millisecond, so no caller and no adapter has to know a cause-to-restart table.
   Gate: `TestRegistry_Invoke_EveryOutcomeGetsAFreshInstance`, `TestRegistry_CancelledCall_NextCallGetsFreshInstance`, `TestDispatcher_PanicInHandle_RetriesOnFreshVM`.
@@ -145,9 +144,9 @@ bounds the memory all running calls take together.
 - **R19** Hold no script in a Failed entry, and let `Runner.Invoke` return `ErrVMUnavailable` at once for it and for a key whose first build still runs. A build for changed options or a changed reset token keeps the old script serving until the new one is installed; every failed build drops the old script.
   Why: a script whose rebuild failed must not keep serving the old code as if nothing happened; callers must see "not ready" and apply their own policy (requeue, `failurePolicy`).
   Gate: `TestRegistry_Call_WithoutScript_IsErrVMUnavailable`, `TestRegistry_Ensure_RebuildHasDeadlineAndFailureHoldsNoScript`, `TestDispatcher_NoVM_KeepsEventsAndDeliversAfterBuild`.
-- **R20** Bound the calls that run at the same time, over all keys, by one process-wide semaphore: the operator flag `--max-concurrent-calls` (default `jsregistry.DefaultMaxConcurrentCalls`, 16; zero or less is rejected). A call waits for a slot inside its own context; a context that ends while it waits gives `OutcomeCancelled` and runs nothing.
-  Why: every call has its own VM with up to `spec.limits.memoryMB` of heap, so without a bound a burst of admission requests or events multiplies the memory of the operator; the bound makes it `max-concurrent-calls` × memory limit.
-  Gate: `TestRegistry_Semaphore_BoundsConcurrentCalls`, `TestFlags_MaxConcurrentCalls_DefaultsAndRejectsNonsense`.
+- **R20** Bound the calls that run at the same time, over all keys, by one process-wide semaphore: the operator flag `--max-concurrent-calls` (default `jsregistry.DefaultMaxConcurrentCalls`, 8; zero or less is rejected). A call waits for a slot inside its own context; a context that ends while it waits gives `OutcomeCancelled` and runs nothing. Size the memory limit of the manager container as `max-concurrent-calls` × `spec.limits.memoryMB` + one snapshot per script + 128 MiB for the Go process (informer caches, the compiled engine); the defaults, 8 × 32 MB + 128 MiB, leave 128 MiB for snapshots in the 512Mi of `config/manager/manager.yaml`. Raise the limit with either flag or `memoryMB`.
+  Why: every call has its own VM with up to `spec.limits.memoryMB` of heap, so without a bound a burst of admission requests or events multiplies the memory of the operator; the bound makes it `max-concurrent-calls` × memory limit, and a container limit below that gets the operator OOM-killed under load.
+  Gate: `TestRegistry_Semaphore_BoundsConcurrentCalls`, `TestFlags_MaxConcurrentCalls_DefaultsAndRejectsNonsense`, `TestManagerManifest_MemoryFitsDefaultCalls`.
 
 ## Decisions
 
@@ -177,4 +176,4 @@ bounds the memory all running calls take together.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-3 to REG-5; gate GATE-4.
+Tracked in [backlog](../backlog.md): REG-3, REG-5.

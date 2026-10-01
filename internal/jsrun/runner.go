@@ -102,41 +102,17 @@ type Spec struct {
 // JSAdmission (the CRD keeps its older field names, API-10).
 type RecoveryReason string
 
-// Recovery reasons. Every value is wired to a real trigger:
-//   - ReasonSourceChanged: Spec.SourceHash differs on Ensure
-//   - ReasonLimitsChanged: Spec.Limits changed with the source hash unchanged (Ensure)
-//   - ReasonManual:        Spec.ResetToken changed (Ensure)
-//   - ReasonMemoryLimit:   no longer set by the adapter: every call starts
-//     from a fresh instance, so a memory limit needs no recovery; kept as a
-//     CRD enum value (backlog REG-4)
-//   - ReasonPanic:         no longer set by the adapter, same reason as above
-//     (backlog REG-4)
-//   - ReasonTimeout:       no longer set by the adapter, same reason as above
-//     (backlog REG-4)
-//   - ReasonTimeoutStreak: no longer set by the adapter, same reason as above
-//     (backlog REG-4)
+// Recovery reasons, one per trigger of Ensure. The CRD enum of
+// status.instance.recentRestarts[].reason lists exactly these
+// (TestRecoveryReasons_MatchCRDEnum).
+//   - ReasonSourceChanged: Spec.SourceHash differs
+//   - ReasonLimitsChanged: Spec.Limits changed with the source hash unchanged
+//   - ReasonManual:        Spec.ResetToken changed
 const (
 	ReasonSourceChanged RecoveryReason = "source-changed"
-	ReasonMemoryLimit   RecoveryReason = "memory-limit"
-	ReasonPanic         RecoveryReason = "panic"
-	ReasonTimeout       RecoveryReason = "timeout"
-	ReasonTimeoutStreak RecoveryReason = "timeout-streak"
-	ReasonManual        RecoveryReason = "manual"
 	ReasonLimitsChanged RecoveryReason = "limits-changed"
+	ReasonManual        RecoveryReason = "manual"
 )
-
-// ReportedByReconcile reports whether a controller reports the recovery with
-// this reason as a Restarted event after the build. The remaining reasons
-// (memory limit, panic, timeout, timeout streak) are no longer set by the
-// adapter: nothing is recovered after a call (backlog REG-4).
-func (r RecoveryReason) ReportedByReconcile() bool {
-	switch r {
-	case ReasonSourceChanged, ReasonLimitsChanged, ReasonManual:
-		return true
-	default:
-		return false
-	}
-}
 
 // Recovery records one transition from an old script to a new one for a key.
 type Recovery struct {
@@ -216,7 +192,7 @@ func (s State) RetryIn() time.Duration {
 	return max(time.Until(s.NextAttempt), minRetryIn)
 }
 
-// Outcome classifies how an Invoke ran. Callers drive rescue and failure
+// Outcome classifies how an Invoke ran. Callers drive retry and failure
 // policy from it.
 type Outcome int
 

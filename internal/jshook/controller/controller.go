@@ -72,6 +72,8 @@ type JSHookReconciler struct {
 	// KubeHost mints the host-function surface installed on every JSHook VM.
 	// SharedFactory hands out the same client to all hooks; Phase 2 swaps in
 	// a per-ServiceAccount factory without touching this call site.
+	// SetupWithManager requires it; a reconciler built bare in a unit test
+	// gives scripts no kube global.
 	KubeHost kubehost.Factory
 
 	// Dispatcher subscribes hooks to Kubernetes events. Optional in tests.
@@ -82,7 +84,7 @@ type JSHookReconciler struct {
 	SubscribeCtx context.Context
 
 	// Recorder publishes corev1.Event entries describing lifecycle moments
-	// (build/restart/dispatcher rescue/handle errors). Optional — nil-safe
+	// (build/restart/handle errors). Optional — nil-safe
 	// so unit tests that build the reconciler bare keep working. In
 	// production cmd/main.go injects mgr.GetEventRecorder(...).
 	Recorder events.EventRecorder
@@ -221,7 +223,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	manual := !restarted && resetToken != prevToken && last.Reason == jsrun.ReasonManual
 	if restarted || manual {
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(st.Recoveries.Recent), "reason", last.Reason)
-		if conditions.WasBuilding(hook.Status.Conditions) && last.Reason.ReportedByReconcile() {
+		if conditions.WasBuilding(hook.Status.Conditions) && last.Reason != "" {
 			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
 				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
 		}
@@ -261,6 +263,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	})
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.Bindings = bindings
+	hook.Status.LastReconcile = jslifecycle.ReconcileSucceeded(hook.Status.LastReconcile, time.Now())
 	byReason, recent := jslifecycle.RestartHistoryFor(st.Recoveries)
 	hook.Status.Instance = &corev1alpha1.JSInstanceStatus{
 		StartedAt:          &startedAt,
@@ -285,7 +288,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // instanceChanged reports whether the bindings must be (re)subscribed: the
 // status does not describe an instance yet, it describes another source, or the
 // last reconcile failed after the build. A rebuild of the same source (limits
-// changed, rescue restart, manual restart) keeps the subscription (DISP-9).
+// changed, manual restart) keeps the subscription.
 func instanceChanged(hook *corev1alpha1.JSHook, srcHash string) bool {
 	inst := hook.Status.Instance
 	if inst == nil || inst.SourceHash != srcHash {
@@ -405,6 +408,10 @@ func (r *JSHookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if r.Scripts == nil {
 		return errors.New("jsrun.Scripts is required")
+	}
+	// kube-access.R8
+	if r.KubeHost == nil {
+		return errors.New("kubehost.Factory is required: without it hooks get no kube global")
 	}
 	// The registry reports every finished build of a JSHook; the forwarder
 	// turns it into a reconcile request.

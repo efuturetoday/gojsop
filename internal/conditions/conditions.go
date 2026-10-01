@@ -61,7 +61,7 @@ const (
 	EventWebhookRegistered = "WebhookRegistered"
 	EventWebhookSyncFailed = "WebhookSyncFailed"
 
-	// Dispatcher rescue / handle()
+	// Dispatcher handle()
 	EventHandleFailed  = "HandleFailed"
 	EventHandleTimeout = "HandleTimeout"
 

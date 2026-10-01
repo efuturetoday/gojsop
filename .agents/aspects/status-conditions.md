@@ -46,7 +46,7 @@ write status.
 | example | Which real use in the code should others copy? | `jshook/controller.JSHookReconciler.Reconcile` and its `fail` method. |
 | test helper | How does a test use the aspect without effort? | `jsregistry.NewRegistry` for the registry log in unit tests; the envtest suite in `test/integration` for reconcilers. No helper asserts a status condition. Searched `*_test.go` for `Conditions`, `ObservedGeneration`: no hit. |
 | sides | Which sides does it touch? | Back end only: the two reconcilers, the registry, and the CRD types in `api/v1alpha1`. Users read the result through kubectl. |
-| tie | How do the sides stay in step? | Generated: `make manifests` builds the CRD YAML from the Go types with controller-gen. The enum of `RestartReason` against the CRD is not checked, see API-5. |
+| tie | How do the sides stay in step? | Generated: `make manifests` builds the CRD YAML from the Go types with controller-gen. The enum of the restart reason is checked against the `jsrun` constants by `TestRecoveryReasons_MatchCRDEnum`. |
 
 ## How to use it
 
@@ -64,7 +64,7 @@ Add a new failure cause to status:
   failure.
   Why: users and tools compare `observedGeneration` with the generation to see
   whether status is current.
-  Gate: missing → GATE-8, GATE-9.
+  Gate: `integration.TestControllers` (the JSHook fail-then-fix case); the Reason constants: missing → GATE-8.
 - **R2** Write status only from the reconciler of that kind, and only with
   `Status().Update`.
   Why: one writer per status avoids conflicting updates. A further reason is
@@ -80,9 +80,12 @@ Add a new failure cause to status:
   Why: two counts drift apart. The neutral `Recoveries` of the port and the older CRD names meet in this one function (API-10).
   Gate: `TestRegistry_RecoveryHistory_RingAndCounters`.
 - **R5** Put only the reconcile outcome into `lastReconcile`, never a runtime
-  call result.
-  Why: the removed fields lied about what the controller knew.
-  Gate: missing → GATE-9. Violated today → STAT-1.
+  call result. Write it when the outcome changes: every failure with its
+  error, and the first success after a failure with an empty error, through
+  `jslifecycle.ReconcileSucceeded`. A steady success writes nothing.
+  Why: the removed fields lied about what the controller knew; a time written
+  on every success would change status on every reconcile and trigger the next.
+  Gate: `TestReconcileSucceeded_ClearsErrorOnceThenKeepsStatus`, `integration.TestControllers` (the JSHook fail-then-fix case).
 - **R7** Report a JS instance that is not Ready as `Ready=False` with reason `Building` while the build runs and `BuildFailed`, with the build error as message, after it failed. Never wait for the build, and requeue a failed build only after the registry's backoff.
   Why: users must tell a slow or hanging build from a rejected spec, and a failing build must not be retried in a tight loop.
   Gate: `TestReconcile_HangingBuildDoesNotBlockOtherHook`, `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce`, `TestReconcile_BuildStates_ShowBuildingThenBuildFailed`.
@@ -109,5 +112,5 @@ Add a new failure cause to status:
 
 ## Open
 
-Tracked in [backlog](../backlog.md): STAT-1 to STAT-5, API-1, API-5, API-10; gates
-GATE-8 to GATE-11, GATE-13.
+Tracked in [backlog](../backlog.md): STAT-2, STAT-4, STAT-5, API-1, API-10; gates
+GATE-8, GATE-10, GATE-13.
