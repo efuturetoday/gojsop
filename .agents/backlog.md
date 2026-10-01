@@ -40,13 +40,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   benchmark never ran. Fallback if too slow: fork qjs for QuickJS interrupts.
 - **EXEC-4** `gap` JS runtime errors are one truncated string. `handle()` and
   `validate()` errors have no stack, line number or export name.
-- **EXEC-5** `bug` Data race in `VM.withContext` (`internal/jsengine/vm.go:110`).
-  It swaps `qctx.Context` while a wazero goroutine started by
-  `CloseModuleOnCanceledOrTimeout` still reads it through `qjs.Context.Done`.
-  `go test -race` fails on every test that runs JS, for example
-  `TestHandle_ReceivesBindingContext` and `TestRegistry_Drop` (46 reports in
-  `./internal/jshook ./internal/jsregistry`), so the race detector cannot run
-  in CI. Done when `go test -race ./internal/...` is clean and a CI job runs it.
 
 ## REG: JS registry and restarts
 
@@ -247,8 +240,9 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `jsengine` used only by `jsregistry`, `jshook`, `jsadmission`; `jsregistry`
   does not import `jssource`; `ManagedVM.VM` and `ManagedVM.CallMu` are not
   touched outside `jsregistry` (needs a `go/analysis` check). Blocked by EXEC-1.
-- **GATE-3** Add `-race` to `make test`, plus a test with N goroutines on
-  `Registry.Call` and concurrent `RestartByKey` / `Drop`.
+- **GATE-26** Test with N goroutines on `Registry.Call` and concurrent
+  `RestartByKey` / `Drop`, run under `-race` by `make test`. Split from the
+  closed GATE-3; no such concurrent test exists today.
 - **GATE-4** `TestRegistry_Call_*`: outcomes OK, panic, cancelled, OOM, error,
   unknown key. No test references `Registry.Call` today.
 - **GATE-5** Test in `internal/jsengine`: `for(;;){}` with a 100 ms deadline

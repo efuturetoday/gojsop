@@ -79,13 +79,13 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
   Gate: `TestRegistry_PersistsAcrossLoads`. Violated today → REG-7.
 - **R6** Hold the registry lock only for map access, never while user JavaScript runs.
   Why: a slow build or call of one key must not block other keys.
-  Gate: missing → GATE-3.
+  Gate: missing → GATE-26.
 - **R7** Serialise builds and restarts per key with the build lock.
   Why: two reconciles of one key must not race on construction.
-  Gate: missing → GATE-3.
+  Gate: missing → GATE-26.
 - **R8** Take the old VM's `ManagedVM.CallMu` before closing or replacing it.
   Why: the qjs runtime is not goroutine-safe, and closing during a call races in wazero.
-  Gate: missing → GATE-3.
+  Gate: missing → GATE-26.
 - **R9** Touch `ManagedVM.VM` and `ManagedVM.CallMu` only inside `internal/jsregistry`.
   Why: the fields are exported, but the lock protocol lives in the registry.
   Gate: missing → GATE-2.
@@ -107,4 +107,4 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-1 to REG-7; gates GATE-2, GATE-3, GATE-4.
+Tracked in [backlog](../backlog.md): REG-1 to REG-7; gates GATE-2, GATE-4, GATE-26.

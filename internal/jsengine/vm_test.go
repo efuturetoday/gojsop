@@ -108,3 +108,27 @@ func TestEval_Deadline_IsErrCancelledNotPanic(t *testing.T) {
 	}
 	vm.Close()
 }
+
+// js-execution.R9
+//
+// wazero starts a goroutine per wasm call that reads the runtime context
+// later. Many short calls with their own contexts, some cancelled right
+// away, give the race detector the chance to see an unsynchronised write.
+func TestVM_SequentialCalls_NoContextRace(t *testing.T) {
+	vm, err := New(Limits{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer vm.Close()
+	if _, err := vm.Eval(context.Background(), "m.js", "function f() { return 1 }"); err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	for i := range 200 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		if _, err := vm.CallExport(ctx, "f"); err != nil {
+			cancel()
+			t.Fatalf("call %d: %v", i, err)
+		}
+		cancel()
+	}
+}

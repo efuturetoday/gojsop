@@ -93,10 +93,16 @@ Add a new kind of resource that runs JavaScript:
   Gate: `TestSharedFactory_ForAdmission_ReadOnlySurface`.
 - **R7** Close a VM only while you hold its call lock.
   Why: closing during a running call races inside wazero.
-  Gate: missing → GATE-3.
+  Gate: missing → GATE-26.
 - **R8** Never share one VM between two resources.
   Why: isolation between scripts depends on it.
   Gate: missing → GATE-6.
+- **R9** Never write a field of `qjs.Context` after `jsengine.New`. The per-call
+  context goes through `jsengine.VM.withContext`, which moves it behind an
+  atomic pointer in a fixed delegating context.
+  Why: wazero starts a goroutine per wasm call that reads the embedded context
+  later, so a write races with it.
+  Gate: `TestVM_SequentialCalls_NoContextRace` (needs `go test -race`, which `make test` runs).
 
 ## Decisions
 
@@ -114,7 +120,7 @@ EXEC-2
 EXEC-3
 EXEC-4
 GATE-2
-GATE-3
+GATE-26
 GATE-4
 GATE-5
 GATE-6

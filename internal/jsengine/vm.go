@@ -10,6 +10,8 @@ package jsengine
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"github.com/fastschema/qjs"
 )
@@ -57,7 +59,35 @@ const maxStackSizeBytes = 1 * 1024 * 1024
 type VM struct {
 	rt     *qjs.Runtime
 	limits Limits
+	// call is the context the qjs runtime currently watches. It is the
+	// delegate behind the embedded context of qjs.Context.
+	call *callContext
 }
+
+// callContext is the one context.Context the qjs runtime carries for its whole
+// life. wazero keeps it (as the embedded context of *qjs.Context) and starts a
+// goroutine per wasm call that reads Done() at some later time, possibly after
+// the call returned. So the embedded field of qjs.Context must never be
+// written after New. callContext keeps that field fixed and moves the
+// per-call context behind an atomic pointer instead (js-execution.R9).
+type callContext struct {
+	cur atomic.Pointer[context.Context]
+}
+
+func newCallContext() *callContext {
+	c := &callContext{}
+	c.set(context.Background())
+	return c
+}
+
+func (c *callContext) set(ctx context.Context) { c.cur.Store(&ctx) }
+
+func (c *callContext) get() context.Context { return *c.cur.Load() }
+
+func (c *callContext) Deadline() (time.Time, bool) { return c.get().Deadline() }
+func (c *callContext) Done() <-chan struct{}       { return c.get().Done() }
+func (c *callContext) Err() error                  { return c.get().Err() }
+func (c *callContext) Value(k any) any             { return c.get().Value(k) }
 
 // New starts a fresh JS VM with the given Limits. Zero fields fall back to
 // DefaultLimits(). The runtime is created with CloseOnContextDone so calls
@@ -65,16 +95,17 @@ type VM struct {
 // methods below.
 func New(lim Limits) (*VM, error) {
 	lim = lim.applyDefaults()
+	cc := newCallContext()
 	rt, err := qjs.New(qjs.Option{
 		MemoryLimit:        int(lim.MemoryMB) * 1024 * 1024,
 		MaxStackSize:       maxStackSizeBytes,
-		Context:            context.Background(),
+		Context:            cc,
 		CloseOnContextDone: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("qjs.New: %w", err)
 	}
-	return &VM{rt: rt, limits: lim}, nil
+	return &VM{rt: rt, limits: lim, call: cc}, nil
 }
 
 // Limits returns the limits this VM was started with.
@@ -88,17 +119,18 @@ func (vm *VM) Limits() Limits {
 //
 // The returned *qjs.Context embeds a context.Context that wazero observes
 // for cancellation. Callers MUST NOT mutate that field — use the
-// ctx-accepting methods (Eval/CallExport/Invoke) so the per-call swap is
-// safe under CallMu.
+// ctx-accepting methods (Eval/CallExport/WithContext) so the per-call context
+// is set under CallMu.
 func (vm *VM) Context() *qjs.Context {
 	return vm.rt.Context()
 }
 
-// withContext swaps the qjs runtime's embedded Go context for ctx, runs fn,
-// and restores the previous context. This is how we plumb a per-call
-// deadline into wazero: every wazero invocation reads the embedded context
-// (qjs.Context.Context) for cancellation, so swapping it under our CallMu
-// gives us per-call cancellation without any qjs-level patching.
+// withContext points the qjs runtime's context at ctx, runs fn, and points it
+// back at the background context. This is how we plumb a per-call deadline
+// into wazero: every wazero invocation reads the embedded context of
+// qjs.Context for cancellation. The embedded value is a fixed callContext that
+// delegates to ctx through an atomic pointer, so no field of qjs.Context is
+// written while a wazero goroutine of an earlier call may still read it.
 //
 // The caller is responsible for serialization (in the registry: mi.CallMu).
 //
@@ -114,10 +146,8 @@ func (vm *VM) withContext(ctx context.Context, fn func() error) (err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	qctx := vm.rt.Context()
-	prev := qctx.Context
-	qctx.Context = ctx
-	defer func() { qctx.Context = prev }()
+	vm.call.set(ctx)
+	defer vm.call.set(context.Background())
 	defer func() {
 		if p := recover(); p != nil {
 			if ctx.Err() != nil && closedModulePanic(p) {
@@ -130,8 +160,7 @@ func (vm *VM) withContext(ctx context.Context, fn func() error) (err error) {
 	return fn()
 }
 
-// WithContext runs fn with the qjs runtime's embedded Go context swapped
-// for ctx, so any wazero call fn issues (directly, or via qjs primitives
+// WithContext runs fn with the qjs runtime's Go context pointed at ctx, so any wazero call fn issues (directly, or via qjs primitives
 // like Global().Invoke) sees ctx for cancellation. Use this when CallExport
 // is too coarse — e.g. jsadmission.Handle decodes a *qjs.Value into a
 // Go struct via JsObjectOrMapToGoStruct, which CallExport can't do.
