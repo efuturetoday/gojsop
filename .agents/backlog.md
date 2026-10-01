@@ -132,11 +132,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   multi-namespace are ignored (`dispatcher.go:208-224`).
 ## ADM: Admission webhook
 
-- **ADM-1** `bug` Registrar sync failure is invisible. CA read or API write
-  errors are only logged, no retry, the CR still shows `Ready=True`
-  (`internal/jsadmission/registrar.go:125-128`).
-- **ADM-2** `bug` A denied mutation still sends a patch; `fillResponse` builds it
-  even when `allowed=false` (`internal/jsadmission/server.go:337-358`).
 - **ADM-3** `gap` `ReinvocationPolicy` is never set. The `PolicyMeta` field
   exists, the controller does not fill it (`registrar.go:43,215`,
   `internal/jsadmission/controller/controller.go:227-238`).

@@ -200,6 +200,32 @@ func TestServer_Emits_ReviewFailed_OnJSThrow(t *testing.T) {
 	}
 }
 
+// jsadmission.R16
+func TestServer_Mutate_Denied_HasNoPatch(t *testing.T) {
+	key := types.NamespacedName{Namespace: "default", Name: "policy-deny-mutate"}
+	src := `
+		function mutate(req) {
+			const obj = req.object;
+			obj.metadata.labels = { team: "frontend" };
+			return { allowed: false, message: "no", modifiedObject: obj };
+		}`
+	reg := loadPolicy(t, src, key)
+	srv := NewServer(reg, logr.Log)
+	srv.Register(PolicyEntry{Key: key, Mutating: true, Timeout: 2 * time.Second})
+
+	resp := postReview(t, srv.MutateHandler(), PathFor(key, true), &admissionv1.AdmissionRequest{
+		UID:       "d",
+		Operation: admissionv1.Create,
+		Object:    runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"p"}}`)},
+	})
+	if resp.Allowed {
+		t.Fatal("expected allowed=false")
+	}
+	if resp.Patch != nil || resp.PatchType != nil {
+		t.Fatalf("denied response carries a patch: %s (%v)", resp.Patch, resp.PatchType)
+	}
+}
+
 func TestPathFor_RoundTrip(t *testing.T) {
 	cases := []types.NamespacedName{
 		{Namespace: "default", Name: "p"},

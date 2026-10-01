@@ -30,8 +30,10 @@ import (
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	ctrlsource "sigs.k8s.io/controller-runtime/pkg/source"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
@@ -245,6 +247,19 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		})
 	}
 
+	// The registrar syncs in the background. Its last failure is reported
+	// here, because the reconciler is the only writer of status; the
+	// registrar retries and re-triggers this reconcile when it recovers.
+	// jsadmission.R17
+	if r.Registrar != nil {
+		if syncErr := r.Registrar.SyncError(); syncErr != nil {
+			log.Error(syncErr, "webhook configuration sync failing")
+			return r.failAdmissionReason(ctx, &pol, conditions.ReasonWebhookSyncFailed,
+				conditions.EventWebhookSyncFailed, "webhook sync failed",
+				fmt.Sprintf("webhook sync: %v", syncErr))
+		}
+	}
+
 	startedAt := metav1.NewTime(mi.StartedAt)
 	apimeta.SetStatusCondition(&pol.Status.Conditions, metav1.Condition{
 		Type:               conditions.Ready,
@@ -291,12 +306,19 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // status-conditions.R1
 // status-conditions.R2
 func (r *JSAdmissionReconciler) failAdmission(ctx context.Context, pol *corev1alpha1.JSAdmission, eventReason, eventMsg, conditionMsg string) (ctrl.Result, error) {
+	return r.failAdmissionReason(ctx, pol, conditions.ReasonFailed, eventReason, eventMsg, conditionMsg)
+}
+
+// failAdmissionReason is failAdmission with an explicit condition Reason.
+// status-conditions.R1
+// status-conditions.R2
+func (r *JSAdmissionReconciler) failAdmissionReason(ctx context.Context, pol *corev1alpha1.JSAdmission, condReason, eventReason, eventMsg, conditionMsg string) (ctrl.Result, error) {
 	r.event(pol, corev1.EventTypeWarning, eventReason, eventMsg)
 	now := metav1.NewTime(time.Now())
 	apimeta.SetStatusCondition(&pol.Status.Conditions, metav1.Condition{
 		Type:               conditions.Ready,
 		Status:             metav1.ConditionFalse,
-		Reason:             conditions.ReasonFailed,
+		Reason:             condReason,
 		Message:            conditionMsg,
 		ObservedGeneration: pol.Generation,
 	})
@@ -334,12 +356,27 @@ func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Registry == nil {
 		r.Registry = jsregistry.NewRegistry()
 	}
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSAdmission{}).
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(jssource.JSAdmissionConfigMapMapper(mgr.GetClient())),
 		).
-		Named("jsadmission").
-		Complete(r)
+		Named("jsadmission")
+	if r.Registrar != nil {
+		// A change in the registrar's sync outcome re-reconciles every
+		// published policy so Ready follows it.
+		ch := make(chan event.TypedGenericEvent[*corev1alpha1.JSAdmission], 64)
+		r.Registrar.OnSyncResult = func(error) {
+			for _, k := range r.Registrar.Keys() {
+				pol := &corev1alpha1.JSAdmission{ObjectMeta: metav1.ObjectMeta{Name: k.Name, Namespace: k.Namespace}}
+				select {
+				case ch <- event.TypedGenericEvent[*corev1alpha1.JSAdmission]{Object: pol}:
+				default:
+				}
+			}
+		}
+		b = b.WatchesRawSource(ctrlsource.Channel(ch, &handler.TypedEnqueueRequestForObject[*corev1alpha1.JSAdmission]{}))
+	}
+	return b.Complete(r)
 }

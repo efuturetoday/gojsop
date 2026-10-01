@@ -327,6 +327,7 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 // jsadmission.R6
 // jsadmission.R7
 // jsadmission.R8
+// jsadmission.R16
 func fillResponse(resp *admissionv1.AdmissionResponse, result *AdmissionResult, entry PolicyEntry, req *admissionv1.AdmissionRequest, log logr.Logger) {
 	resp.Allowed = result.Allowed
 	if result.Message != "" || result.Code != 0 {
@@ -339,6 +340,10 @@ func fillResponse(resp *admissionv1.AdmissionResponse, result *AdmissionResult, 
 		if result.ModifiedObject != nil {
 			log.Info("validating policy returned modifiedObject — ignored")
 		}
+		return
+	}
+	if !result.Allowed {
+		// jsadmission.R16: a denied request carries no patch.
 		return
 	}
 	if result.ModifiedObject == nil {

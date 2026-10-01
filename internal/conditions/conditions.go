@@ -20,6 +20,11 @@ const (
 	// reconciler when source loading, instance startup, or subscription fails.
 	ReasonFailed = "Failed"
 
+	// ReasonWebhookSyncFailed is the Reason on a Ready=False condition when
+	// the registrar could not write the central webhook configurations, so
+	// the apiserver does not (yet) call the policy.
+	ReasonWebhookSyncFailed = "WebhookSyncFailed"
+
 	// ManualRestartAnnotation triggers a manual instance restart on either
 	// CR. A new annotation value (typically a timestamp) forces exactly one
 	// rebuild; the same value on later reconciles is a no-op.
@@ -42,6 +47,7 @@ const (
 	EventEntrypointMissing = "EntrypointMissing"
 	EventSubscribeFailed   = "SubscribeFailed"
 	EventWebhookRegistered = "WebhookRegistered"
+	EventWebhookSyncFailed = "WebhookSyncFailed"
 
 	// Dispatcher rescue / handle()
 	EventRescueFailed  = "RescueFailed"

@@ -57,6 +57,14 @@ type Registrar struct {
 	CAProvider CABundleProvider
 	Log        logr.Logger
 	Debounce   time.Duration
+	// RetryDelay is how long a failed background Sync waits before it is
+	// tried again. Zero means 5 s.
+	RetryDelay time.Duration
+	// OnSyncResult, when set, is called after a background Sync whenever the
+	// outcome changes between success and failure (err is nil on success).
+	// The controller uses it to re-reconcile policies so the failure shows
+	// in their status. It must not block.
+	OnSyncResult func(err error)
 	// ExcludeNamespaces is merged into every webhook's namespaceSelector via a
 	// NotIn matchExpression on `kubernetes.io/metadata.name`. The controller's
 	// own namespace plus kube-system / cert-manager belong here so a broken
@@ -68,6 +76,7 @@ type Registrar struct {
 	dirty    bool
 	timer    *time.Timer
 	syncCtx  context.Context
+	syncErr  error
 }
 
 // NewRegistrar wires a Registrar to its dependencies. Pass the same
@@ -122,12 +131,53 @@ func (r *Registrar) scheduleSyncLocked() {
 	if d <= 0 {
 		d = 200 * time.Millisecond
 	}
-	ctx := r.syncCtx
+	r.armTimerLocked(r.syncCtx, d)
+}
+
+// armTimerLocked runs a background Sync after d. A failed Sync is recorded,
+// reported through OnSyncResult and retried after RetryDelay until it
+// succeeds or a newer Upsert/Remove takes over.
+func (r *Registrar) armTimerLocked(ctx context.Context, d time.Duration) {
 	r.timer = time.AfterFunc(d, func() {
-		if err := r.Sync(ctx); err != nil {
+		err := r.Sync(ctx)
+		if err != nil {
 			r.Log.Error(err, "registrar Sync failed")
 		}
+		r.mu.Lock()
+		changed := (err == nil) != (r.syncErr == nil)
+		r.syncErr = err
+		notify := r.OnSyncResult
+		if err != nil && ctx.Err() == nil {
+			retry := r.RetryDelay
+			if retry <= 0 {
+				retry = 5 * time.Second
+			}
+			r.armTimerLocked(ctx, retry)
+		}
+		r.mu.Unlock()
+		if changed && notify != nil {
+			notify(err)
+		}
 	})
+}
+
+// SyncError returns the error of the last background Sync, nil when it
+// succeeded or none ran yet.
+func (r *Registrar) SyncError() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.syncErr
+}
+
+// Keys lists the policies currently published.
+func (r *Registrar) Keys() []types.NamespacedName {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	keys := make([]types.NamespacedName, 0, len(r.policies))
+	for k := range r.policies {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // Sync rewrites both central WebhookConfigurations from the live policy map.

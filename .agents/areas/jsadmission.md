@@ -92,6 +92,8 @@ A policy decides on a request and must not change the cluster, so it can read ot
 | jsadmission.R13 | A policy can only read the cluster (`kube.get`, `kube.list`); `kube.apply` and `kube.delete` are not available. | admission runs with `sideEffects: None` | `TestSharedFactory_ForAdmission_ReadOnlySurface` |
 | jsadmission.R14 | Every response carries the UID of its request. | admission.k8s.io/v1 | `TestServer_Validate_AllowedRoundtrip` |
 | jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `cmd/main.go` (`excludeNamespaces`); extent open in ADM-6 | missing → ADM-6 |
+| jsadmission.R16 | A response with `allowed=false` carries no patch. | admission.k8s.io/v1 (`AdmissionResponse`) | `TestServer_Mutate_Denied_HasNoPatch` |
+| jsadmission.R17 | When the central webhook configurations cannot be written, the policy shows `Ready=False` with reason `WebhookSyncFailed`, the registrar retries, and `Ready` returns to `True` once it succeeds. | `Registrar.SyncError` and `JSAdmissionReconciler.Reconcile`; status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse`, `TestRegistrar_SyncFailure_IsRetriedAndReported` |
 
 ## Aspects
 
@@ -115,4 +117,4 @@ A policy decides on a request and must not change the cluster, so it can read ot
 
 ## Open
 
-ADM-1, ADM-2, ADM-3, ADM-4, ADM-5, ADM-6, ADM-7, ADM-8, EXEC-1, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, ADM-9, ADM-10, ADM-11
+ADM-3, ADM-4, ADM-5, ADM-6, ADM-7, ADM-8, EXEC-1, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, ADM-9, ADM-10, ADM-11

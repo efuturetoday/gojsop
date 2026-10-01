@@ -2,6 +2,8 @@ package jsadmission
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -162,3 +164,51 @@ func TestDNSWebhookName_Cluster(t *testing.T) {
 // (type-check helper to keep the test file self-contained).
 var _ = metav1.ObjectMeta{}
 var _ = time.Second
+
+// jsadmission.R17
+func TestRegistrar_SyncFailure_IsRetriedAndReported(t *testing.T) {
+	r, c := newFakeRegistrar(t)
+	fails := 2
+	var mu sync.Mutex
+	r.CAProvider = func(context.Context) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if fails > 0 {
+			fails--
+			return nil, errors.New("ca unreadable")
+		}
+		return []byte("CA-PEM"), nil
+	}
+	r.Debounce = time.Millisecond
+	r.RetryDelay = time.Millisecond
+	results := make(chan error, 8)
+	r.OnSyncResult = func(err error) { results <- err }
+
+	ctx := t.Context()
+	r.Start(ctx)
+	r.Upsert(samplePolicy("a", false))
+
+	select {
+	case err := <-results:
+		if err == nil {
+			t.Fatal("first result must be the failure")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("sync failure was not reported")
+	}
+	select {
+	case err := <-results:
+		if err != nil {
+			t.Fatalf("recovery reported error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("failed sync was not retried")
+	}
+	if err := r.SyncError(); err != nil {
+		t.Fatalf("SyncError after recovery: %v", err)
+	}
+	var got admissionregv1.ValidatingWebhookConfiguration
+	if err := c.Get(ctx, client.ObjectKey{Name: ValidatingConfigName}, &got); err != nil {
+		t.Fatalf("VWC missing after retry: %v", err)
+	}
+}
