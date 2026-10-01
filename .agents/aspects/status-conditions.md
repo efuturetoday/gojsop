@@ -4,7 +4,7 @@ status: accepted
 entrypoints:
   - conditions.ClassifyBuildError
   - jslifecycle.RestartHistoryFor
-  - jsregistry.Registry.GetOrLoad
+  - jsregistry.Registry.Ensure
 ---
 
 # Status and Conditions
@@ -14,7 +14,7 @@ its CRD status.
 
 Status holds only what the controller observed at reconcile time, plus a
 projection of the restart log of the registry. There is one condition type,
-`Ready`. It has three reasons, `Reconciled`, `Failed` and `WebhookSyncFailed` (the registrar could not write the central webhook configurations). Richer detail lives in
+`Ready`. It has five reasons: `Reconciled`, `Failed`, `WebhookSyncFailed` (the registrar could not write the central webhook configurations), `Building` (the JS instance is being built, nothing failed) and `BuildFailed` (the last build failed, the controller retries with backoff). Richer detail lives in
 typed status fields and in Kubernetes Events. Why only one condition type and
 two reasons is not recorded.
 
@@ -42,7 +42,7 @@ write status.
 
 | Part | Question | Answer |
 |---|---|---|
-| block | What code does the work, once, so nobody builds it a second time? | `conditions.ClassifyBuildError` and the Reason constants of `internal/conditions` (`conditions.ReasonReconciled`, `conditions.ReasonFailed`, `conditions.ReasonWebhookSyncFailed`), `jslifecycle.RestartHistoryFor` for restart data, `apimeta.SetStatusCondition` from apimachinery for the condition. Searched `internal/` for `SetStatusCondition`, `Status().Update`, `Reason:`; both reconcilers use only these. |
+| block | What code does the work, once, so nobody builds it a second time? | `conditions.ClassifyBuildError` and the Reason constants of `internal/conditions` (`conditions.ReasonReconciled`, `conditions.ReasonFailed`, `conditions.ReasonWebhookSyncFailed`, `conditions.ReasonBuilding`, `conditions.ReasonBuildFailed`), `jslifecycle.RestartHistoryFor` for restart data, `apimeta.SetStatusCondition` from apimachinery for the condition. Searched `internal/` for `SetStatusCondition`, `Status().Update`, `Reason:`; both reconcilers use only these. |
 | example | Which real use in the code should others copy? | `jshook/controller.JSHookReconciler.Reconcile` and its `fail` method. |
 | test helper | How does a test use the aspect without effort? | `jsregistry.NewRegistry` for the registry log in unit tests; the envtest suite in `test/integration` for reconcilers. No helper asserts a status condition. Searched `*_test.go` for `Conditions`, `ObservedGeneration`: no hit. |
 | sides | Which sides does it touch? | Back end only: the two reconcilers, the registry, and the CRD types in `api/v1alpha1`. Users read the result through kubectl. |
@@ -83,6 +83,9 @@ Add a new failure cause to status:
   call result.
   Why: the removed fields lied about what the controller knew.
   Gate: missing → GATE-9. Violated today → STAT-1.
+- **R7** Report a JS instance that is not Ready as `Ready=False` with reason `Building` while the build runs and `BuildFailed`, with the build error as message, after it failed. Never wait for the build, and requeue a failed build only after the registry's backoff.
+  Why: users must tell a slow or hanging build from a rejected spec, and a failing build must not be retried in a tight loop.
+  Gate: `TestReconcile_HangingBuildDoesNotBlockOtherHook`, `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce`, `TestReconcile_BuildStates_ShowBuildingThenBuildFailed`.
 - **R6** Declare no CRD field that is neither implemented nor surfaced in
   status. This is a candidate project rule, not yet enforced.
   Why: not recorded.
@@ -90,7 +93,7 @@ Add a new failure cause to status:
 
 ## Decisions
 
-- **One condition type `Ready` with the reasons `Reconciled`, `Failed` and `WebhookSyncFailed`.** Status: accepted (2026-10-01, migrated from the old block; original date not recorded).
+- **One condition type `Ready` with the reasons `Reconciled`, `Failed`, `WebhookSyncFailed`, `Building` and `BuildFailed`.** Status: accepted (2026-10-01, migrated from the old block; original date not recorded).
   Why: richer detail lives in typed status fields and Events. The original reason is not recorded.
   Not taken: further condition types, because no source records a reason.
 - **Remove `LastExecution` and `LastReview` from status (commit c7d58ac).** Status: accepted (2026-10-01, migrated from the old block).

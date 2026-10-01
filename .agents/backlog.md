@@ -43,9 +43,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## REG: JS registry and restarts
 
-- **REG-1** `bug` Build-time hangs leak. A top-level `while(true)` or one in
-  `config()` holds the per-key build lock, no event fires. `RestartByKey` needs
-  one successful build first.
 - **REG-3** `gap` No finalizer on JSHook / JSAdmission. Deletion is seen via
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
@@ -215,8 +212,11 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **OPS-2** `gap` No per-hook RBAC narrowing. Wildcard `groups=*,resources=*`
   (`internal/jshook/controller/controller.go:103`); a bad script can touch
   anything.
-- **OPS-3** `debt` Fixed 5 s `RequeueAfter` on every failure path. A bad
-  source URL and a transient API error get the same retry.
+- **OPS-3** `debt` Fixed 5 s `RequeueAfter` on the failure paths that are not
+  builds: source load, kube host, config invalid, subscribe, webhook sync
+  (`fail` in both controllers). A bad source URL and a transient API error get
+  the same retry. Build failures already back off exponentially. Done when
+  these paths back off too.
 - **OPS-4** `gap` No release process. No tags, no versioned image.
 - **OPS-5** `decision` Tracing. scrippy exported OpenTelemetry traces per
   hook call. Decide whether gojsop traces calls, and how that relates to

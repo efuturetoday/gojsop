@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -117,32 +118,71 @@ type runFlags struct {
 	enableLeaderElection bool
 	secureMetrics        bool
 	enableHTTP2          bool
+	buildBackoffBase     time.Duration
+	buildBackoffMax      time.Duration
 	zap                  zap.Options
+}
+
+// backoff is the retry spacing of a failed JS build, handed to both
+// reconcilers.
+func (f runFlags) backoff() jsregistry.Backoff {
+	return jsregistry.Backoff{Base: f.buildBackoffBase, Max: f.buildBackoffMax}
+}
+
+// validate rejects flag values the operator cannot run with.
+func (f runFlags) validate() error {
+	if f.buildBackoffBase <= 0 {
+		return fmt.Errorf("--build-backoff-base must be positive, got %s", f.buildBackoffBase)
+	}
+	if f.buildBackoffMax < f.buildBackoffBase {
+		return fmt.Errorf("--build-backoff-max (%s) must not be below --build-backoff-base (%s)",
+			f.buildBackoffMax, f.buildBackoffBase)
+	}
+	return nil
 }
 
 // parseFlags binds every flag and parses os.Args.
 func parseFlags() runFlags {
+	f, err := parseFlagSet(flag.CommandLine, os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	return f
+}
+
+// parseFlagSet binds every flag on fs and parses args.
+func parseFlagSet(fs *flag.FlagSet, args []string) (runFlags, error) {
 	f := runFlags{zap: zap.Options{Development: true}}
-	flag.StringVar(&f.metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
+	fs.StringVar(&f.metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
-	flag.StringVar(&f.probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	flag.BoolVar(&f.enableLeaderElection, "leader-elect", false,
+	fs.StringVar(&f.probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	fs.BoolVar(&f.enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&f.secureMetrics, "metrics-secure", true,
+	fs.BoolVar(&f.secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
-	flag.StringVar(&f.webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
-	flag.StringVar(&f.webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
-	flag.StringVar(&f.webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
-	flag.StringVar(&f.metricsCertPath, "metrics-cert-path", "",
+	fs.StringVar(&f.webhookCertPath, "webhook-cert-path", "", "The directory that contains the webhook certificate.")
+	fs.StringVar(&f.webhookCertName, "webhook-cert-name", "tls.crt", "The name of the webhook certificate file.")
+	fs.StringVar(&f.webhookCertKey, "webhook-cert-key", "tls.key", "The name of the webhook key file.")
+	fs.StringVar(&f.metricsCertPath, "metrics-cert-path", "",
 		"The directory that contains the metrics server certificate.")
-	flag.StringVar(&f.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
-	flag.StringVar(&f.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
-	flag.BoolVar(&f.enableHTTP2, "enable-http2", false,
+	fs.StringVar(&f.metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
+	fs.StringVar(&f.metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
+	fs.BoolVar(&f.enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	f.zap.BindFlags(flag.CommandLine)
-	flag.Parse()
-	return f
+	fs.DurationVar(&f.buildBackoffBase, "build-backoff-base", time.Second,
+		"Base delay before a failed JS build is retried; doubles with every failed attempt in a row.")
+	fs.DurationVar(&f.buildBackoffMax, "build-backoff-max", 5*time.Minute,
+		"Upper bound of the delay between retries of a failed JS build.")
+	f.zap.BindFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return f, err
+	}
+	if err := f.validate(); err != nil {
+		return f, err
+	}
+	return f, nil
 }
 
 // tlsOptions assembles the TLS option chain. HTTP/2 is disabled by default to
@@ -262,6 +302,7 @@ func main() {
 		Dispatcher:   disp,
 		SubscribeCtx: managerCtx,
 		Recorder:     mgr.GetEventRecorder("jshook-controller"),
+		Backoff:      f.backoff(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSHook")
 		os.Exit(1)
@@ -291,6 +332,7 @@ func main() {
 		Server:    admissionServer,
 		Registrar: registrar,
 		Recorder:  mgr.GetEventRecorder("jsadmission-controller"),
+		Backoff:   f.backoff(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSAdmission")
 		os.Exit(1)

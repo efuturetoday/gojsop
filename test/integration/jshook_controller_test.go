@@ -92,16 +92,19 @@ var _ = Describe("JSHook Controller", func() {
 				Registry: jsregistry.NewRegistry(),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-
+			// The first reconcile only starts the build and reports it
+			// (jshook.R18); reconcile again until the VM is Ready.
 			updated := &corev1alpha1.JSHook{}
-			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
-			cond := apimeta.FindStatusCondition(updated.Status.Conditions, conditions.Ready)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			Eventually(func(g Gomega) {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+				cond := apimeta.FindStatusCondition(updated.Status.Conditions, conditions.Ready)
+				g.Expect(cond).NotTo(BeNil())
+				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+			}, "10s", "20ms").Should(Succeed())
 			Expect(updated.Status.Bindings).To(ContainElement("kubernetes:v1/ConfigMap/watch-cm"))
 			Expect(updated.Status.Bindings).To(ContainElement("onStartup:5"))
 			Expect(updated.Status.Instance).NotTo(BeNil())
@@ -132,14 +135,27 @@ var _ = Describe("JSHook Controller", func() {
 				Registry: jsregistry.NewRegistry(),
 				Recorder: recorder,
 			}
+			// jshook.R18: while the build runs the hook is Ready=False/Building.
 			res, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
-
+			Expect(res.RequeueAfter).To(BeZero())
 			updated := &corev1alpha1.JSHook{}
 			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
 			cond := apimeta.FindStatusCondition(updated.Status.Conditions, conditions.Ready)
 			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Reason).To(Equal(conditions.ReasonBuilding))
+
+			// jshook.R18: a failed build is Ready=False/BuildFailed and requeues with backoff.
+			Eventually(func(g Gomega) {
+				res, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+				cond = apimeta.FindStatusCondition(updated.Status.Conditions, conditions.Ready)
+				g.Expect(cond).NotTo(BeNil())
+				g.Expect(cond.Reason).To(Equal(conditions.ReasonBuildFailed))
+			}, "10s", "20ms").Should(Succeed())
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
 			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 			Expect(cond.Message).To(ContainSubstring("missing required export: " + missing + "()"))
 			Expect(recorder.Events).To(Receive(ContainSubstring(conditions.EventEntrypointMissing)))

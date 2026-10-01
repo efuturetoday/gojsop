@@ -61,7 +61,7 @@ timers. The [kube-access](kube-access.md) aspect covers the details.
 
 Add a new kind of resource that runs JavaScript:
 
-1. Build its VM only through `jsregistry.Registry.GetOrLoad` with explicit `jsengine.Limits`.
+1. Build its VM only through `jsregistry.Registry.Ensure` with explicit `jsengine.Limits`, and never wait for the build (js-registry.R15).
 2. Run its script only inside `jsregistry.Registry.Call`, with a deadline from `spec.limits.timeoutSeconds` (R2, R3).
 3. Classify errors with `errors.Is` against `jsengine.ErrCancelled` and `jsengine.ErrOOM` (R4).
 4. Choose the `kube` surface from `kubehost.Factory`: read-only for decisions (R6).
@@ -76,10 +76,10 @@ Add a new kind of resource that runs JavaScript:
   exception is building a VM inside the registry (module load and `config()`).
   Why: one place for the call lock, panic recovery and result classification.
   Gate: missing → GATE-4.
-- **R3** Give every call a context with a deadline from
+- **R3** Give every call, and every build (module load and `config()`), a context with a deadline from
   `spec.limits.timeoutSeconds`.
-  Why: without a deadline an endless loop holds the VM forever.
-  Gate: missing → GATE-5.
+  Why: without a deadline an endless loop holds the VM forever. A build that runs into its deadline leaves the hook `Ready=False` with reason `BuildFailed` (status-conditions.R7).
+  Gate: missing → GATE-5. The build deadline: `TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys`.
 - **R4** Classify engine errors with `errors.Is` against `jsengine.ErrCancelled`
   and `jsengine.ErrOOM`. Only `jsengine.wrapEngineErr` and `jsengine.closedModulePanic` (the one qjs panic the engine converts: a call on a module wazero closed) may inspect error or panic text.
   Why: qjs and wazero error strings change between versions.

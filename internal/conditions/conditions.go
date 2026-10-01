@@ -5,6 +5,9 @@ package conditions
 import (
 	"errors"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
 
@@ -24,6 +27,15 @@ const (
 	// the registrar could not write the central webhook configurations, so
 	// the apiserver does not (yet) call the policy.
 	ReasonWebhookSyncFailed = "WebhookSyncFailed"
+
+	// ReasonBuilding is the Reason on a Ready=False condition while the JS
+	// instance is being built: the hook is not ready yet, nothing failed.
+	ReasonBuilding = "Building"
+
+	// ReasonBuildFailed is the Reason on a Ready=False condition when the last
+	// build of the JS instance failed; the message carries the error and the
+	// reconciler retries with backoff.
+	ReasonBuildFailed = "BuildFailed"
 
 	// ManualRestartAnnotation triggers a manual instance restart on either
 	// CR. A new annotation value (typically a timestamp) forces exactly one
@@ -60,13 +72,21 @@ const (
 	EventReviewTimeout  = "ReviewTimeout"
 )
 
+// WasBuilding reports whether the Ready condition in conds says the last
+// reconcile found the instance Building or BuildFailed, so a VM that is Ready
+// now came out of a build.
+func WasBuilding(conds []metav1.Condition) bool {
+	c := apimeta.FindStatusCondition(conds, Ready)
+	return c != nil && (c.Reason == ReasonBuilding || c.Reason == ReasonBuildFailed)
+}
+
 // ClassifyBuildError maps a registry build error to a stable Event reason
 // and a low-cardinality Message template. Uses typed sentinels from
 // jsregistry (ErrNewVM, ErrBindHost, ErrLoadModule, ErrPostBuild) plus the
 // MissingExportError type — never sniffs error message strings.
 //
 // Shared between JSHook and JSAdmission reconcilers because both go through
-// the same Registry.GetOrLoad/RestartByKey path.
+// the same Registry.Ensure/RestartByKey path.
 // status-conditions.R3
 func ClassifyBuildError(err error) (reason, message string) {
 	var miss *jsregistry.MissingExportError

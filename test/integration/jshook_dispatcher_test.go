@@ -17,6 +17,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 )
 
 type configMapMapper struct{}
@@ -53,7 +54,7 @@ function handle(c) { log.push(c[0]); }`
 
 		reg := jsregistry.NewRegistry()
 		opts := jsregistry.BuildOptions{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}}
-		_, _, err := reg.GetOrLoad(ctx, jsregistry.HookKey(key), opts)
+		_, _, err := registrytest.GetOrLoad(reg, ctx, jsregistry.HookKey(key), opts)
 		Expect(err).NotTo(HaveOccurred())
 		dyn, err := dynamic.NewForConfig(cfg)
 		Expect(err).NotTo(HaveOccurred())

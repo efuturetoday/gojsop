@@ -56,10 +56,22 @@ func TestReconcile_RegistrarSyncFailure_ShowsReadyFalse(t *testing.T) {
 		Registrar: reg,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}
-	if _, err := r.Reconcile(ctx, req); err != nil {
-		t.Fatal(err)
+	// The first reconciles find the VM Building; go on until it is built.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, built := r.Registry.Get(jsregistry.AdmissionKey(req.NamespacedName))
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatal(err)
+		}
+		if built { // this reconcile found the VM Ready and published the policy
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("VM never built")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for reg.SyncError() == nil {
 		if time.Now().After(deadline) {
 			t.Fatal("registrar never failed")
@@ -80,5 +92,70 @@ func TestReconcile_RegistrarSyncFailure_ShowsReadyFalse(t *testing.T) {
 	}
 	if cond.ObservedGeneration != 1 {
 		t.Fatalf("observedGeneration: %d", cond.ObservedGeneration)
+	}
+}
+
+// While the VM is not ready the policy is Ready=False with reason Building or
+// BuildFailed; no reconcile waits for the build.
+//
+// jsadmission.R18
+// js-registry.R15
+// status-conditions.R7
+func TestReconcile_BuildStates_ShowBuildingThenBuildFailed(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	pol := &corev1alpha1.JSAdmission{
+		ObjectMeta: metav1.ObjectMeta{Name: "hang", Generation: 1},
+		Spec: corev1alpha1.JSAdmissionSpec{
+			Type:   "validating",
+			Source: corev1alpha1.JSSource{Inline: "while(true){}"},
+			Limits: &corev1alpha1.JSLimits{TimeoutSeconds: 1},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pol).WithStatusSubresource(pol).Build()
+	r := &JSAdmissionReconciler{
+		Client:   c,
+		Scheme:   scheme,
+		Loader:   jssource.NewChain(jssource.InlineLoader{}),
+		Registry: jsregistry.NewRegistry(),
+		Backoff:  jsregistry.Backoff{Base: time.Hour, Max: time.Hour},
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "hang"}}
+	t.Cleanup(func() { r.Registry.Drop(jsregistry.AdmissionKey(req.NamespacedName)) })
+	ready := func() *metav1.Condition {
+		var got corev1alpha1.JSAdmission
+		if err := c.Get(t.Context(), req.NamespacedName, &got); err != nil {
+			t.Fatal(err)
+		}
+		return apimeta.FindStatusCondition(got.Status.Conditions, conditions.Ready)
+	}
+
+	start := time.Now()
+	res, err := r.Reconcile(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > time.Second || res.RequeueAfter != 0 {
+		t.Fatalf("reconcile took %v, requeue %v; want a prompt return without requeue", time.Since(start), res.RequeueAfter)
+	}
+	if cond := ready(); cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != conditions.ReasonBuilding {
+		t.Fatalf("want Ready=False/Building, got %+v", cond)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	for ready().Reason != conditions.ReasonBuildFailed {
+		if time.Now().After(deadline) {
+			t.Fatalf("never BuildFailed: %+v", ready())
+		}
+		var err error
+		if res, err = r.Reconcile(t.Context(), req); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if res.RequeueAfter < 29*time.Minute || res.RequeueAfter > time.Hour {
+		t.Fatalf("RequeueAfter = %v, want the backoff derived from the configured base", res.RequeueAfter)
 	}
 }

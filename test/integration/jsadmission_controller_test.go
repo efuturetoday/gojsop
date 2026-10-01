@@ -84,10 +84,15 @@ var _ = Describe("JSAdmission Controller", func() {
 				Registry: jsregistry.NewRegistry(),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			// The first reconcile only starts the build; reconcile again until Ready.
+			Eventually(func(g Gomega) {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				g.Expect(err).NotTo(HaveOccurred())
+				_, ok := controllerReconciler.Registry.Get(jsregistry.AdmissionKey(typeNamespacedName))
+				g.Expect(ok).To(BeTrue())
+			}, "10s", "20ms").Should(Succeed())
 		})
 	})
 })

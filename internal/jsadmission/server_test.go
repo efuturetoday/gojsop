@@ -18,6 +18,7 @@ import (
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 )
 
 // pathLabels is the JSON-patch path the diff tests expect for label changes.
@@ -30,11 +31,11 @@ func loadPolicy(t *testing.T, src string, key types.NamespacedName) *jsregistry.
 	reg := jsregistry.NewRegistry()
 	t.Cleanup(func() { reg.Drop(jsregistry.AdmissionKey(key)) })
 	source := []byte(src)
-	// Embed a no-op config() so Registry.GetOrLoad doesn't reject the source.
+	// Embed a no-op config() so Registry.Ensure doesn't reject the source.
 	if !strings.Contains(src, "function config(") {
 		source = append([]byte("function config(){return {configVersion:'v1'}}\n"), source...)
 	}
-	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.AdmissionKey(key), jsregistry.BuildOptions{Source: source, SourceHash: "h1"}); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.AdmissionKey(key), jsregistry.BuildOptions{Source: source, SourceHash: "h1"}); err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
 	return reg

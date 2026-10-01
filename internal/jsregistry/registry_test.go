@@ -13,6 +13,7 @@ import (
 
 	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 )
 
 // js-registry.R5
@@ -24,7 +25,7 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 	key := types.NamespacedName{Name: "h1"}
 	opts := jsregistry.BuildOptions{Source: src, SourceHash: "abc123"}
 
-	mi, restarted, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
+	mi, restarted, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
@@ -39,7 +40,7 @@ func TestRegistry_PersistsAcrossLoads(t *testing.T) {
 		t.Fatalf("Eval: %v", err)
 	}
 
-	mi2, restarted2, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
+	mi2, restarted2, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad #2: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 	src1 := []byte(`globalThis.tag = "v1"; function config(){return {}}`)
 	src2 := []byte(`globalThis.tag = "v2"; function config(){return {}}`)
 
-	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src1, SourceHash: "h1"})
+	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src1, SourceHash: "h1"})
 	if err != nil {
 		t.Fatalf("load v1: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestRegistry_RestartOnSourceChange(t *testing.T) {
 		t.Fatalf("v1 tag: got %q", got)
 	}
 
-	mi2, restarted, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src2, SourceHash: "h2"})
+	mi2, restarted, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src2, SourceHash: "h2"})
 	if err != nil {
 		t.Fatalf("load v2: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestRegistry_RestartByKey_RebuildsFromCachedSource(t *testing.T) {
 	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 
 	src := []byte(`globalThis.counter = 0; function config(){return {}}`)
-	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{
+	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{
 		Source:     src,
 		SourceHash: "h1",
 		Limits:     jsengine.Limits{MemoryMB: 8},
@@ -161,7 +162,7 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 
 	src := []byte(`function config(){return {}}`)
-	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 
@@ -225,7 +226,7 @@ func TestRegistry_Get(t *testing.T) {
 		t.Fatal("Get must return false for unknown key")
 	}
 	src := []byte(`function config(){return {}}`)
-	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"})
+	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"})
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -240,7 +241,7 @@ func TestRegistry_Drop(t *testing.T) {
 	key := types.NamespacedName{Name: "h3"}
 
 	src := []byte(`function config(){return {}}`)
-	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "x"}); err != nil {
 		t.Fatalf("load: %v", err)
 	}
 	if reg.Len() != 1 {
@@ -258,7 +259,7 @@ func TestRegistry_Drop(t *testing.T) {
 func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "k"}
-	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{
 		Source:     []byte("function spin() { while (true) {} }\nfunction ok() { return 1; }"),
 		SourceHash: "h",
 	}); err != nil {
@@ -302,26 +303,26 @@ func TestRegistry_CancelledCall_IsCancelledAndRestartRebuildsDeadVM(t *testing.T
 
 // js-registry.R5
 // js-registry.R12
-func TestRegistry_GetOrLoad_RebuildsOnLimitsChange(t *testing.T) {
+func TestRegistry_Ensure_RebuildsOnLimitsChange(t *testing.T) {
 	reg := jsregistry.NewRegistry()
 	key := types.NamespacedName{Name: "lim"}
 	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })
 	src := []byte(`function ok(){return 1}`)
 	opts := jsregistry.BuildOptions{Source: src, SourceHash: "same", Limits: jsengine.Limits{MemoryMB: 16, TimeoutSeconds: 5}}
 
-	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
+	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
 
 	same := opts
 	same.Limits = jsengine.Limits{MemoryMB: 16, TimeoutSeconds: 5}
-	if mi2, restarted, _ := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), same); restarted || mi2 != mi {
+	if mi2, restarted, _ := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), same); restarted || mi2 != mi {
 		t.Fatalf("identical limits must not rebuild (restarted=%v)", restarted)
 	}
 
 	opts.Limits.MemoryMB = 64
-	mi3, restarted, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
+	mi3, restarted, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad changed limits: %v", err)
 	}
@@ -356,7 +357,7 @@ func TestRegistry_RestartByKey_BuildHasDeadline(t *testing.T) {
 			return nil, ctx.Err()
 		},
 	}
-	mi, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), opts)
+	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), opts)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
@@ -421,10 +422,10 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 			},
 		}
 	}
-	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(keyA), optsA(16)); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(keyA), optsA(16)); err != nil {
 		t.Fatalf("GetOrLoad A: %v", err)
 	}
-	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(keyB), jsregistry.BuildOptions{
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(keyB), jsregistry.BuildOptions{
 		Source: []byte(`function ping(){ return 1 }`), SourceHash: "b",
 	}); err != nil {
 		t.Fatalf("GetOrLoad B: %v", err)
@@ -489,7 +490,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	}
 	wg.Go(func() {
 		for i := range limitRebuilds {
-			if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(keyA), optsA(int32(24+i))); err != nil {
+			if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(keyA), optsA(int32(24+i))); err != nil {
 				errc <- fmt.Errorf("getorload: %w", err)
 				return
 			}
@@ -526,7 +527,7 @@ func TestRegistry_Concurrent_CallRestartDrop(t *testing.T) {
 	wg2.Go(func() {
 		for range dropCycles {
 			reg.Drop(jsregistry.HookKey(keyA))
-			if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(keyA), optsA(16)); err != nil {
+			if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(keyA), optsA(16)); err != nil {
 				errc <- fmt.Errorf("reload: %w", err)
 				return
 			}
@@ -557,11 +558,11 @@ func TestRegistry_SameNameInBothKindsCoexists(t *testing.T) {
 	hook, adm := jsregistry.HookKey(name), jsregistry.AdmissionKey(name)
 	t.Cleanup(func() { reg.Drop(hook); reg.Drop(adm) })
 
-	miH, _, err := reg.GetOrLoad(context.Background(), hook, jsregistry.BuildOptions{Source: []byte(`globalThis.who = "hook"`), SourceHash: "h"})
+	miH, _, err := registrytest.GetOrLoad(reg, context.Background(), hook, jsregistry.BuildOptions{Source: []byte(`globalThis.who = "hook"`), SourceHash: "h"})
 	if err != nil {
 		t.Fatalf("GetOrLoad hook: %v", err)
 	}
-	miA, _, err := reg.GetOrLoad(context.Background(), adm, jsregistry.BuildOptions{Source: []byte(`globalThis.who = "admission"`), SourceHash: "a"})
+	miA, _, err := registrytest.GetOrLoad(reg, context.Background(), adm, jsregistry.BuildOptions{Source: []byte(`globalThis.who = "admission"`), SourceHash: "a"})
 	if err != nil {
 		t.Fatalf("GetOrLoad admission: %v", err)
 	}

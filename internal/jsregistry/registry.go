@@ -21,13 +21,13 @@ import (
 type RestartReason string
 
 // Restart reasons. Every value is wired to a real trigger:
-//   - ReasonSourceChanged: spec.source's hash differs on Reconcile (Registry.GetOrLoad)
+//   - ReasonSourceChanged: spec.source's hash differs on Reconcile (Registry.Ensure)
 //   - ReasonMemoryLimit:   handle() returned an "out of memory" error (dispatcher worker / admission)
 //   - ReasonPanic:         handle() panicked (Registry.Call recover)
 //   - ReasonTimeout:       handle() exceeded the per-call deadline (admission, dispatcher)
 //   - ReasonTimeoutStreak: no longer set: a cancelled call closes the module, so every timeout restarts with ReasonTimeout; kept as CRD enum value
 //   - ReasonManual:        gojsop.io/restart annotation changed on the JSHook (reconciler)
-//   - ReasonLimitsChanged: spec.limits changed with the source hash unchanged (Registry.GetOrLoad)
+//   - ReasonLimitsChanged: spec.limits changed with the source hash unchanged (Registry.Ensure)
 const (
 	ReasonSourceChanged RestartReason = "source-changed"
 	ReasonMemoryLimit   RestartReason = "memory-limit"
@@ -178,7 +178,6 @@ type slot struct {
 	building bool
 	gen      uint64             // bumped for every started or cancelled build
 	cancel   context.CancelFunc // cancels the running build
-	done     chan struct{}      // closed when the running build ends
 
 	// Broken state.
 	err      error
@@ -225,6 +224,15 @@ type State struct {
 	Err      error
 	Attempts int
 	NextTry  time.Time
+}
+
+// minRetryIn keeps RetryIn from asking for a requeue in the past.
+const minRetryIn = 10 * time.Millisecond
+
+// RetryIn is how long a Broken key waits until Ensure starts the next build:
+// the time left to NextTry, at least minRetryIn.
+func (s State) RetryIn() time.Duration {
+	return max(time.Until(s.NextTry), minRetryIn)
 }
 
 func NewRegistry() *Registry {
@@ -330,13 +338,6 @@ func optsChanged(cur, opts BuildOptions) bool {
 // js-registry.R16
 // js-registry.R17
 func (r *Registry) Ensure(key Key, opts BuildOptions) State {
-	st, _ := r.ensure(key, opts, false)
-	return st
-}
-
-// ensure is Ensure plus the done channel of the running build and a force
-// flag that ignores the retry time of a Broken key.
-func (r *Registry) ensure(key Key, opts BuildOptions, force bool) (State, <-chan struct{}) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -351,12 +352,12 @@ func (r *Registry) ensure(key Key, opts BuildOptions, force bool) (State, <-chan
 		// The installed VM is what opts ask for (also when a build for other
 		// options runs: the change was taken back).
 		s.abortBuild()
-		return s.state(), nil
+		return s.state()
 	case s.building && !optsChanged(s.opts, opts):
-		return s.state(), s.done
+		return s.state()
 	case !s.building && s.vm == nil && s.err != nil && !optsChanged(s.opts, opts):
-		if !force && time.Now().Before(s.nextTry) {
-			return s.state(), nil
+		if time.Now().Before(s.nextTry) {
+			return s.state()
 		}
 		// retry: attempts keep counting
 	default:
@@ -373,12 +374,12 @@ func (r *Registry) ensure(key Key, opts BuildOptions, force bool) (State, <-chan
 	}
 	s.abortBuild()
 	s.opts = opts
-	done := r.startBuildLocked(key, s, reason)
-	return s.state(), done
+	r.startBuildLocked(key, s, reason)
+	return s.state()
 }
 
 // startBuildLocked starts the build goroutine for s.opts. r.mu must be held.
-func (r *Registry) startBuildLocked(key Key, s *slot, reason RestartReason) <-chan struct{} {
+func (r *Registry) startBuildLocked(key Key, s *slot, reason RestartReason) {
 	timeout := time.Duration(s.opts.Limits.WithDefaults().TimeoutSeconds) * time.Second
 	// The build outlives the reconcile that asked for it, so it derives from
 	// a background context, bounded by the timeout limit.
@@ -386,9 +387,7 @@ func (r *Registry) startBuildLocked(key Key, s *slot, reason RestartReason) <-ch
 	s.building = true
 	s.gen++
 	s.cancel = cancel
-	s.done = make(chan struct{})
-	go r.runBuild(ctx, cancel, key, s, s.gen, s.opts, reason, s.done)
-	return s.done
+	go r.runBuild(ctx, cancel, key, s, s.gen, s.opts, reason)
 }
 
 // runBuild builds a VM for opts under the per-key build lock and installs it,
@@ -398,8 +397,7 @@ func (r *Registry) startBuildLocked(key Key, s *slot, reason RestartReason) <-ch
 // js-registry.R6
 // js-registry.R7
 // js-registry.R18
-func (r *Registry) runBuild(ctx context.Context, cancel context.CancelFunc, key Key, s *slot, gen uint64, opts BuildOptions, reason RestartReason, done chan struct{}) {
-	defer close(done)
+func (r *Registry) runBuild(ctx context.Context, cancel context.CancelFunc, key Key, s *slot, gen uint64, opts BuildOptions, reason RestartReason) {
 	defer cancel()
 
 	s.buildMu.Lock()
@@ -476,32 +474,6 @@ func (r *Registry) installLocked(s *slot, mi *ManagedVM, reason RestartReason) *
 	s.err = nil
 	s.attempts = 0
 	return old
-}
-
-// GetOrLoad is Ensure that waits for the build: it returns the ManagedVM for
-// opts, or the build error. The boolean reports whether a different VM was
-// installed than the one before the call. A Broken key is retried at once.
-// ctx only bounds the wait, not the build.
-//
-// js-registry.R3
-// js-registry.R5
-func (r *Registry) GetOrLoad(ctx context.Context, key Key, opts BuildOptions) (*ManagedVM, bool, error) {
-	before, _ := r.Get(key)
-	st, done := r.ensure(key, opts, true)
-	for {
-		switch st.Kind {
-		case StateReady:
-			return st.VM, st.VM != before, nil
-		case StateBroken:
-			return nil, false, st.Err
-		}
-		select {
-		case <-done:
-		case <-ctx.Done():
-			return nil, false, ctx.Err()
-		}
-		st, done = r.ensure(key, opts, false)
-	}
 }
 
 // Get returns the current ManagedVM for key without modifying anything. The

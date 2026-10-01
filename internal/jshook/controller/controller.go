@@ -29,8 +29,11 @@ import (
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+	ctrlsource "sigs.k8s.io/controller-runtime/pkg/source"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
@@ -83,6 +86,10 @@ type JSHookReconciler struct {
 	// so unit tests that build the reconciler bare keep working. In
 	// production cmd/main.go injects mgr.GetEventRecorder(...).
 	Recorder events.EventRecorder
+
+	// Backoff spaces the retries of a hook whose build failed. Zero fields use
+	// the jsregistry defaults. cmd/main.go sets it from the operator flags.
+	Backoff jsregistry.Backoff
 }
 
 // eventAction is the action field every event carries; the events.k8s.io API
@@ -178,23 +185,36 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	mi, restarted, err := r.Registry.GetOrLoad(ctx, jsregistry.HookKey(req.NamespacedName), jsregistry.BuildOptions{
+	// The build runs in the background; the registry notifies this controller
+	// when it ends (SetupWithManager), so a reconcile never waits for it.
+	// js-registry.R15
+	// jshook.R18
+	st := r.Registry.Ensure(jsregistry.HookKey(req.NamespacedName), jsregistry.BuildOptions{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
 		Binder:     binder,
 		PostBuild:  readConfig,
+		Backoff:    r.Backoff,
 	})
-	if err != nil {
-		log.Error(err, "registry GetOrLoad")
-		eventReason, eventMsg := conditions.ClassifyBuildError(err)
-		return r.fail(ctx, &hook, eventReason, eventMsg, fmt.Sprintf("instance: %v", err))
+	switch st.Kind {
+	case jsregistry.StateBuilding:
+		log.V(1).Info("instance building")
+		return r.building(ctx, &hook)
+	case jsregistry.StateBroken:
+		log.Error(st.Err, "instance build failed", "attempts", st.Attempts, "retryIn", st.RetryIn())
+		eventReason, eventMsg := conditions.ClassifyBuildError(st.Err)
+		return r.buildFailed(ctx, &hook, eventReason, eventMsg, st)
 	}
+	mi := st.VM
+	restarted := instanceChanged(&hook, srcHash)
 	if restarted {
 		last := mi.LastRestart()
 		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(mi.History), "reason", last.Reason)
-		r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
-			fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
+		if last.Reason != "" && conditions.WasBuilding(hook.Status.Conditions) {
+			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
+				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
+		}
 	}
 
 	// Manual-restart annotation: a new value of gojsop.io/restart triggers
@@ -278,6 +298,47 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{}, nil
 }
 
+// instanceChanged reports whether the VM is new to the hook's status: the hook
+// was not Ready before (every rebuild passes through Building or Broken, which
+// write Ready=False) or the source hash differs. Then the bindings are
+// (re)subscribed and a restart is reported. A rescue restart does not count:
+// it keeps the subscription (DISP-9).
+func instanceChanged(hook *corev1alpha1.JSHook, srcHash string) bool {
+	inst := hook.Status.Instance
+	return inst == nil || inst.SourceHash != srcHash ||
+		!apimeta.IsStatusConditionTrue(hook.Status.Conditions, conditions.Ready)
+}
+
+// building writes Ready=False with the reason Building and returns without a
+// requeue: the registry notifies when the build ends.
+// jshook.R18
+// status-conditions.R1
+// status-conditions.R2
+func (r *JSHookReconciler) building(ctx context.Context, hook *corev1alpha1.JSHook) (ctrl.Result, error) {
+	apimeta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
+		Type:               conditions.Ready,
+		Status:             metav1.ConditionFalse,
+		Reason:             conditions.ReasonBuilding,
+		Message:            "JS instance is building",
+		ObservedGeneration: hook.Generation,
+	})
+	hook.Status.ObservedGeneration = hook.Generation
+	if err := r.Status().Update(ctx, hook); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// buildFailed records the failed build and requeues after the backoff the
+// registry computed from the number of failed attempts.
+// jshook.R18
+// status-conditions.R1
+// status-conditions.R2
+func (r *JSHookReconciler) buildFailed(ctx context.Context, hook *corev1alpha1.JSHook, eventReason, eventMsg string, st jsregistry.State) (ctrl.Result, error) {
+	return r.failReason(ctx, hook, conditions.ReasonBuildFailed, eventReason, eventMsg,
+		fmt.Sprintf("instance: %v", st.Err), st.RetryIn())
+}
+
 // fail records a Warning Event and writes a Failed condition. eventReason is
 // one of the EventXxxFailed reasons in the conditions package; eventMsg is
 // the static, low-cardinality template (see plan's "Message stability"
@@ -286,12 +347,20 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // status-conditions.R1
 // status-conditions.R2
 func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, eventReason, eventMsg, conditionMsg string) (ctrl.Result, error) {
+	// shell-operator-style 5s backoff on failure.
+	return r.failReason(ctx, hook, conditions.ReasonFailed, eventReason, eventMsg, conditionMsg, 5*time.Second)
+}
+
+// failReason is fail with an explicit condition Reason and requeue delay.
+// status-conditions.R1
+// status-conditions.R2
+func (r *JSHookReconciler) failReason(ctx context.Context, hook *corev1alpha1.JSHook, condReason, eventReason, eventMsg, conditionMsg string, requeue time.Duration) (ctrl.Result, error) {
 	r.event(hook, corev1.EventTypeWarning, eventReason, eventMsg)
 	now := metav1.NewTime(time.Now())
 	apimeta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
 		Type:               conditions.Ready,
 		Status:             metav1.ConditionFalse,
-		Reason:             conditions.ReasonFailed,
+		Reason:             condReason,
 		Message:            conditionMsg,
 		ObservedGeneration: hook.Generation,
 	})
@@ -303,8 +372,7 @@ func (r *JSHookReconciler) fail(ctx context.Context, hook *corev1alpha1.JSHook, 
 	if err := r.Status().Update(ctx, hook); err != nil {
 		return ctrl.Result{}, err
 	}
-	// shell-operator-style 5s backoff on failure.
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
 // limitsFromSpec maps the CRD's optional Limits to jsengine.Limits.
@@ -352,12 +420,29 @@ func (r *JSHookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Registry == nil {
 		r.Registry = jsregistry.NewRegistry()
 	}
+	// The registry reports every finished build of a JSHook; the forwarder
+	// turns it into a reconcile request.
+	ch := make(chan event.TypedGenericEvent[*corev1alpha1.JSHook])
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		for key := range r.Registry.Watch(ctx, jsregistry.KindJSHook) {
+			hook := &corev1alpha1.JSHook{ObjectMeta: metav1.ObjectMeta{Name: key.Name.Name, Namespace: key.Name.Namespace}}
+			select {
+			case ch <- event.TypedGenericEvent[*corev1alpha1.JSHook]{Object: hook}:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+		return nil
+	})); err != nil {
+		return err
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSHook{}).
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(jssource.JSHookConfigMapMapper(mgr.GetClient())),
 		).
+		WatchesRawSource(ctrlsource.Channel(ch, &handler.TypedEnqueueRequestForObject[*corev1alpha1.JSHook]{})).
 		Named("jshook").
 		Complete(r)
 }

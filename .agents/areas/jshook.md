@@ -46,7 +46,7 @@ instead of events.
   1. The author returns `{ kubernetes: [{ name, apiVersion, kind, ... }] }` from `config()`.
   2. gojsop reads `config()` once when it builds the hook's VM.
   3. gojsop starts watching each declared binding and reports the bindings in `status.bindings`.
-- **Exceptions**: a missing `config` or `handle` export, a throwing `config()` or a non-JSON result fails the build and the hook reports it in its status (jshook.R2). A changed `config()` takes effect only after a rebuild (jshook.R1).
+- **Exceptions**: a missing `config` or `handle` export, a throwing `config()` or a non-JSON result fails the build and the hook reports it in its status (jshook.R2, jshook.R18). A changed `config()` takes effect only after a rebuild (jshook.R1).
 - **Result**: the hook is subscribed to exactly the declared bindings.
 
 ### jshook.UC2 Receive the current state, then changes
@@ -122,6 +122,7 @@ instead of events.
 | jshook.R15 | A namespace (one name) and `labelSelector.matchLabels` restrict the objects delivered. | `jshook.KubernetesBinding` | `TestControllers` |
 | jshook.R16 | A binding field that gojsop does not act on is not presented as working (project rule API-1). Violated today: `schedule`, `onStartup`, `jqFilter`, `allowFailure`, `queue`, other selector forms. | decision API-1 | missing → DISP-1 |
 | jshook.R17 | A hook whose informer does not sync does not block Subscribe or Drop of other hooks; Drop of that hook cancels its pending Subscribe. | `dispatcher.Dispatcher.Subscribe`, `dispatcher.Dispatcher.Drop` | `TestDispatcher_SlowSync_DoesNotBlockOtherHooks` |
+| jshook.R18 | While the VM is not ready the hook is `Ready=False` with reason `Building` (the build runs; the reconcile does not wait for it) or `BuildFailed` (the last build failed; retried with backoff, a source change rebuilds at once). | [js-registry](../aspects/js-registry.md), status-conditions.R7 | `TestReconcile_HangingBuildDoesNotBlockOtherHook`, `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce` |
 
 Every rule is held by a test or is `missing → <KEY>`.
 

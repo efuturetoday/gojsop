@@ -9,6 +9,7 @@ import (
 
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 )
 
 // captureEmitter buffers (eventType, reason, message) tuples so tests can
@@ -25,7 +26,7 @@ func captureEmitter(buf int) (chan [3]string, EventEmitter) {
 func loadInstance(t *testing.T, reg *jsregistry.Registry, key types.NamespacedName) {
 	t.Helper()
 	src := []byte(`function config(){return {configVersion:'v1'}} function handle(){}`)
-	if _, _, err := reg.GetOrLoad(context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "h1"}); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsregistry.HookKey(key), jsregistry.BuildOptions{Source: src, SourceHash: "h1"}); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
 	t.Cleanup(func() { reg.Drop(jsregistry.HookKey(key)) })

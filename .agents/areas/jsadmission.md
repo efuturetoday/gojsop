@@ -94,6 +94,7 @@ A policy decides on a request and must not change the cluster, so it can read ot
 | jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `cmd/main.go` (`excludeNamespaces`); extent open in ADM-6 | missing → ADM-6 |
 | jsadmission.R16 | A response with `allowed=false` carries no patch. | admission.k8s.io/v1 (`AdmissionResponse`) | `TestServer_Mutate_Denied_HasNoPatch` |
 | jsadmission.R17 | When the central webhook configurations cannot be written, the policy shows `Ready=False` with reason `WebhookSyncFailed`, the registrar retries, and `Ready` returns to `True` once it succeeds. | `Registrar.SyncError` and `JSAdmissionReconciler.Reconcile`; status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse`, `TestRegistrar_SyncFailure_IsRetriedAndReported` |
+| jsadmission.R18 | While the VM is not ready the policy is `Ready=False` with reason `Building` (the build runs; the reconcile does not wait for it) or `BuildFailed` (the last build failed; retried with backoff, a source change rebuilds at once). | [js-registry](../aspects/js-registry.md), status-conditions.R7 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
 
 ## Aspects
 

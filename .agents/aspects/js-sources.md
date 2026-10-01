@@ -5,14 +5,14 @@ entrypoints:
   - jssource.Chain.Load
   - jssource.Hash
   - jssource.ConfigMapLoader.Load
-  - jsregistry.Registry.GetOrLoad
+  - jsregistry.Registry.Ensure
 ---
 
 # JS Sources
 
 This aspect describes how gojsop turns `spec.source` of a JSHook or JSAdmission into the JavaScript text that a VM runs.
 
-The controller resolves the source, not the registry. Each reconcile calls one shared `jssource.Chain` with `spec.source`. The chain asks its loaders in order, and the first loader that claims the source returns the bytes. The controller hashes the bytes (sha256) and passes the hash as `SourceHash` to `jsregistry.Registry.GetOrLoad`. A new hash rebuilds the VM. The same hash reuses it. The registry sees only bytes and a hash. See [js-registry](js-registry.md) for the rebuild itself.
+The controller resolves the source, not the registry. Each reconcile calls one shared `jssource.Chain` with `spec.source`. The chain asks its loaders in order, and the first loader that claims the source returns the bytes. The controller hashes the bytes (sha256) and passes the hash as `SourceHash` to `jsregistry.Registry.Ensure`. A new hash rebuilds the VM. The same hash reuses it. The registry sees only bytes and a hash. See [js-registry](js-registry.md) for the rebuild itself.
 
 Two loaders exist: inline and ConfigMap. `spec.source.oci` is accepted by the CRD, but no loader serves it, so it fails with "no loader matched" (SRC-1). A `configMapRef` needs an explicit namespace, because both CRs are cluster-scoped. The key defaults to `hook.js`.
 

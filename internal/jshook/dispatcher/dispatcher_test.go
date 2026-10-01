@@ -25,6 +25,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jsregistry"
+	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 )
 
 var cmGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
@@ -85,7 +86,7 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 		}))
 		return nil
 	})
-	_, _, err := e.reg.GetOrLoad(context.Background(), jsregistry.HookKey(e.key), jsregistry.BuildOptions{
+	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsregistry.HookKey(e.key), jsregistry.BuildOptions{
 		Source: []byte(src), SourceHash: "h", Limits: lim, Binder: binder,
 	})
 	if err != nil {
