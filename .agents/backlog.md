@@ -25,6 +25,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 | Operations (metrics, RBAC, reconcile) | OPS | planned |
 | Gates and test infrastructure | GATE | [testing](aspects/testing.md) |
 | Documentation | DOC | none |
+| Operator UI | UI | none (area not decided, UI-1) |
 
 ## EXEC: JS execution
 
@@ -225,6 +226,11 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   unbounded against the etcd object size limit (`api/v1alpha1/js_shared.go:34-35`).
 - **API-8** `decision` Breaking-change policy on `v1alpha1` is unwritten. Working
   assumption in api-design: edit in place until `v1beta1`.
+- **API-9** `decision` Namespaced and cluster-scoped kinds. scrippy (the
+  predecessor) split `ScriptHook` (own namespace only) from
+  `ClusterScriptHook` (anywhere), Kyverno style. gojsop has only
+  cluster-scoped kinds and a wildcard RBAC (OPS-2). Decide whether gojsop
+  needs the split. Done when the decision is recorded in api-design.
 ## OPS: Operations
 
 - **OPS-1** `gap` No Prometheus metrics. `--metrics-bind-address` exists, but
@@ -236,6 +242,12 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **OPS-3** `debt` Fixed 5 s `RequeueAfter` on every failure path. A bad
   source URL and a transient API error get the same retry.
 - **OPS-4** `gap` No release process. No tags, no versioned image.
+- **OPS-5** `decision` Tracing. scrippy exported OpenTelemetry traces per
+  hook call. Decide whether gojsop traces calls, and how that relates to
+  events and metrics (OPS-1). Done when decided and recorded in an aspect.
+- **OPS-6** `decision` Audit log. scrippy kept an audit trail of what hooks
+  did to the cluster (`kube.apply`, `kube.delete`). Decide whether gojsop
+  needs one and where it lives. Done when decided and recorded in an aspect.
 
 ## GATE: Gates and test infrastructure
 
@@ -312,3 +324,12 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `lint.yml` needs `GOPRIVATE` plus a token with read access, set as a
   repository secret once gojsop has a remote. Done when the lint job runs
   the SDLC check green.
+
+## UI: Operator UI
+
+- **UI-1** `decision` Operator web UI. scrippy had an Angular app (hook
+  list and detail, live feed, audit overview, metrics panel, traces) with its
+  own image. Decide whether gojsop gets a UI, for whom (operator admins, not
+  hook authors), and what it shows. It would be a new area with its own
+  users and a second side (front end). Depends on OPS-1, OPS-5, OPS-6 for
+  its data. Done when decided; if yes, the area exists as `proposed`.
