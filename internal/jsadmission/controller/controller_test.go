@@ -57,7 +57,9 @@ func TestReconcile_RegistrarSyncFailure_ShowsReadyFalse(t *testing.T) {
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}
 	// The first reconciles find the VM Building; go on until it is built.
-	deadline := time.Now().Add(10 * time.Second)
+	// The first build compiles the QuickJS wasm module, which takes several
+	// seconds under -race on a slow CI runner.
+	deadline := time.Now().Add(60 * time.Second)
 	for {
 		_, built := r.Registry.Get(jsregistry.AdmissionKey(req.NamespacedName))
 		if _, err := r.Reconcile(ctx, req); err != nil {
