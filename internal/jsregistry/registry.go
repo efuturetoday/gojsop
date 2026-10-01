@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/o-haase/gojsop/internal/jsengine"
 )
@@ -316,15 +317,20 @@ func (r *Registry) Get(key types.NamespacedName) (*ManagedVM, bool) {
 // GetOrLoad is mid-build for the same key it will finish and install a
 // zombie VM, which the next reconcile (NotFound → Drop) cleans up.
 func (r *Registry) Drop(key types.NamespacedName) {
+	logger := log.Log.WithName("jsregistry").WithValues("key", key.String())
 	r.mu.Lock()
 	mi := r.vms[key]
 	delete(r.vms, key)
 	delete(r.buildLocks, key)
 	r.mu.Unlock()
 
+	logger.Info("drop entered", "vmFound", mi != nil)
 	if mi != nil {
 		mi.CallMu.Lock()
+		logger.Info("drop closing vm")
+		start := time.Now()
 		mi.VM.Close()
+		logger.Info("drop closed vm", "duration", time.Since(start))
 		mi.CallMu.Unlock()
 	}
 }

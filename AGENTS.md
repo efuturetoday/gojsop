@@ -1,5 +1,10 @@
 # gojsop - AI Agent Guide
 
+**Start here: [.agents/README.md](.agents/README.md).** Project decisions, the
+code that implements them, rules and gates live in blocks under `.agents/blocks/`.
+Read the blocks for the area you touch before changing code. The rest of this
+file is the generic Kubebuilder guide.
+
 ## Project Structure
 
 **Single-group layout (default):**
