@@ -61,6 +61,12 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **REG-6** `doc` Two concurrency models on one lock: JSHook uses informer
   queue plus FIFO worker, JSAdmission is a synchronous webhook. Document the
   asymmetry in the js-registry block.
+- **REG-8** `decision` A failed rescue build keeps the old VM installed
+  (`jsregistry.Registry.RestartByKey`). After a timeout that VM is dead, so
+  every later call panics on the closed module and triggers the next rescue,
+  one `RescueFailed` event per call, until a build succeeds. No crash, but a
+  loop. Decide: keep, drop the VM and report the hook as not ready, or back
+  off. Done when decided and held by a test.
 
 ## STAT: Status and conditions
 
