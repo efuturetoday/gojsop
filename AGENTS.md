@@ -18,6 +18,10 @@ rules and the gates that enforce it.
 4. Write and change blocks as described in
    [.agents/skills/write-block](.agents/skills/write-block/SKILL.md);
    `make check-blocks` must pass.
+5. Write commit messages with the caveman-commit skill
+   ([.agents/skills/caveman-commit](.agents/skills/caveman-commit/SKILL.md)):
+   Conventional Commits, imperative subject, body only for the non-obvious
+   why. Name the backlog key when a commit closes an item.
 
 ## Critical rules
 

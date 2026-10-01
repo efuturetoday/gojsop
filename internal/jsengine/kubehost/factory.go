@@ -20,6 +20,7 @@ import (
 //
 // The sa argument is the ServiceAccount the resource asked to run as. Today's
 // SharedFactory ignores it; Phase 2 threads it into TokenRequest.
+// Block: kube-access R1
 type Factory interface {
 	ForHook(ctx context.Context, key types.NamespacedName, sa string) (jsengine.HostBinder, error)
 	ForAdmission(ctx context.Context, key types.NamespacedName, sa string) (jsengine.HostBinder, error)
@@ -50,6 +51,8 @@ func (f *SharedFactory) ForHook(_ context.Context, _ types.NamespacedName, _ str
 // ForAdmission returns a *ReadOnlyKubeHost wrapping a fresh *KubeHost over
 // the shared client. The wrapping is what restricts the bound surface; the
 // underlying client and mapper are identical to ForHook's.
+// Block: kube-access R2
+// Block: admission-webhook R4
 func (f *SharedFactory) ForAdmission(_ context.Context, _ types.NamespacedName, _ string) (jsengine.HostBinder, error) {
 	return &ReadOnlyKubeHost{KubeHost: &KubeHost{Ctx: f.Ctx, Dyn: f.Dyn, Mapper: f.Mapper}}, nil
 }

@@ -48,6 +48,7 @@ type EventEmitter = jslifecycle.EventEmitter
 
 // timeoutStreakThreshold is how many consecutive Handle() calls may exceed
 // Limits.TimeoutSeconds before the instance is rescue-restarted.
+// Block: hook-dispatch R6
 const timeoutStreakThreshold = 3
 
 // eventKey identifies a queued BindingContext. All fields are strings, so the
@@ -56,6 +57,7 @@ const timeoutStreakThreshold = 3
 // entry while still distinguishing Added/Modified/Deleted and old/new UIDs.
 //
 // For Synchronization-type contexts only `binding` and `event` are populated.
+// Block: hook-dispatch R3
 type eventKey struct {
 	binding   string
 	event     string
@@ -105,6 +107,7 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsregistry.Registry) *Di
 // emit (optional) publishes lifecycle events; pass nil in tests.
 //
 // If a subscription already exists for key, it is torn down first.
+// Block: hook-dispatch R2
 func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, cfg *jshook.Config, emit EventEmitter) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -155,6 +158,7 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 }
 
 // Drop tears down all subscriptions for the given key.
+// Block: hook-dispatch R8
 func (d *Dispatcher) Drop(key types.NamespacedName) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -197,12 +201,14 @@ type subscription struct {
 // worker goroutine has actually exited. Subscribe() relies on this so that
 // re-subscribing the same hook can never overlap an in-flight handle() call
 // from the previous subscription.
+// Block: hook-dispatch R2
 func (s *subscription) stop() {
 	s.queue.ShutDown()
 	s.cancel()
 	s.wg.Wait()
 }
 
+// Block: hook-dispatch R4
 func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, b jshook.KubernetesBinding) error {
 	ns := metav1.NamespaceAll
 	if b.Namespace != nil && b.Namespace.NameSelector != nil && len(b.Namespace.NameSelector.MatchNames) == 1 {
@@ -383,6 +389,7 @@ func uidOf(raw map[string]any) string {
 // enqueueSynchronization ships a single Synchronization-type BindingContext
 // carrying the snapshot of existing objects. shell-operator parity: hooks see
 // this once per (re)Subscribe before any per-object events.
+// Block: hook-dispatch R4
 func (s *subscription) enqueueSynchronization(bindingName string, objs []jshook.SyncObject) {
 	k := eventKey{binding: bindingName, event: "Synchronization"}
 	bc := jshook.BindingContext{
@@ -433,6 +440,7 @@ func (s *subscription) runWorker(ctx context.Context) {
 // rescues the VM. Rationale: with hard cancellation the call may be
 // killed mid-write or mid-IO and a one-off slow path shouldn't kill a
 // healthy VM, but a *streak* signals genuine breakage.
+// Block: hook-dispatch R5
 func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
 	mi, ok := s.reg.Get(s.key)
 	if !ok {
@@ -520,6 +528,7 @@ func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (
 // canonical Restarted / RescueFailed events) and resets the timeout streak.
 // On rebuild failure it logs and leaves the dead instance in place — the next
 // reconcile will retry; the queue keeps eating events meanwhile.
+// Block: hook-dispatch R6
 func (s *subscription) rescue(logger logr.Logger, reason jsregistry.RestartReason) {
 	if _, err := jslifecycle.Rescue(s.reg, s.key, reason, s.emit); err != nil {
 		logger.Error(err, "rescue restart failed", "reason", reason)
@@ -538,6 +547,7 @@ func (s *subscription) publish(eventType, reason, message string) {
 
 // requeue stashes bc back under qkey (unless a fresher event arrived) and
 // re-enqueues with rate-limited backoff.
+// Block: hook-dispatch R7
 func (s *subscription) requeue(qkey eventKey, bc jshook.BindingContext) {
 	s.pendMu.Lock()
 	if _, fresher := s.pending[qkey]; !fresher {

@@ -16,6 +16,7 @@ import (
 //
 // ctx is the build / reconcile context — config() runs once per build, so
 // this gets the reconcile deadline rather than the per-call timeout.
+// Block: hook-dispatch R1
 func ReadConfig(ctx context.Context, vm *jsengine.VM) (*Config, error) {
 	if !vm.HasExport("config") {
 		return nil, nil

@@ -83,6 +83,7 @@ func admissionServiceFromEnv() admissionregv1.ServiceReference {
 
 // fileCABundleProvider reads the PEM CA bundle off disk every time it's
 // called so cert-manager rotations propagate within one Sync window.
+// Block: admission-webhook R12
 func fileCABundleProvider(certDir string) jsadmission.CABundleProvider {
 	if certDir == "" {
 		certDir = "/tmp/k8s-webhook-server/serving-certs"

@@ -43,12 +43,16 @@ const (
 //
 // ctx is the build / reconcile context — config() runs once per build, so
 // the hook's reconcile deadline applies.
+//
+// Block: js-registry R10
 type PostBuildHook func(ctx context.Context, vm *jsengine.VM) (extra any, err error)
 
 // BuildOptions bundles every input the registry needs to build (or rebuild)
 // a VM. Caching the whole struct on ManagedVM lets RestartByKey rebuild
 // without callers having to re-supply source, limits or the host binder —
 // the dispatcher's rescue path doesn't have those in hand.
+//
+// Block: js-registry R4
 type BuildOptions struct {
 	Source     []byte
 	SourceHash string
@@ -76,6 +80,8 @@ type RestartEvent struct {
 // ManagedVM is the registry's view of a per-resource persistent VM. Opts is
 // cached so the registry can rebuild the VM after a rescue restart without
 // bouncing through the controller.
+//
+// Block: js-registry R9
 type ManagedVM struct {
 	VM        *jsengine.VM
 	Opts      BuildOptions
@@ -157,6 +163,8 @@ func NewRegistry() *Registry {
 // The map of build locks is itself protected by r.mu, but the returned
 // mutex is acquired by the caller without holding r.mu — that is the whole
 // point of the split.
+//
+// Block: js-registry R7
 func (r *Registry) getBuildLock(key types.NamespacedName) *sync.Mutex {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -176,6 +184,8 @@ func (r *Registry) getBuildLock(key types.NamespacedName) *sync.Mutex {
 // ctx is the build / reconcile context, plumbed into wazero so a stuck
 // LoadModule or PostBuild can be cancelled by a controller shutdown or a
 // reconcile deadline.
+//
+// Block: js-registry R6
 func (r *Registry) build(ctx context.Context, key types.NamespacedName, opts BuildOptions) (*ManagedVM, error) {
 	vm, err := jsengine.New(opts.Limits)
 	if err != nil {
@@ -227,6 +237,10 @@ func (r *Registry) build(ctx context.Context, key types.NamespacedName, opts Bui
 //  4. run build() with no global lock held — user JS executes here
 //  5. install the new VM under r.mu, after taking the old VM's CallMu so
 //     no in-flight call races vm.Close()
+//
+// Block: js-registry R3
+// Block: js-registry R5
+// Block: js-registry R7
 func (r *Registry) GetOrLoad(ctx context.Context, key types.NamespacedName, opts BuildOptions) (*ManagedVM, bool, error) {
 	// 1. fast path
 	r.mu.Lock()
@@ -273,6 +287,10 @@ func (r *Registry) GetOrLoad(ctx context.Context, key types.NamespacedName, opts
 //
 // reason / err are the trigger for *this* transition; they are appended to
 // History and bump RestartsByReason[reason] by one.
+//
+// Block: js-registry R8
+// Block: js-registry R11
+// Block: status-conditions R4
 func (r *Registry) installNew(key types.NamespacedName, mi *ManagedVM, reason RestartReason, err error) *ManagedVM {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -316,6 +334,8 @@ func (r *Registry) Get(key types.NamespacedName) (*ManagedVM, bool) {
 // The build lock is dropped too; in the unlikely case a concurrent
 // GetOrLoad is mid-build for the same key it will finish and install a
 // zombie VM, which the next reconcile (NotFound → Drop) cleans up.
+//
+// Block: js-registry R8
 func (r *Registry) Drop(key types.NamespacedName) {
 	logger := log.Log.WithName("jsregistry").WithValues("key", key.String())
 	r.mu.Lock()
@@ -350,6 +370,10 @@ func (r *Registry) Drop(key types.NamespacedName) {
 // the dispatcher / admission server, not by a per-reconcile deadline, and
 // blocking the rescue on a request context that's about to be cancelled
 // would mean every timeout-rescue starts from a half-built VM.
+//
+// Block: js-registry R4
+// Block: js-registry R7
+// Block: js-registry R8
 func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) (*ManagedVM, error) {
 	bMu := r.getBuildLock(key)
 	bMu.Lock()
@@ -390,6 +414,7 @@ func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) 
 // long durations on whichever caller queues behind the offender.
 //
 // Block: js-execution R2
+// Block: js-registry R1
 func (r *Registry) Call(ctx context.Context, key types.NamespacedName, fn func(ctx context.Context, vm *jsengine.VM) error) (CallResult, *ManagedVM, error) {
 	mi, ok := r.Get(key)
 	if !ok {

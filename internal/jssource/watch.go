@@ -23,6 +23,7 @@ import (
 // The list is unindexed: each ConfigMap event walks the JSHook list. Cheap at
 // realistic operator scale (tens of hooks); add a field index later if a
 // large fleet ever shows up in profiles.
+// Block: js-sources R4
 func JSHookConfigMapMapper(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		return mapConfigMapToCRs(ctx, c, obj, &corev1alpha1.JSHookList{})
@@ -31,6 +32,7 @@ func JSHookConfigMapMapper(c client.Client) handler.MapFunc {
 
 // JSAdmissionConfigMapMapper is the JSAdmission counterpart to
 // JSHookConfigMapMapper. Same shape, different list type.
+// Block: js-sources R4
 func JSAdmissionConfigMapMapper(c client.Client) handler.MapFunc {
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
 		return mapConfigMapToCRs(ctx, c, obj, &corev1alpha1.JSAdmissionList{})

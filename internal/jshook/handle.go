@@ -15,6 +15,7 @@ import (
 // ctx is plumbed into wazero via the VM's CloseOnContextDone wiring;
 // passing a context with deadline gives the JS call a real timeout
 // (returns jsengine.ErrCancelled).
+// Block: hook-dispatch R5
 func Handle(ctx context.Context, vm *jsengine.VM, bindingCtx []BindingContext) (string, error) {
 	return vm.CallExport(ctx, "handle", bindingCtx)
 }

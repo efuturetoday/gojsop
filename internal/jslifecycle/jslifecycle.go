@@ -51,6 +51,8 @@ type EventEmitter func(eventType, reason, message string)
 // defeat dedup. Callers should log it through their own logger.
 //
 // The emitter is optional; passing nil is supported.
+//
+// Block: js-registry R2
 func Rescue(reg *jsregistry.Registry, key types.NamespacedName, reason jsregistry.RestartReason, emit EventEmitter) (*jsregistry.ManagedVM, error) {
 	mi, err := reg.RestartByKey(key, reason)
 	if err != nil {
@@ -68,6 +70,7 @@ func Rescue(reg *jsregistry.Registry, key types.NamespacedName, reason jsregistr
 // newest-first (so JSONPath print columns can read [0] without index-from-end
 // gymnastics). The registry stores history oldest-first; we reverse here so
 // the storage order stays the natural "append on transition" shape.
+// Block: status-conditions R4
 func RestartHistoryFor(mi *jsregistry.ManagedVM) (map[string]int32, []corev1alpha1.JSRestartEvent) {
 	if mi == nil {
 		return nil, nil

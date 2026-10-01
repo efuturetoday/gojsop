@@ -18,7 +18,7 @@ blocks instead of repeating them.>
 
 - **R1** <One imperative sentence.>
   Why: <one sentence>.
-  Gate: `TestName` or `make target`. Or: missing → GATE-n.
+  Gate: `TestName` or `make target`. Or: missing → GATE-n. Or: review only — <why>.
 
 ## Rejected
 

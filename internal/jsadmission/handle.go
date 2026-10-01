@@ -87,6 +87,7 @@ type AdmissionResult struct {
 //
 // ctx is plumbed into wazero via VM.WithContext; a context with deadline
 // gives the JS call a real timeout (returns jsengine.ErrCancelled).
+// Block: admission-webhook R7
 func Handle(ctx context.Context, vm *jsengine.VM, req *AdmissionRequest, mutating bool) (*AdmissionResult, error) {
 	if req == nil {
 		return nil, fmt.Errorf("admission request is nil")

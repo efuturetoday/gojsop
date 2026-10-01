@@ -30,6 +30,7 @@ var immutablePatchPrefixes = []string{
 // CreatePatch diffs originalRaw → modifiedObject and returns a JSONPatch
 // (RFC 6902) suitable for an AdmissionResponse.Patch. Immutable paths are
 // filtered out (see immutablePatchPrefixes).
+// Block: admission-webhook R8
 func CreatePatch(originalRaw []byte, modifiedObject map[string]any) ([]jsonpatch.JsonPatchOperation, error) {
 	if len(originalRaw) == 0 || modifiedObject == nil {
 		return nil, nil

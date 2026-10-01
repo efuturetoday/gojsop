@@ -32,6 +32,10 @@ The reference block is `.agents/blocks/js-execution.md`. The empty skeleton is
      Why: <one sentence>.
      Gate: `TestName`, `make target`, or missing → GATE-n.
    ```
+   A missing gate always names a backlog key. If no `GATE-n` fits, add a new
+   one to the backlog; never borrow an unrelated key. If a machine cannot
+   check the rule, write `Gate: review only — <why>`. Never drop a rule to
+   avoid a gate.
    Number rules R1..Rn per block. Never renumber; mark a dropped rule
    `(withdrawn)` instead. A violated rule adds "Violated today → <key>".
 5. **`## Rejected`.** Alternatives that were considered, one line each with

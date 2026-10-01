@@ -36,6 +36,7 @@ var (
 	testRe     = regexp.MustCompile(`^(Test|Benchmark)[A-Za-z0-9_]*\*?$`)
 	ruleRe     = regexp.MustCompile(`^- \*\*(R[0-9]+)\*\*`)
 	anchorRe   = regexp.MustCompile(`Block: ([a-z0-9-]+) (R[0-9]+)`)
+	gateKeyRe  = regexp.MustCompile(`GATE-[0-9]+`)
 )
 
 // index holds everything the blocks may reference.
@@ -280,24 +281,47 @@ func checkBlock(idx *index, path string) (*block, []string, error) {
 		}
 		if strings.Contains(l, "Gate:") {
 			hasGate = true
-		}
-		missing := strings.Contains(l, "missing")
-		for _, m := range backtickRe.FindAllStringSubmatch(l, -1) {
-			ref := m[1]
-			switch {
-			case testRe.MatchString(ref):
-				if !missing && !testExists(idx, ref) {
-					report(i, "test %s not found in code", ref)
-				}
-			case symbolRe.MatchString(ref) && idx.pkgs[strings.SplitN(ref, ".", 2)[0]]:
-				if !idx.symbols[ref] {
-					report(i, "symbol %s not found in code", ref)
-				}
+			if strings.Contains(l, "missing") && !gateKeyRe.MatchString(gateText(lines, i)) {
+				report(i, "missing gate without backlog key (write: missing → GATE-n)")
 			}
+		}
+		for _, msg := range checkRefs(idx, l) {
+			report(i, "%s", msg)
 		}
 	}
 	closeRule()
 	return b, problems, nil
+}
+
+// checkRefs reports backticked tests and symbols on one line that do not
+// exist. Tests on lines that mention "missing" are proposals and skipped.
+func checkRefs(idx *index, line string) []string {
+	var msgs []string
+	missing := strings.Contains(line, "missing")
+	for _, m := range backtickRe.FindAllStringSubmatch(line, -1) {
+		ref := m[1]
+		switch {
+		case testRe.MatchString(ref):
+			if !missing && !testExists(idx, ref) {
+				msgs = append(msgs, "test "+ref+" not found in code")
+			}
+		case symbolRe.MatchString(ref) && idx.pkgs[strings.SplitN(ref, ".", 2)[0]]:
+			if !idx.symbols[ref] {
+				msgs = append(msgs, "symbol "+ref+" not found in code")
+			}
+		}
+	}
+	return msgs
+}
+
+// gateText returns the Gate line plus its indented continuation lines.
+func gateText(lines []string, i int) string {
+	var text strings.Builder
+	text.WriteString(lines[i])
+	for j := i + 1; j < len(lines) && strings.HasPrefix(lines[j], "  ") && !strings.Contains(lines[j], "Gate:"); j++ {
+		text.WriteString(" " + lines[j])
+	}
+	return text.String()
 }
 
 // testExists accepts an exact name or a prefix written as "TestFoo_*".

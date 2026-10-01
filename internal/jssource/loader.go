@@ -25,6 +25,8 @@ type Chain struct {
 
 func NewChain(loaders ...Loader) *Chain { return &Chain{loaders: loaders} }
 
+// Block: js-sources R1
+// Block: js-sources R2
 func (c *Chain) Load(ctx context.Context, src corev1alpha1.JSSource) ([]byte, error) {
 	for _, l := range c.loaders {
 		body, ok, err := l.Load(ctx, src)
@@ -40,6 +42,7 @@ func (c *Chain) Load(ctx context.Context, src corev1alpha1.JSSource) ([]byte, er
 
 // Hash returns a stable sha256 of the JS source. Used as the instance restart
 // trigger in the controller (status.instance.sourceHash).
+// Block: js-sources R3
 func Hash(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])

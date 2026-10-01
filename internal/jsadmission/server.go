@@ -47,6 +47,7 @@ const (
 
 // PolicyEntry is what the server needs to know about a single JSAdmission
 // policy in order to dispatch a request to it.
+// Block: admission-webhook R3
 type PolicyEntry struct {
 	Key           types.NamespacedName
 	Mutating      bool
@@ -114,6 +115,7 @@ func (s *Server) lookup(key types.NamespacedName) (PolicyEntry, bool) {
 
 // PathFor returns the URL path the apiserver should send requests to for a
 // given policy. Mirrors the parsing in keyFromPath.
+// Block: admission-webhook R1
 func PathFor(key types.NamespacedName, mutating bool) string {
 	prefix := PathPrefixValidate
 	if mutating {
@@ -127,6 +129,7 @@ func PathFor(key types.NamespacedName, mutating bool) string {
 }
 
 // keyFromPath inverts PathFor on the request URL's path.
+// Block: admission-webhook R1
 func keyFromPath(path, prefix string) (types.NamespacedName, bool) {
 	tail := strings.TrimPrefix(path, prefix)
 	if tail == path { // not the expected prefix
@@ -221,6 +224,9 @@ func publishEntry(entry PolicyEntry, eventType, reason, message string) {
 // in-flight wasm call when the deadline fires (CloseOnContextDone), so we
 // can rescue the VM on timeout — which the old "leave the goroutine
 // running" approach couldn't do safely.
+// Block: admission-webhook R6
+// Block: admission-webhook R10
+// Block: admission-webhook R11
 func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
 	log := s.Log.WithValues("policy", entry.Key, "uid", req.UID)
 	resp := &admissionv1.AdmissionResponse{UID: req.UID}
@@ -320,6 +326,7 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 
 // fillResponse maps a runtime.AdmissionResult onto an AdmissionResponse,
 // computing the JSONPatch for mutating policies.
+// Block: admission-webhook R8
 func fillResponse(resp *admissionv1.AdmissionResponse, result *AdmissionResult, entry PolicyEntry, req *admissionv1.AdmissionRequest, log logr.Logger) {
 	resp.Allowed = result.Allowed
 	if result.Message != "" || result.Code != 0 {
@@ -361,6 +368,7 @@ func fillResponse(resp *admissionv1.AdmissionResponse, result *AdmissionResult, 
 // applyFailurePolicy sets resp.Allowed and a Status.Message based on the
 // configured failurePolicy. Empty/Fail → denied; Ignore → allowed (with the
 // reason logged out of band by the caller).
+// Block: admission-webhook R9
 func applyFailurePolicy(resp *admissionv1.AdmissionResponse, fp admissionregv1.FailurePolicyType, reason string) {
 	if fp == admissionregv1.Ignore {
 		resp.Allowed = true

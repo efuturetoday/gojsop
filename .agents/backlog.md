@@ -100,9 +100,10 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **SRC-5** `decision` On SourceLoadFailed the old VM keeps serving the previous
   source (`internal/jshook/controller/controller.go:154`, inferred, untested).
   Keep or drop the VM.
-- **SRC-6** `debt` SourceLoadFailed event message is fixed ("source loader
+- **SRC-6** `decision` SourceLoadFailed event message is fixed ("source loader
   failed"); the cause is only in the condition and the log
-  (`internal/jshook/controller/controller.go:155`).
+  (`internal/jshook/controller/controller.go:155`). This follows js-sources
+  R5 (finite event messages). Confirm, or add a sanitized cause.
 ## DISP: Hook dispatch and bindings
 
 - **DISP-1** `gap` Schedule and onStartup bindings never fire. Decoded and
@@ -154,6 +155,8 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   (`internal/jsadmission/webhook/v1alpha1/jsadmission_webhook.go:55-100`).
   Fill it (e.g. syntax check, SRC-3) or remove it.
 
+- **ADM-8** `decision` When the patch diff fails, `fillResponse` allows the
+  request. The reason is not recorded; confirm or deny instead.
 ## KUBE: Kubernetes access from JS
 
 - **KUBE-1** `debt` `kube.apply` is not server-side apply. It does Get, then
@@ -209,9 +212,11 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 ## GATE: Gates and test infrastructure
 
 - **GATE-1** Add `make gates`: one target that runs all gates, identical in CI.
-- **GATE-2** Import boundary via golangci `depguard` or an arch test: no
-  `fastschema/qjs` or `wazero` outside `internal/jsengine/**`; `jsengine` used
-  only by `jsregistry`, `jshook`, `jsadmission`. Blocked by EXEC-1.
+- **GATE-2** Import and access boundaries via golangci `depguard` or an arch
+  test: no `fastschema/qjs` or `wazero` outside `internal/jsengine/**`;
+  `jsengine` used only by `jsregistry`, `jshook`, `jsadmission`; `jsregistry`
+  does not import `jssource`; `ManagedVM.VM` and `ManagedVM.CallMu` are not
+  touched outside `jsregistry` (needs a `go/analysis` check). Blocked by EXEC-1.
 - **GATE-3** Add `-race` to `make test`, plus a test with N goroutines on
   `Registry.Call` and concurrent `RestartByKey` / `Drop`.
 - **GATE-4** `TestRegistry_Call_*`: outcomes OK, panic, cancelled, OOM, error,
@@ -241,8 +246,9 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **GATE-15** envtest cases for CEL and enum rejection (two sources, tag plus
   digest, bad enum) and a check that `config/samples` apply.
-- **GATE-16** envtest for SourceLoadFailed (event, condition, recovery) and for
-  a ConfigMap edit that rebuilds the VM.
+- **GATE-16** envtest for SourceLoadFailed (event, condition, recovery), for an
+  `oci` source (must yield SourceLoadFailed) and for a ConfigMap edit that
+  rebuilds the VM.
 - **GATE-17** Tests for both controllers and the dispatcher. No test imports
   `internal/jshook/dispatcher`; sync ordering, filters, timeout streak and
   requeue are untested.
@@ -257,6 +263,13 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-21** `golangci-lint` is not clean on main: 7 issues in `jsengine` and
   `jsregistry` (staticcheck SA1012 in `oom_test.go`, modernize rangeint and
   mapsloop). Fix them so the lint job is a real gate.
+- **GATE-22** Edge tests for `jsadmission.Server`: timeout, panic and memory
+  limit in `review` (with rescue), bad requests in `serve` (405, 400, body
+  over 3 MiB), and `Registrar.mergeNSSelector`.
+- **GATE-23** e2e case that runs a JSAdmission against a real apiserver over
+  TLS with cert-manager.
+- **GATE-24** Test that a `kube.*` call from JS ends at the script deadline
+  (needs EXEC-2).
 ## DOC: Documentation
 
 - **DOC-1** README is the Kubebuilder template with `TODO(user)` placeholders.
@@ -265,8 +278,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **DOC-4** Stale comments beyond STAT-3: `status.lastExecution.error` in
   `internal/jshook/dispatcher/dispatcher.go:495`; `BindingContext.Type` lists
   "Schedule", never produced (`internal/jshook/bindingctx.go:11`); "MVP wires
-  only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`.
-- **DOC-5** Migrate the remaining blocks to the new format (front matter,
-  plain introduction, rules R1..Rn with Why and Gate, symbols instead of
-  `path:line`, code anchors). Pilot: js-execution. `make check-blocks` only
-  checks migrated blocks.
+  only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`;
+  `kubehost.FieldManager` calls itself a server-side-apply field manager
+  (KUBE-1).

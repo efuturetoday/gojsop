@@ -1,26 +1,34 @@
-# Block: Kubebuilder Scaffold
+---
+id: kubebuilder-scaffold
+status: accepted
+entrypoints:
+  - main.main
+---
 
-Status: accepted
+# Kubebuilder Scaffold
 
-## Decision
+This block describes how gojsop is laid out as a Kubebuilder project and who
+owns which file.
 
-gojsop is a Kubebuilder v4 project (`go.kubebuilder.io/v4`, CLI 4.11.1,
+gojsop is a Kubebuilder v4 project (`go.kubebuilder.io/v4`, CLI 4.11.1, see
 `PROJECT`). Kubebuilder owns the scaffold, the generated code and the
 manifests. Project code owns everything under `internal/`.
 
-- One API group `core.gojsop.io`, one version `v1alpha1`, two namespaced kinds:
-  `JSHook` (controller) and `JSAdmission` (controller plus defaulting and
-  validation webhooks) (`PROJECT`). Single-group layout, `api/v1alpha1/`.
-- Deviation from the default layout: controllers do not live in
-  `internal/controller/`. They live next to their domain code:
-  `internal/jshook/controller/`, `internal/jsadmission/controller/`, and the
-  webhook in `internal/jsadmission/webhook/v1alpha1/`. Reason not recorded;
-  the effect is that `kubebuilder create` output must be moved by hand.
-- Integration tests live in `test/integration/` (envtest), e2e tests in
-  `test/e2e/` (Kind). See [testing](testing.md).
-- Distribution path (Kustomize bundle or Helm chart) is not chosen yet (OPS-4).
+The API has one group `core.gojsop.io`, one version `v1alpha1` and two
+cluster-scoped kinds, both in `api/v1alpha1/`
+(`PROJECT` wrongly says namespaced, API-6). `JSHook` has a controller.
+`JSAdmission` has a controller plus defaulting and validation webhooks.
 
-## Code
+The layout deviates from the Kubebuilder default. Controllers do not live in
+`internal/controller/`. They live next to their domain code, in
+`internal/jshook/controller/` and `internal/jsadmission/controller/`. The
+webhook lives in `internal/jsadmission/webhook/v1alpha1/`. The reason is not
+recorded. The effect is that the output of `kubebuilder create` must be moved
+by hand.
+
+Integration tests (envtest) live in `test/integration/`, e2e tests (Kind) in
+`test/e2e/`. The [testing](testing.md) block covers them. The distribution
+path (Kustomize bundle or Helm chart) is not chosen yet.
 
 | Path | Owner | Regenerate with |
 |------|-------|-----------------|
@@ -33,38 +41,40 @@ manifests. Project code owns everything under `internal/`.
 | `PROJECT` | Kubebuilder CLI | `kubebuilder ...` only |
 | `cmd/main.go` | project plus scaffold markers | edit by hand |
 
-Scaffold markers the CLI injects at: `cmd/main.go:52,65,305`,
-`test/integration/suite_test.go:37,66`, `test/e2e/e2e_test.go:226,318`,
-`internal/jsadmission/webhook/v1alpha1/webhook_suite_test.go:43,72,115`.
-
-## Rules
-
-- Do: after editing `*_types.go`, markers or RBAC markers run
-  `make manifests generate` and commit the generated files in the same change.
-- Do: after editing Go code run `make lint-fix` and `make test`.
-- Do: scaffold new kinds and webhooks with `kubebuilder create api` /
-  `kubebuilder create webhook`, then move controllers next to their domain
-  package as the existing ones are.
-- Do: run e2e tests only against an isolated Kind cluster (`make test-e2e`,
-  `hack/e2e.sh`), never against a real cluster.
-- Don't: edit generated files (`zz_generated.*.go`, `config/crd/bases`,
-  `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`).
-- Don't: delete `// +kubebuilder:scaffold:*` comments.
-- Don't: use `kubebuilder ... --force` without a backup of custom logic.
-
 Generic references: [Kubebuilder Book](https://book.kubebuilder.io),
 [Good Practices](https://book.kubebuilder.io/reference/good-practices.html),
 [Markers](https://book.kubebuilder.io/reference/markers.html),
 [API Conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md),
 [controller-runtime FAQ](https://github.com/kubernetes-sigs/controller-runtime/blob/main/FAQ.md).
 
-## Gates
+## Rules
 
-| Gate | Command / test | Enforced in CI |
-|------|----------------|----------------|
-| Generated code builds and is formatted | `make test` runs `manifests generate fmt vet` first (`Makefile:61`) | yes (`test.yml`) |
-| Generated files are committed | `make manifests generate && git diff --exit-code` | missing (GATE-14) |
-| Scaffold markers present | grep for the markers listed above | missing, low value |
+- **R1** After editing `*_types.go`, `+kubebuilder:` markers or RBAC markers, run
+  `make manifests generate` and commit the generated files in the same change.
+  Why: the CRDs, RBAC and deepcopy code must match the Go types.
+  Gate: missing → GATE-14.
+- **R2** After editing Go code, run `make lint-fix` and `make test`.
+  Why: `make test` regenerates, formats and vets before it runs the tests.
+  Gate: `make test` (runs in CI, `test.yml`).
+- **R3** Scaffold new kinds and webhooks with `kubebuilder create api` or
+  `kubebuilder create webhook`, then move the controller next to its domain
+  package like the existing ones.
+  Why: the layout keeps controllers next to their domain code.
+  Gate: review only.
+- **R4** Run e2e tests only against an isolated Kind cluster (`make test-e2e`,
+  `hack/e2e.sh`), never against a real cluster.
+  Why: the tests create and delete cluster resources.
+  Gate: `make test-e2e`.
+- **R5** Never edit generated files: `zz_generated.*.go`, `config/crd/bases`,
+  `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`.
+  Why: the next regeneration overwrites the edit.
+  Gate: missing → GATE-14.
+- **R6** Never delete `// +kubebuilder:scaffold:*` comments.
+  Why: the Kubebuilder CLI injects new code at these markers.
+  Gate: review only — low value.
+- **R7** Never use `kubebuilder ... --force` without a backup of custom logic.
+  Why: `--force` overwrites scaffolded files.
+  Gate: review only.
 
 ## Open
 
