@@ -254,6 +254,9 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   and `make lint-config`.
 - **GATE-20** e2e hygiene: `make test-e2e` leaves the Kind cluster on failure
   (`Makefile:89-92`, unverified); `test-e2e.yml:20` installs kind unpinned.
+- **GATE-21** `golangci-lint` is not clean on main: 7 issues in `jsengine` and
+  `jsregistry` (staticcheck SA1012 in `oom_test.go`, modernize rangeint and
+  mapsloop). Fix them so the lint job is a real gate.
 ## DOC: Documentation
 
 - **DOC-1** README is the Kubebuilder template with `TODO(user)` placeholders.
@@ -263,3 +266,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `internal/jshook/dispatcher/dispatcher.go:495`; `BindingContext.Type` lists
   "Schedule", never produced (`internal/jshook/bindingctx.go:11`); "MVP wires
   only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`.
+- **DOC-5** Migrate the remaining blocks to the new format (front matter,
+  plain introduction, rules R1..Rn with Why and Gate, symbols instead of
+  `path:line`, code anchors). Pilot: js-execution. `make check-blocks` only
+  checks migrated blocks.

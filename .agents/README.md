@@ -13,14 +13,23 @@ commitment to add it.
 
 ## Working with blocks
 
+How to write a block: [skills/write-block](skills/write-block/SKILL.md).
+
 1. Before you change code, find the blocks for the area you touch and read them.
 2. Follow their rules. If the change breaks a decision, update the block in the
    same change (status `superseded` or a new decision), never silently.
-3. When you add a gate, change its row from `missing` to the real command.
-4. New facet: copy `blocks/_template.md`, keep it under ~120 lines, cite code
-   as `path:line`.
+3. When you add a gate, replace `missing → GATE-n` with the real test or command.
+4. New facet: copy `blocks/_template.md`. Keep it short, start with a plain
+   introduction, and name code by symbol (`pkg.Type.Method`), never by file
+   and line.
 5. Open items live in [backlog.md](backlog.md) with stable keys. A block's
    `Open` section only lists the keys.
+6. Mark the code that implements a rule with a comment
+   `// Block: <id> <rule>`, e.g. `// Block: js-execution R4`.
+7. `make check-blocks` (also in CI) fails when a block names a symbol or test
+   that no longer exists, a rule has no Gate line, or an anchor points
+   nowhere. It parses the code with `go/parser`, so line drift does not
+   matter. Blocks without front matter are not checked yet.
 
 ## Blocks
 

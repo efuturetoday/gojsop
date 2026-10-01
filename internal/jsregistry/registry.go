@@ -388,6 +388,8 @@ func (r *Registry) RestartByKey(key types.NamespacedName, reason RestartReason) 
 // CallResult.Duration is wall-clock from CallMu acquisition to fn return —
 // the lock-wait time is included intentionally so a "stuck" VM shows up as
 // long durations on whichever caller queues behind the offender.
+//
+// Block: js-execution R2
 func (r *Registry) Call(ctx context.Context, key types.NamespacedName, fn func(ctx context.Context, vm *jsengine.VM) error) (CallResult, *ManagedVM, error) {
 	mi, ok := r.Get(key)
 	if !ok {

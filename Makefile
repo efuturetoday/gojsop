@@ -106,6 +106,10 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
+.PHONY: check-blocks
+check-blocks: ## Verify .agents/blocks against the code (symbols, tests, anchors)
+	go run ./hack/checkblocks
+
 ##@ Build
 
 .PHONY: build

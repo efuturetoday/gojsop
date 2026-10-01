@@ -37,6 +37,8 @@ func IsOOMError(err error) bool {
 //
 // This is the only place in the codebase that sniffs raw qjs / wazero
 // error messages.
+//
+// Block: js-execution R4
 func wrapEngineErr(ctx context.Context, err error) error {
 	if err == nil {
 		return nil

@@ -15,6 +15,9 @@ rules and the gates that enforce it.
 2. Open items and their keys are in [.agents/backlog.md](.agents/backlog.md).
    Name the key in the commit message when you close one.
 3. If a change breaks a block's decision, update the block in the same change.
+4. Write and change blocks as described in
+   [.agents/skills/write-block](.agents/skills/write-block/SKILL.md);
+   `make check-blocks` must pass.
 
 ## Critical rules
 

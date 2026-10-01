@@ -1,29 +1,29 @@
-# Block: <Name>
+---
+id: <file name without .md>
+status: proposed        # proposed | accepted | superseded
+entrypoints:            # symbols as pkg.Name or pkg.Type.Method, checked by make check-blocks
+  - pkg.Symbol
+---
 
-Status: accepted | proposed | superseded
+# <Title>
 
-## Decision
+This block describes <what part of the system, in one sentence>.
 
-What holds and why. Rejected alternatives in one line each.
-
-## Code
-
-The packages and symbols that implement the decision (`path:line`).
-Name the single allowed entry point.
+<Plain prose, 3 to 6 short paragraphs. Start with what the system does, then
+the choice that was made and why, then the consequences a reader must know.
+Name code by symbol (`pkg.Type.Method`), never by file and line. Link other
+blocks instead of repeating them.>
 
 ## Rules
 
-- Do: ...
-- Don't: ...
+- **R1** <One imperative sentence.>
+  Why: <one sentence>.
+  Gate: `TestName` or `make target`. Or: missing → GATE-n.
 
-## Gates
+## Rejected
 
-| Gate | Command / test | Enforced in CI |
-|------|----------------|----------------|
-| ... | `go test ./internal/... -run X` | yes / no / missing |
-
-Gates marked `missing` are commitments, not facts.
+- <Alternative>: <why not, one line>.
 
 ## Open
 
-Keys from [backlog](../backlog.md), e.g. `EXEC-1`. No separate list here.
+Tracked in [backlog](../backlog.md): <keys>.
