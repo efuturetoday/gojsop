@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -298,9 +299,7 @@ func (r *Registry) installNew(key types.NamespacedName, mi *ManagedVM, reason Re
 	old := r.vms[key]
 	if old != nil {
 		mi.RestartsByReason = make(map[RestartReason]int32, len(old.RestartsByReason)+1)
-		for k, v := range old.RestartsByReason {
-			mi.RestartsByReason[k] = v
-		}
+		maps.Copy(mi.RestartsByReason, old.RestartsByReason)
 		mi.RestartsByReason[reason]++
 
 		ev := RestartEvent{Time: time.Now(), Reason: reason}

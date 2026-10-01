@@ -171,7 +171,7 @@ func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
 	inst := runHook(t, h, src)
 
 	// Run handle() many times with realistic BindingContext payloads.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		bc := []map[string]any{{
 			"binding":    "watch",
 			"type":       "Event",

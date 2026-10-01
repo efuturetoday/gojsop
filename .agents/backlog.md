@@ -270,9 +270,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   and `make lint-config`.
 - **GATE-20** e2e hygiene: `make test-e2e` leaves the Kind cluster on failure
   (`Makefile:89-92`, unverified); `test-e2e.yml:20` installs kind unpinned.
-- **GATE-21** `golangci-lint` is not clean on main: 7 issues in `jsengine` and
-  `jsregistry` (staticcheck SA1012 in `oom_test.go`, modernize rangeint and
-  mapsloop). Fix them so the lint job is a real gate.
 - **GATE-22** Edge tests for `jsadmission.Server`: timeout, panic and memory
   limit in `review` (with rescue), bad requests in `serve` (405, 400, body
   over 3 MiB), and `Registrar.mergeNSSelector`.

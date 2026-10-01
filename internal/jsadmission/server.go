@@ -426,7 +426,7 @@ const maxBodyBytes = 3 << 20
 
 func readBody(r *http.Request, max int64) ([]byte, error) {
 	r.Body = http.MaxBytesReader(nil, r.Body, max)
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 	return io.ReadAll(r.Body)
 }
 

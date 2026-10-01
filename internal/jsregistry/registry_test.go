@@ -161,7 +161,7 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 	}
 
 	// Three manual restarts → counter == 3, history == 3.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := reg.RestartByKey(key, jsregistry.ReasonManual); err != nil {
 			t.Fatalf("restart #%d: %v", i, err)
 		}
@@ -176,7 +176,7 @@ func TestRegistry_RestartHistory_RingAndCounters(t *testing.T) {
 
 	// Push another 22 (total 25) — ring should cap at 20, oldest evicted,
 	// counter keeps climbing.
-	for i := 0; i < 22; i++ {
+	for i := range 22 {
 		if _, err := reg.RestartByKey(key, jsregistry.ReasonPanic); err != nil {
 			t.Fatalf("restart panic #%d: %v", i, err)
 		}

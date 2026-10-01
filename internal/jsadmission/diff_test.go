@@ -17,7 +17,7 @@ func TestCreatePatch_AddLabel(t *testing.T) {
 	if len(ops) != 1 {
 		t.Fatalf("expected 1 op, got %d: %+v", len(ops), ops)
 	}
-	if ops[0].Operation != "add" || ops[0].Path != "/metadata/labels" {
+	if ops[0].Operation != "add" || ops[0].Path != pathLabels {
 		t.Fatalf("unexpected op: %+v", ops[0])
 	}
 }
@@ -56,7 +56,7 @@ func TestCreatePatch_FiltersImmutable(t *testing.T) {
 		}
 	}
 	// Only the label addition should survive.
-	if len(ops) != 1 || ops[0].Path != "/metadata/labels" {
+	if len(ops) != 1 || ops[0].Path != pathLabels {
 		t.Fatalf("expected only labels add, got %+v", ops)
 	}
 }

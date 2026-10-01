@@ -20,6 +20,9 @@ import (
 	"github.com/o-haase/gojsop/internal/jsregistry"
 )
 
+// pathLabels is the JSON-patch path the diff tests expect for label changes.
+const pathLabels = "/metadata/labels"
+
 // loadPolicy starts a real qjs instance with the given JS source and parks
 // it in a fresh registry under `key`. Mirrors what the reconciler does.
 func loadPolicy(t *testing.T, src string, key types.NamespacedName) *jsregistry.Registry {
@@ -143,7 +146,7 @@ func TestServer_Mutate_AddsLabel_AsJSONPatch(t *testing.T) {
 	if err := json.Unmarshal(resp.Patch, &ops); err != nil {
 		t.Fatalf("decode patch: %v", err)
 	}
-	if len(ops) != 1 || ops[0]["op"] != "add" || ops[0]["path"] != "/metadata/labels" {
+	if len(ops) != 1 || ops[0]["op"] != "add" || ops[0]["path"] != pathLabels {
 		t.Fatalf("unexpected patch: %+v", ops)
 	}
 }
