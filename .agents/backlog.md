@@ -125,9 +125,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **DISP-7** `doc` Precedence of `namespace.nameSelector` versus binding-level
   `nameSelector` not written down.
 
-- **DISP-8** `bug` `Subscribe` holds `d.mu` through `WaitForCacheSync`. One slow
-  informer blocks Subscribe and Drop for all hooks
-  (`internal/jshook/dispatcher/dispatcher.go:109,307`).
 - **DISP-9** `bug` Rescue rebuilds the VM, but the subscription keeps the
   `config()` result from Subscribe time. A changed config after rebuild is not
   applied (`dispatcher.go:523`, `internal/jshook/controller/controller.go:224`).

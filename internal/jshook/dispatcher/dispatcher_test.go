@@ -3,6 +3,7 @@ package dispatcher_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -573,5 +574,77 @@ function spin() { while (true) {} }`
 	}
 	if now, _ := e.reg.Get(e.key); now == first {
 		t.Fatal("VM was not replaced")
+	}
+}
+
+// jshook.R17
+func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
+	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{cmGVR: "ConfigMapList"})
+	listing := make(chan struct{}, 1024)
+	// A list in namespace "slow" always fails: the informer of hook A never
+	// syncs. (Blocking inside the reactor would stall the whole fake client.)
+	dyn.PrependReactor("list", "*", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() != "slow" {
+			return false, nil, nil
+		}
+		select {
+		case listing <- struct{}{}:
+		default:
+		}
+		return true, nil, errors.New("apiserver unreachable")
+	})
+	d := dispatcher.New(dyn, fixedMapper{}, jsregistry.NewRegistry())
+	keyA := types.NamespacedName{Name: "a"}
+	keyB := types.NamespacedName{Name: "b"}
+	off := false
+	cfgA := &jshook.Config{Kubernetes: []jshook.KubernetesBinding{{
+		Name: "cms", APIVersion: "v1", Kind: "ConfigMap",
+		Namespace: &jshook.NamespaceSel{NameSelector: &jshook.NameSelector{MatchNames: []string{"slow"}}},
+	}}}
+	cfgB := &jshook.Config{Kubernetes: []jshook.KubernetesBinding{{
+		Name: "cms", APIVersion: "v1", Kind: "ConfigMap", ExecuteHookOnSynchronization: &off,
+	}}}
+	t.Cleanup(func() { d.Drop(keyA); d.Drop(keyB) })
+
+	errA := make(chan error, 1)
+	go func() { errA <- d.Subscribe(context.Background(), keyA, cfgA, nil) }()
+	select {
+	case <-listing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hook A never started listing")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		if err := d.Subscribe(context.Background(), keyB, cfgB, nil); err != nil {
+			done <- err
+			return
+		}
+		d.Drop(keyB)
+		done <- nil
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Subscribe B: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Subscribe/Drop of hook B blocked behind the unsynced informer of hook A")
+	}
+
+	// Drop of A itself must also return while its sync hangs, and end the
+	// pending Subscribe.
+	dropped := make(chan struct{})
+	go func() { d.Drop(keyA); close(dropped) }()
+	select {
+	case <-dropped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Drop of hook A blocked")
+	}
+	select {
+	case <-errA:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Subscribe A did not return after Drop")
 	}
 }

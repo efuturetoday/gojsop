@@ -67,8 +67,9 @@ type Dispatcher struct {
 	mapper RESTMapper
 	reg    *jsregistry.Registry
 
-	mu   sync.Mutex
-	subs map[types.NamespacedName]*subscription
+	mu       sync.Mutex // guards subs and keyLocks only; never held across slow work
+	subs     map[types.NamespacedName]*subscription
+	keyLocks map[types.NamespacedName]*sync.Mutex
 }
 
 // RESTMapper is the slice of controller-runtime's mapper interface we need —
@@ -90,10 +91,11 @@ type RESTMapping struct {
 // the instance and the next call sees the new one transparently.
 func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsregistry.Registry) *Dispatcher {
 	return &Dispatcher{
-		dyn:    dyn,
-		mapper: mapper,
-		reg:    reg,
-		subs:   make(map[types.NamespacedName]*subscription),
+		dyn:      dyn,
+		mapper:   mapper,
+		reg:      reg,
+		subs:     make(map[types.NamespacedName]*subscription),
+		keyLocks: make(map[types.NamespacedName]*sync.Mutex),
 	}
 }
 
@@ -102,17 +104,29 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg *jsregistry.Registry) *Di
 // emit (optional) publishes lifecycle events; pass nil in tests.
 //
 // If a subscription already exists for key, it is torn down first.
+//
+// d.mu only guards the subs map. The slow parts (stopping the old worker,
+// waiting for informer sync) run under the per-key lock, so one hook that
+// cannot sync never blocks Subscribe or Drop of another hook. Drop of the
+// same key cancels a Subscribe that is still waiting; that Subscribe then
+// returns an error.
+// jshook.R17
 func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, cfg *jshook.Config, emit EventEmitter) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	if d.reg == nil {
 		return fmt.Errorf("dispatcher: Registry is nil — Subscribe needs the registry to resolve live instances")
 	}
 
-	if old, ok := d.subs[key]; ok {
+	kl := d.keyLock(key)
+	kl.Lock()
+	defer kl.Unlock()
+
+	// Old worker must be gone before the new one starts (jshook.R9).
+	d.mu.Lock()
+	old := d.subs[key]
+	delete(d.subs, key)
+	d.mu.Unlock()
+	if old != nil {
 		old.stop()
-		delete(d.subs, key)
 	}
 
 	ctx, cancel := context.WithCancel(parent)
@@ -127,38 +141,76 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 		pending: make(map[eventKey]jshook.BindingContext),
 		emit:    emit,
 	}
+	// Registered before the watchers start so Drop can cancel a sync that hangs.
+	d.mu.Lock()
+	d.subs[key] = sub
+	d.mu.Unlock()
+
+	fail := func(err error) error {
+		sub.stop()
+		d.mu.Lock()
+		if d.subs[key] == sub {
+			delete(d.subs, key)
+		}
+		d.mu.Unlock()
+		return err
+	}
 
 	for _, b := range cfg.Kubernetes {
 		gv, err := schema.ParseGroupVersion(b.APIVersion)
 		if err != nil {
-			sub.stop()
-			return fmt.Errorf("binding %q: parse apiVersion %q: %w", b.Name, b.APIVersion, err)
+			return fail(fmt.Errorf("binding %q: parse apiVersion %q: %w", b.Name, b.APIVersion, err))
 		}
 		mapping, err := d.mapper.RESTMapping(schema.GroupKind{Group: gv.Group, Kind: b.Kind}, gv.Version)
 		if err != nil {
-			sub.stop()
-			return fmt.Errorf("binding %q: REST mapping for %s/%s: %w", b.Name, b.APIVersion, b.Kind, err)
+			return fail(fmt.Errorf("binding %q: REST mapping for %s/%s: %w", b.Name, b.APIVersion, b.Kind, err))
 		}
 		if err := sub.startWatcher(ctx, d.dyn, mapping.Resource, b); err != nil {
-			sub.stop()
-			return fmt.Errorf("binding %q: start watcher: %w", b.Name, err)
+			return fail(fmt.Errorf("binding %q: start watcher: %w", b.Name, err))
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return fail(fmt.Errorf("subscribe canceled: %w", err))
 	}
 
 	sub.wg.Add(1)
 	go sub.runWorker(ctx)
-	d.subs[key] = sub
 	return nil
 }
 
-// Drop tears down all subscriptions for the given key.
+// keyLock returns the lock that serializes Subscribe and Drop of one hook.
+func (d *Dispatcher) keyLock(key types.NamespacedName) *sync.Mutex {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	kl, ok := d.keyLocks[key]
+	if !ok {
+		kl = &sync.Mutex{}
+		d.keyLocks[key] = kl
+	}
+	return kl
+}
+
+// Drop tears down all subscriptions for the given key. A Subscribe of the
+// same key that still waits for informer sync is cancelled first, so Drop
+// does not wait for the sync.
 // jshook.R14
 func (d *Dispatcher) Drop(key types.NamespacedName) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if sub, ok := d.subs[key]; ok {
+	sub := d.subs[key]
+	d.mu.Unlock()
+	if sub != nil {
+		sub.cancel()
+	}
+
+	kl := d.keyLock(key)
+	kl.Lock()
+	defer kl.Unlock()
+	d.mu.Lock()
+	sub = d.subs[key]
+	delete(d.subs, key)
+	d.mu.Unlock()
+	if sub != nil {
 		sub.stop()
-		delete(d.subs, key)
 	}
 }
 

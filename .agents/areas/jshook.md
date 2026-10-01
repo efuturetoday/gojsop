@@ -121,6 +121,7 @@ instead of events.
 | jshook.R14 | After the hook is deleted it receives no more events. | `dispatcher.Dispatcher.Drop` | `TestDispatcher_Drop_NoMoreEvents` |
 | jshook.R15 | A namespace (one name) and `labelSelector.matchLabels` restrict the objects delivered. | `jshook.KubernetesBinding` | `TestControllers` |
 | jshook.R16 | A binding field that gojsop does not act on is not presented as working (project rule API-1). Violated today: `schedule`, `onStartup`, `jqFilter`, `allowFailure`, `queue`, other selector forms. | decision API-1 | missing → DISP-1 |
+| jshook.R17 | A hook whose informer does not sync does not block Subscribe or Drop of other hooks; Drop of that hook cancels its pending Subscribe. | `dispatcher.Dispatcher.Subscribe`, `dispatcher.Dispatcher.Drop` | `TestDispatcher_SlowSync_DoesNotBlockOtherHooks` |
 
 Every rule is held by a test or is `missing → <KEY>`.
 
@@ -137,11 +138,11 @@ Every rule is held by a test or is `missing → <KEY>`.
 
 - **One subscription per hook, with one informer per kubernetes binding, one rate-limited FIFO workqueue and one worker goroutine.** Status: accepted (commit history, no date or name recorded). Why: calls must not overlap and the VM rescue after a call is owned by one goroutine. Not taken: a worker per binding, because it breaks R9; reasons for others are not recorded.
 - **The queue holds only `eventKey` struct values; payloads sit in a pending map.** Status: accepted (commit history). Why: BindingContext is not hashable, equal keys fold bursts (R8).
-- **`Subscribe` waits for the old worker before it starts the new one and holds the dispatcher lock while doing so.** Status: accepted (commit history); the lock held through cache sync is a known bug (DISP-8).
+- **`Subscribe` waits for the old worker before it starts the new one, under a per-hook lock; the dispatcher lock only guards the subscription map.** Status: accepted. Why: a slow cache sync of one hook must not block other hooks (R17); the old worker must still be gone before the new one starts (R9).
 - **Subscribe only after a VM (re)start or a generation change; a rescue does not re-subscribe.** Status: accepted (commit history). Why: the worker looks up the live VM per call. Consequence: a changed `config()` after a rescue is not applied (DISP-9).
 - **Failed calls are requeued with the default controller rate limiter and no retry cap.** Status: accepted (commit history). Known debt: DISP-10.
 - **Namespace selection is a single-namespace fast path.** Status: accepted as MVP; reason not recorded beyond the code comment (DISP-11).
 
 ## Open
 
-DISP-1, DISP-2, DISP-3, DISP-4, DISP-5, DISP-6, DISP-7, DISP-8, DISP-9, DISP-10, DISP-11, STAT-5, API-1, REG-4, EXEC-2
+DISP-1, DISP-2, DISP-3, DISP-4, DISP-5, DISP-6, DISP-7, DISP-9, DISP-10, DISP-11, STAT-5, API-1, REG-4, EXEC-2
