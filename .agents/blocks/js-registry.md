@@ -92,4 +92,4 @@ Gates marked `missing` are commitments, not facts.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-1 to REG-6; gates GATE-3, GATE-4.
+Tracked in [backlog](../backlog.md): REG-1 to REG-7; gates GATE-3, GATE-4.

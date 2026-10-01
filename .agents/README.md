@@ -29,6 +29,10 @@ commitment to add it.
 | [js-execution](blocks/js-execution.md) | accepted | QuickJS on wazero via qjs, VM lifecycle, ctx cancellation, limits, host APIs, isolation |
 | [js-registry](blocks/js-registry.md) | accepted | One VM per resource key, `Registry.Call`, build and restart, locking |
 | [status-conditions](blocks/status-conditions.md) | accepted | CRD status fields, `Ready` condition, restart bookkeeping, who writes status |
-
-Planned: `js-sources`, `hook-dispatch`, `admission-webhook`, `kube-access`,
-`api-design`, `testing`, `kubebuilder-scaffold`.
+| [js-sources](blocks/js-sources.md) | accepted | `spec.source`, loaders, ConfigMap watch, source hash |
+| [hook-dispatch](blocks/hook-dispatch.md) | accepted | `config()` bindings, informers, queue, BindingContext, `handle()` |
+| [admission-webhook](blocks/admission-webhook.md) | accepted | Webhook registration, `review`, `validate()`, patches, TLS |
+| [kube-access](blocks/kube-access.md) | accepted | `kubehost.Factory`, `kube.*` semantics, RBAC |
+| [api-design](blocks/api-design.md) | accepted | CRD markers, validation, naming, versioning |
+| [kubebuilder-scaffold](blocks/kubebuilder-scaffold.md) | accepted | Generated files, scaffold markers, layout deviation |
+| [testing](blocks/testing.md) | accepted | Test layers, Make targets, CI workflows, coverage |

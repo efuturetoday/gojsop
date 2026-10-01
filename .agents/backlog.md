@@ -17,11 +17,13 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 | JS execution | EXEC | [js-execution](blocks/js-execution.md) |
 | JS registry and restarts | REG | [js-registry](blocks/js-registry.md) |
 | Status and conditions | STAT | [status-conditions](blocks/status-conditions.md) |
-| JS sources | SRC | planned: js-sources |
-| Hook dispatch and bindings | DISP | planned: hook-dispatch |
-| CRD API surface | API | planned: api-design |
+| JS sources | SRC | [js-sources](blocks/js-sources.md) |
+| Hook dispatch and bindings | DISP | [hook-dispatch](blocks/hook-dispatch.md) |
+| Admission webhook | ADM | [admission-webhook](blocks/admission-webhook.md) |
+| Kubernetes access from JS | KUBE | [kube-access](blocks/kube-access.md) |
+| CRD API surface | API | [api-design](blocks/api-design.md) |
 | Operations (metrics, RBAC, reconcile) | OPS | planned |
-| Gates and test infrastructure | GATE | planned: testing |
+| Gates and test infrastructure | GATE | [testing](blocks/testing.md) |
 | Documentation | DOC | none |
 
 ## EXEC: JS execution
@@ -60,6 +62,9 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   queue plus FIFO worker, JSAdmission is a synchronous webhook. Document the
   asymmetry in the js-registry block.
 
+- **REG-7** `bug` `GetOrLoad` rebuilds only on a `SourceHash` change. A changed
+  `spec.limits` or other `BuildOptions` field does not rebuild the VM
+  (`internal/jsregistry/registry.go:233,246`). Not verified at runtime.
 ## STAT: Status and conditions
 
 - **STAT-1** `bug` `status.lastReconcile` not written on success. An old
@@ -89,6 +94,15 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **SRC-3** `gap` Inline source ergonomics. Multi-line JS in YAML is painful.
   No `kubectl gojsop validate` and no syntax check when the CR is admitted.
 
+- **SRC-4** `debt` ConfigMap mapper lists all CRs on every ConfigMap event (no
+  field index, no predicate); a List error drops the event silently
+  (`internal/jssource/watch.go:49-54`).
+- **SRC-5** `decision` On SourceLoadFailed the old VM keeps serving the previous
+  source (`internal/jshook/controller/controller.go:154`, inferred, untested).
+  Keep or drop the VM.
+- **SRC-6** `debt` SourceLoadFailed event message is fixed ("source loader
+  failed"); the cause is only in the condition and the log
+  (`internal/jshook/controller/controller.go:155`).
 ## DISP: Hook dispatch and bindings
 
 - **DISP-1** `gap` Schedule and onStartup bindings never fire. Decoded and
@@ -107,29 +121,86 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **DISP-7** `doc` Precedence of `namespace.nameSelector` versus binding-level
   `nameSelector` not written down.
 
+- **DISP-8** `bug` `Subscribe` holds `d.mu` through `WaitForCacheSync`. One slow
+  informer blocks Subscribe and Drop for all hooks
+  (`internal/jshook/dispatcher/dispatcher.go:109,307`).
+- **DISP-9** `bug` Rescue rebuilds the VM, but the subscription keeps the
+  `config()` result from Subscribe time. A changed config after rebuild is not
+  applied (`dispatcher.go:523`, `internal/jshook/controller/controller.go:224`).
+- **DISP-10** `debt` Failed events are requeued with `AddRateLimited` and no
+  retry cap; a poison event retries forever (`dispatcher.go:547`).
+- **DISP-11** `gap` Selectors only partly applied: top-level `nameSelector`,
+  `fieldSelector`, `namespace.labelSelector`, `matchExpressions` and
+  multi-namespace are ignored (`dispatcher.go:208-224`).
+## ADM: Admission webhook
+
+- **ADM-1** `bug` Registrar sync failure is invisible. CA read or API write
+  errors are only logged, no retry, the CR still shows `Ready=True`
+  (`internal/jsadmission/registrar.go:125-128`).
+- **ADM-2** `bug` A denied mutation still sends a patch; `fillResponse` builds it
+  even when `allowed=false` (`internal/jsadmission/server.go:337-358`).
+- **ADM-3** `gap` `ReinvocationPolicy` is never set. The `PolicyMeta` field
+  exists, the controller does not fill it (`registrar.go:43,215`,
+  `internal/jsadmission/controller/controller.go:227-238`).
+- **ADM-4** `debt` cert-manager CA rotation reaches the webhook configs only on
+  the next policy change, contrary to the comment (`cmd/main.go:84-85`).
+- **ADM-5** `bug` Admission uses `spec.timeoutSeconds` (default 5 s), not
+  `spec.limits.timeoutSeconds` (`server.go:241-245`,
+  `controller.go:138,195`). Not verified; decide which field wins.
+- **ADM-6** `decision` `ExcludeNamespaces` holds only the operator namespace,
+  although the registrar comment names kube-system and cert-manager
+  (`cmd/main.go:282`, `registrar.go:59-62`).
+- **ADM-7** `doc` The scaffolded webhook for the JSAdmission CRD is empty
+  (`internal/jsadmission/webhook/v1alpha1/jsadmission_webhook.go:55-100`).
+  Fill it (e.g. syntax check, SRC-3) or remove it.
+
+## KUBE: Kubernetes access from JS
+
+- **KUBE-1** `debt` `kube.apply` is not server-side apply. It does Get, then
+  Create or JSON merge patch (lists replaced). The Get/Create race returns
+  AlreadyExists with no retry (`internal/jsengine/kubehost/kubehost.go:136-158`).
+- **KUBE-2** `gap` `Factory` ignores `ctx`, `key` and `sa`; both callers pass
+  `sa=""`. No per-hook identity (`kubehost/factory.go:46,53`,
+  `internal/jshook/controller/controller.go:163`). Prerequisite for OPS-2.
+- **KUBE-3** `gap` `kube.list` has no limit or pagination; an empty namespace on
+  a namespaced kind lists cluster-wide (`kubehost.go:201`).
+- **KUBE-4** `bug` A nil kube factory on a reconciler gives a VM without `kube`
+  global and no error (`internal/jshook/controller/controller.go:162`,
+  `internal/jsadmission/controller/controller.go:142`). Not verified.
+
 ## API: CRD API surface
 
-- **API-1** `decision` Project rule: no CRD field without implementation or a
-  status that shows it is inactive. Today violated by DISP-1, DISP-2, DISP-3,
-  SRC-1. Gate: GATE-10.
+- **API-1** `decision` Project rule: no field without implementation or a
+  status that shows it is inactive. Applies to CRD fields and to the schema
+  that JS `config()` returns. Today violated by SRC-1 (CRD field `oci`) and by
+  DISP-1, DISP-2, DISP-3 (`config()` fields `schedule`, `jqFilter`, `queue`,
+  `allowFailure`; the JSHook spec itself has only `source` and `limits`,
+  `api/v1alpha1/jshook_types.go:24-32`). Gate: GATE-10.
 - **API-2** `doc` CRD field docs are thin. `kubectl explain jshook.spec.source`
   does not say which sources work.
 - **API-3** `doc` `gojsop.io/restart` annotation value semantics undocumented.
   Any new value restarts; no convention (timestamp, hash, UUID).
-- **API-4** `debt` `samples/core_v1alpha1_jshook.yaml` uses fields without
+- **API-4** `debt` `config/samples/core_v1alpha1_jshook.yaml` uses fields without
   effect (schedule, jqFilter, queue, allowFailure). Samples should match what
   works.
 - **API-5** `debt` `RestartReason` constants and the CRD doc list
   (`api/v1alpha1/js_shared.go:118`) can drift. Use a kubebuilder `Enum`
   marker. Gate: GATE-11.
 
+- **API-6** `debt` Scope mismatch: markers and CRDs say `scope=Cluster`
+  (`api/v1alpha1/jshook_types.go:67`, `jsadmission_types.go:156`), `PROJECT`
+  says `namespaced: true` for both kinds. Fix `PROJECT`.
+- **API-7** `gap` No `MaxLength` or `MaxItems` anywhere. `spec.source.inline` is
+  unbounded against the etcd object size limit (`api/v1alpha1/js_shared.go:34-35`).
+- **API-8** `decision` Breaking-change policy on `v1alpha1` is unwritten. Working
+  assumption in api-design: edit in place until `v1beta1`.
 ## OPS: Operations
 
 - **OPS-1** `gap` No Prometheus metrics. `--metrics-bind-address` exists, but
   nothing registers handle count and duration, restarts by reason, admission
   latency, allow and deny counts.
 - **OPS-2** `gap` No per-hook RBAC narrowing. Wildcard `groups=*,resources=*`
-  (`internal/jshook/controller/controller.go:77`); a bad script can touch
+  (`internal/jshook/controller/controller.go:103`); a bad script can touch
   anything.
 - **OPS-3** `debt` Fixed 5 s `RequeueAfter` on every failure path. A bad
   source URL and a transient API error get the same retry.
@@ -158,16 +229,37 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-10** Table test that lists every spec field with an owner (code path
   or status field) (API-1).
 - **GATE-11** Test that `RestartReason` constants match the CRD enum (API-5).
-- **GATE-12** Coverage floor per package. Total is 27.5 % per `cover.out`,
-  which may be stale.
+- **GATE-12** Coverage floor per package. Unit run 2026-10-01: conditions 100,
+  jssource 88.1, jshook 75.0, kubehost 67.5, jsregistry 67.4, jsadmission
+  66.2, jsengine 49.3, jslifecycle 36.4; 0 for both controllers, the
+  dispatcher and the webhook package.
 - **GATE-13** JSAdmission integration test checks no status fields, only that
   the reconcile succeeds.
+- **GATE-14** CI fails when `make manifests generate` leaves a diff
+  (generated files not committed). Covers `config/rbac/role.yaml` sync with
+  RBAC markers.
 
+- **GATE-15** envtest cases for CEL and enum rejection (two sources, tag plus
+  digest, bad enum) and a check that `config/samples` apply.
+- **GATE-16** envtest for SourceLoadFailed (event, condition, recovery) and for
+  a ConfigMap edit that rebuilds the VM.
+- **GATE-17** Tests for both controllers and the dispatcher. No test imports
+  `internal/jshook/dispatcher`; sync ordering, filters, timeout streak and
+  requeue are untested.
+- **GATE-18** Webhook envtest suite lives in `internal/`
+  (`internal/jsadmission/webhook/v1alpha1/webhook_suite_test.go:76`) and may
+  skip silently without `KUBEBUILDER_ASSETS`. Move to `test/integration` or
+  fail loudly.
+- **GATE-19** CI checks for `go mod tidy` drift (`test.yml` runs it, never diffs)
+  and `make lint-config`.
+- **GATE-20** e2e hygiene: `make test-e2e` leaves the Kind cluster on failure
+  (`Makefile:89-92`, unverified); `test-e2e.yml:20` installs kind unpinned.
 ## DOC: Documentation
 
 - **DOC-1** README is the Kubebuilder template with `TODO(user)` placeholders.
 - **DOC-2** "Synchronization" is shell-operator jargon, explained nowhere a
   user looks (README, CRD description, sample).
-- **DOC-3** Move the generic Kubebuilder part of `AGENTS.md` into a
-  `kubebuilder-scaffold` block. Write the planned blocks: js-sources,
-  hook-dispatch, admission-webhook, kube-access, api-design, testing.
+- **DOC-4** Stale comments beyond STAT-3: `status.lastExecution.error` in
+  `internal/jshook/dispatcher/dispatcher.go:495`; `BindingContext.Type` lists
+  "Schedule", never produced (`internal/jshook/bindingctx.go:11`); "MVP wires
+  only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`.
