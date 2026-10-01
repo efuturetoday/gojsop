@@ -59,10 +59,11 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
   already declares `jshooks/finalizers`.
-- **REG-4** `decision` Restart contract: six triggers (OOM, panic, timeout,
-  timeout-streak, manual, source-changed), one user knob (`restart`
-  annotation). No `spec.restartPolicy`. `ReasonTimeoutStreak` is marked
-  "legacy" (`registry.go:28`); decide whether it stays.
+- **REG-4** `decision` Restart contract: five triggers (OOM, panic, timeout,
+  manual, source-changed), one user knob (`restart` annotation). No
+  `spec.restartPolicy`. Since the DISP-12 fix every timeout restarts at once,
+  so `ReasonTimeoutStreak` is never set but still a CRD enum value (violates
+  API-1). Decide: drop it from the enum, or give it a meaning again.
 - **REG-5** `decision` Uncommitted debug logging in `Registry.Drop` and
   "cleanup started/done" logs in both controllers. Keep, lower to V(1), or
   remove.
