@@ -24,7 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -124,7 +124,7 @@ var _ = Describe("JSHook Controller", func() {
 				Expect(k8sClient.Delete(ctx, hook)).To(Succeed())
 			})
 
-			recorder := record.NewFakeRecorder(10)
+			recorder := events.NewFakeRecorder(10)
 			reconciler := &jshookctrl.JSHookReconciler{
 				Client:   k8sClient,
 				Scheme:   k8sClient.Scheme(),
