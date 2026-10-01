@@ -61,6 +61,9 @@ type BuildOptions struct {
 	Limits     jsengine.Limits
 	Binder     jsengine.HostBinder
 	PostBuild  PostBuildHook
+	// Backoff spaces the retries of a Broken key. It does not shape the VM,
+	// so a change does not rebuild.
+	Backoff Backoff
 }
 
 // historyCap bounds ManagedVM.History so a flapping VM can't drive registry
@@ -139,43 +142,116 @@ type CallResult struct {
 }
 
 // Registry holds the live JS VM for every JSHook/JSAdmission the controller
-// knows about. One VM per Key (kind and name), owned by the controller's lifetime.
+// knows about. One entry per Key (kind and name), owned by the controller's
+// lifetime.
 //
-// Concurrency model: r.mu protects map structural integrity only — it is
+// Every key is in exactly one state (see State): Ready with a VM, Building, or
+// Broken with the last build error. Builds run asynchronously, one goroutine
+// per key (Ensure); nothing waits for them, a controller is told through
+// Watch when one finishes.
+//
+// Concurrency model: r.mu protects the map and the per-key state only; it is
 // never held while user JS executes (LoadModule, postBuild, Call). Per-key
-// build serialization is done via buildLocks: a goroutine holds the per-key
-// lock while running the expensive VM construction, so two reconciles for
-// the same key can't race, but reconciles for different keys never block
-// each other. Per-VM call serialization is done via ManagedVM.CallMu, which
-// Registry.Call takes around the user fn.
+// build serialization is done via slot.buildMu: a goroutine holds it while
+// running the expensive VM construction, so builds of one key never overlap
+// and builds of different keys never block each other. Per-VM call
+// serialization is done via ManagedVM.CallMu, which Registry.Call takes
+// around the user fn.
 type Registry struct {
-	mu         sync.Mutex
-	vms        map[Key]*ManagedVM
-	buildLocks map[Key]*sync.Mutex
+	mu        sync.Mutex
+	slots     map[Key]*slot
+	notifiers map[Kind]*notifier
+}
+
+// slot is the state of one key. A key is Building while building is set,
+// else Ready while vm is set, else Broken.
+type slot struct {
+	// buildMu serializes builds and restarts of this key.
+	//
+	// js-registry.R7
+	buildMu sync.Mutex
+
+	vm *ManagedVM // installed VM; nil while Broken and before the first build
+
+	// opts are the options of the running build, or of the last attempt.
+	opts     BuildOptions
+	building bool
+	gen      uint64             // bumped for every started or cancelled build
+	cancel   context.CancelFunc // cancels the running build
+	done     chan struct{}      // closed when the running build ends
+
+	// Broken state.
+	err      error
+	attempts int
+	nextTry  time.Time
+
+	// restart log, carried over every installed VM.
+	restarts map[RestartReason]int32
+	history  []RestartEvent
+}
+
+// StateKind is the lifecycle state of a registry key.
+type StateKind int
+
+const (
+	// StateReady: a VM matching the requested options is installed.
+	StateReady StateKind = iota
+	// StateBuilding: a build runs; an older VM may still serve calls until it
+	// finishes.
+	StateBuilding
+	// StateBroken: the last build failed. The entry holds no VM.
+	StateBroken
+)
+
+func (k StateKind) String() string {
+	switch k {
+	case StateReady:
+		return "Ready"
+	case StateBuilding:
+		return "Building"
+	default:
+		return "Broken"
+	}
+}
+
+// State is what Ensure reports for a key.
+type State struct {
+	Kind StateKind
+	// VM is set when Kind == StateReady.
+	VM *ManagedVM
+	// Err, Attempts and NextTry are set when Kind == StateBroken: the last
+	// build error, how many builds failed in a row and the earliest time Ensure
+	// starts the next try.
+	Err      error
+	Attempts int
+	NextTry  time.Time
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		vms:        make(map[Key]*ManagedVM),
-		buildLocks: make(map[Key]*sync.Mutex),
+		slots:     make(map[Key]*slot),
+		notifiers: make(map[Kind]*notifier),
 	}
 }
 
-// getBuildLock returns the per-key build mutex, creating it on first use.
-// The map of build locks is itself protected by r.mu, but the returned
-// mutex is acquired by the caller without holding r.mu — that is the whole
-// point of the split.
-//
-// js-registry.R7
-func (r *Registry) getBuildLock(key Key) *sync.Mutex {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	bMu, ok := r.buildLocks[key]
-	if !ok {
-		bMu = &sync.Mutex{}
-		r.buildLocks[key] = bMu
+func (s *slot) state() State {
+	switch {
+	case s.building:
+		return State{Kind: StateBuilding}
+	case s.vm != nil:
+		return State{Kind: StateReady, VM: s.vm}
+	default:
+		return State{Kind: StateBroken, Err: s.err, Attempts: s.attempts, NextTry: s.nextTry}
 	}
-	return bMu
+}
+
+// abortBuild cancels the running build, if any. Its result is discarded.
+func (s *slot) abortBuild() {
+	if s.building {
+		s.cancel()
+		s.gen++
+		s.building = false
+	}
 }
 
 // build constructs and initializes a fresh VM for key with the given options.
@@ -228,107 +304,204 @@ func (r *Registry) build(ctx context.Context, key Key, opts BuildOptions) (*Mana
 
 // optsChanged reports whether opts needs a different VM than cur: another
 // source hash or other effective limits (zero fields count as the defaults).
-// Binder and PostBuild are funcs and cannot be compared; they follow the
-// source.
+// Binder, PostBuild and Backoff cannot be compared or do not shape the VM;
+// they follow the source.
 func optsChanged(cur, opts BuildOptions) bool {
 	return cur.SourceHash != opts.SourceHash ||
 		cur.Limits.WithDefaults() != opts.Limits.WithDefaults()
 }
 
-// GetOrLoad returns the live ManagedVM for key. If nothing exists yet, or if
-// opts.SourceHash or opts.Limits differ from the last load, a fresh QuickJS runtime is
-// started, the source is evaluated, and the previous VM (if any) is closed.
-// The boolean reports whether a (re)start happened on this call.
+// Ensure reports the state of key for opts and never waits for a build:
 //
-// Implements double-checked locking around a per-key build mutex:
-//  1. fast path under r.mu — return existing if hash matches
-//  2. acquire per-key build mutex (no r.mu held); concurrent reconciles for
-//     other keys race straight through
-//  3. re-check under r.mu in case a peer just finished building
-//  4. run build() with no global lock held — user JS executes here
-//  5. install the new VM under r.mu, after taking the old VM's CallMu so
-//     no in-flight call races vm.Close()
+//   - Ready: a VM matching opts (source hash and effective limits) is installed.
+//   - Building: a build for opts runs (started by this call if none did).
+//   - Broken: the last build for opts failed. The next build starts once the
+//     backoff of opts.Backoff has passed; opts that differ from the failed
+//     ones start a build at once.
+//
+// At most one build runs per key. If opts change while a build runs, the
+// running build is cancelled through its context and a new one starts. The
+// build is bounded by the timeout limit. When it ends, the key is notified on
+// the channel of Watch.
 //
 // js-registry.R3
 // js-registry.R5
-// js-registry.R7
-func (r *Registry) GetOrLoad(ctx context.Context, key Key, opts BuildOptions) (*ManagedVM, bool, error) {
-	// 1. fast path
-	r.mu.Lock()
-	if existing, ok := r.vms[key]; ok && !optsChanged(existing.Opts, opts) {
-		r.mu.Unlock()
-		return existing, false, nil
-	}
-	r.mu.Unlock()
-
-	// 2. serialize builds for this key only
-	bMu := r.getBuildLock(key)
-	bMu.Lock()
-	defer bMu.Unlock()
-
-	// 3. double-check after acquiring the build lock
-	r.mu.Lock()
-	existing, ok := r.vms[key]
-	if ok && !optsChanged(existing.Opts, opts) {
-		r.mu.Unlock()
-		return existing, false, nil
-	}
-	r.mu.Unlock()
-	reason := ReasonSourceChanged
-	if ok && existing.Opts.SourceHash == opts.SourceHash {
-		reason = ReasonLimitsChanged
-	}
-
-	// 4. heavy lifting — runs user JS, no global lock held
-	mi, err := r.build(ctx, key, opts)
-	if err != nil {
-		return nil, false, err
-	}
-
-	// 5. install. Swap under r.mu, then drain the old VM's CallMu before
-	//    Close so we don't race active wasm.
-	old := r.installNew(key, mi, reason, nil)
-	if old != nil {
-		old.CallMu.Lock()
-		old.VM.Close()
-		old.CallMu.Unlock()
-	}
-	return mi, true, nil
+// js-registry.R15
+// js-registry.R16
+// js-registry.R17
+func (r *Registry) Ensure(key Key, opts BuildOptions) State {
+	st, _ := r.ensure(key, opts, false)
+	return st
 }
 
-// installNew swaps mi in for key, propagates the previous restart log, and
-// appends a new RestartEvent if old != nil (the very first build of a key
-// has no event — there's no transition to record). Returns the displaced
-// ManagedVM (or nil) so the caller can drain CallMu before Close.
-//
-// reason / err are the trigger for *this* transition; they are appended to
-// History and bump RestartsByReason[reason] by one.
-//
-// js-registry.R8
-// js-registry.R11
-// status-conditions.R4
-func (r *Registry) installNew(key Key, mi *ManagedVM, reason RestartReason, err error) *ManagedVM {
+// ensure is Ensure plus the done channel of the running build and a force
+// flag that ignores the retry time of a Broken key.
+func (r *Registry) ensure(key Key, opts BuildOptions, force bool) (State, <-chan struct{}) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	old := r.vms[key]
-	if old != nil {
-		mi.RestartsByReason = make(map[RestartReason]int32, len(old.RestartsByReason)+1)
-		maps.Copy(mi.RestartsByReason, old.RestartsByReason)
-		mi.RestartsByReason[reason]++
+	s := r.slots[key]
+	if s == nil {
+		s = &slot{}
+		r.slots[key] = s
+	}
 
-		ev := RestartEvent{Time: time.Now(), Reason: reason}
-		if err != nil {
-			ev.Err = err.Error()
+	switch {
+	case s.vm != nil && !optsChanged(s.vm.Opts, opts):
+		// The installed VM is what opts ask for (also when a build for other
+		// options runs: the change was taken back).
+		s.abortBuild()
+		return s.state(), nil
+	case s.building && !optsChanged(s.opts, opts):
+		return s.state(), s.done
+	case !s.building && s.vm == nil && s.err != nil && !optsChanged(s.opts, opts):
+		if !force && time.Now().Before(s.nextTry) {
+			return s.state(), nil
 		}
-		hist := old.History
+		// retry: attempts keep counting
+	default:
+		s.attempts = 0
+		s.err = nil
+	}
+
+	var reason RestartReason
+	if s.vm != nil {
+		reason = ReasonSourceChanged
+		if s.vm.Opts.SourceHash == opts.SourceHash {
+			reason = ReasonLimitsChanged
+		}
+	}
+	s.abortBuild()
+	s.opts = opts
+	done := r.startBuildLocked(key, s, reason)
+	return s.state(), done
+}
+
+// startBuildLocked starts the build goroutine for s.opts. r.mu must be held.
+func (r *Registry) startBuildLocked(key Key, s *slot, reason RestartReason) <-chan struct{} {
+	timeout := time.Duration(s.opts.Limits.WithDefaults().TimeoutSeconds) * time.Second
+	// The build outlives the reconcile that asked for it, so it derives from
+	// a background context, bounded by the timeout limit.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	s.building = true
+	s.gen++
+	s.cancel = cancel
+	s.done = make(chan struct{})
+	go r.runBuild(ctx, cancel, key, s, s.gen, s.opts, reason, s.done)
+	return s.done
+}
+
+// runBuild builds a VM for opts under the per-key build lock and installs it,
+// or marks the key Broken. A build that was cancelled or whose key was dropped
+// in the meantime is discarded.
+//
+// js-registry.R6
+// js-registry.R7
+// js-registry.R18
+func (r *Registry) runBuild(ctx context.Context, cancel context.CancelFunc, key Key, s *slot, gen uint64, opts BuildOptions, reason RestartReason, done chan struct{}) {
+	defer close(done)
+	defer cancel()
+
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+
+	var mi *ManagedVM
+	err := ctx.Err()
+	if err == nil {
+		mi, err = r.build(ctx, key, opts)
+	}
+
+	r.mu.Lock()
+	if r.slots[key] != s || s.gen != gen {
+		r.mu.Unlock()
+		if mi != nil {
+			mi.VM.Close() // never visible to a caller
+		}
+		return
+	}
+	s.building = false
+	var old *ManagedVM
+	if err != nil {
+		old = s.vm
+		s.vm = nil
+		s.err = err
+		s.attempts++
+		s.nextTry = time.Now().Add(opts.Backoff.Delay(s.attempts))
+	} else {
+		old = r.installLocked(s, mi, reason)
+	}
+	n := r.notifierLocked(key.Kind)
+	r.mu.Unlock()
+
+	closeVM(old)
+	n.add(key)
+}
+
+// closeVM closes a displaced VM once no call runs on it.
+//
+// js-registry.R8
+func closeVM(mi *ManagedVM) {
+	if mi != nil {
+		mi.CallMu.Lock()
+		mi.VM.Close()
+		mi.CallMu.Unlock()
+	}
+}
+
+// installLocked makes mi the VM of s, carries the restart log over and
+// appends a RestartEvent if reason is set (the very first build of a key has
+// no transition to record). Returns the displaced VM (or nil) so the caller
+// can drain CallMu before Close. r.mu must be held.
+//
+// js-registry.R11
+// status-conditions.R4
+func (r *Registry) installLocked(s *slot, mi *ManagedVM, reason RestartReason) *ManagedVM {
+	if reason != "" {
+		next := make(map[RestartReason]int32, len(s.restarts)+1)
+		maps.Copy(next, s.restarts)
+		next[reason]++
+		s.restarts = next
+
+		hist := s.history
 		if len(hist) >= historyCap {
 			hist = hist[len(hist)-historyCap+1:]
 		}
-		mi.History = append(append([]RestartEvent(nil), hist...), ev)
+		s.history = append(append([]RestartEvent(nil), hist...), RestartEvent{Time: time.Now(), Reason: reason})
 	}
-	r.vms[key] = mi
+	mi.RestartsByReason = s.restarts
+	mi.History = s.history
+
+	old := s.vm
+	s.vm = mi
+	s.err = nil
+	s.attempts = 0
 	return old
+}
+
+// GetOrLoad is Ensure that waits for the build: it returns the ManagedVM for
+// opts, or the build error. The boolean reports whether a different VM was
+// installed than the one before the call. A Broken key is retried at once.
+// ctx only bounds the wait, not the build.
+//
+// js-registry.R3
+// js-registry.R5
+func (r *Registry) GetOrLoad(ctx context.Context, key Key, opts BuildOptions) (*ManagedVM, bool, error) {
+	before, _ := r.Get(key)
+	st, done := r.ensure(key, opts, true)
+	for {
+		switch st.Kind {
+		case StateReady:
+			return st.VM, st.VM != before, nil
+		case StateBroken:
+			return nil, false, st.Err
+		}
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+		st, done = r.ensure(key, opts, false)
+	}
 }
 
 // Get returns the current ManagedVM for key without modifying anything. The
@@ -337,25 +510,28 @@ func (r *Registry) installNew(key Key, mi *ManagedVM, reason RestartReason, err 
 func (r *Registry) Get(key Key) (*ManagedVM, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	mi, ok := r.vms[key]
-	return mi, ok
+	s := r.slots[key]
+	if s == nil || s.vm == nil {
+		return nil, false
+	}
+	return s.vm, true
 }
 
-// Drop closes and forgets the VM for key. Idempotent; called from the
-// reconciler when the resource is deleted. Drop drains any in-flight call
-// (by acquiring CallMu) before vm.Close so we don't race active wasm.
-//
-// The build lock is dropped too; in the unlikely case a concurrent
-// GetOrLoad is mid-build for the same key it will finish and install a
-// zombie VM, which the next reconcile (NotFound → Drop) cleans up.
+// Drop closes and forgets the VM for key and cancels a running build.
+// Idempotent; called from the reconciler when the resource is deleted. Drop
+// drains any in-flight call (by acquiring CallMu) before vm.Close so we don't
+// race active wasm.
 //
 // js-registry.R8
 func (r *Registry) Drop(key Key) {
 	logger := log.Log.WithName("jsregistry").WithValues("key", key.String())
 	r.mu.Lock()
-	mi := r.vms[key]
-	delete(r.vms, key)
-	delete(r.buildLocks, key)
+	var mi *ManagedVM
+	if s := r.slots[key]; s != nil {
+		s.abortBuild()
+		mi = s.vm
+		delete(r.slots, key)
+	}
 	r.mu.Unlock()
 
 	logger.Info("drop entered", "vmFound", mi != nil)
@@ -374,11 +550,10 @@ func (r *Registry) Drop(key Key) {
 // (memory/panic/timeout/manual) that don't have the build inputs in hand.
 // Returns ErrUnknownKey if the resource is unknown to the registry.
 //
-// Holds the per-key build mutex across the rebuild so a concurrent
-// GetOrLoad for the same key serializes behind it; r.mu is only held for
-// the brief read of the existing entry and the install at the end. The
-// old VM's CallMu is acquired before vm.Close so we don't race in-flight
-// wasm.
+// Holds the per-key build mutex across the rebuild so a build for the same key
+// serializes behind it; r.mu is only held for the brief read of the existing
+// entry and the install at the end. The old VM's CallMu is acquired before
+// vm.Close so we don't race in-flight wasm.
 //
 // The build context derives from a background context, not from the caller's
 // request context (about to be cancelled on a timeout rescue), but is bounded
@@ -390,14 +565,20 @@ func (r *Registry) Drop(key Key) {
 // js-registry.R7
 // js-registry.R8
 func (r *Registry) RestartByKey(key Key, reason RestartReason) (*ManagedVM, error) {
-	bMu := r.getBuildLock(key)
-	bMu.Lock()
-	defer bMu.Unlock()
+	r.mu.Lock()
+	s := r.slots[key]
+	r.mu.Unlock()
+	if s == nil {
+		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
+	}
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
 
 	r.mu.Lock()
-	existing, ok := r.vms[key]
+	existing := s.vm
+	current := r.slots[key] == s
 	r.mu.Unlock()
-	if !ok {
+	if !current || existing == nil {
 		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
 	}
 
@@ -409,12 +590,15 @@ func (r *Registry) RestartByKey(key Key, reason RestartReason) (*ManagedVM, erro
 		return nil, err
 	}
 
-	old := r.installNew(key, mi, reason, nil)
-	if old != nil {
-		old.CallMu.Lock()
-		old.VM.Close()
-		old.CallMu.Unlock()
+	r.mu.Lock()
+	if r.slots[key] != s {
+		r.mu.Unlock()
+		mi.VM.Close()
+		return nil, fmt.Errorf("%w: %s", ErrUnknownKey, key)
 	}
+	old := r.installLocked(s, mi, reason)
+	r.mu.Unlock()
+	closeVM(old)
 	return mi, nil
 }
 
@@ -474,5 +658,11 @@ func (r *Registry) Call(ctx context.Context, key Key, fn func(ctx context.Contex
 func (r *Registry) Len() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.vms)
+	n := 0
+	for _, s := range r.slots {
+		if s.vm != nil {
+			n++
+		}
+	}
+	return n
 }

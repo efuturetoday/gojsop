@@ -3,7 +3,9 @@ id: js-registry
 status: accepted
 entrypoints:
   - jsregistry.Registry.Call
+  - jsregistry.Registry.Ensure
   - jsregistry.Registry.GetOrLoad
+  - jsregistry.Registry.Watch
   - jsregistry.Registry.RestartByKey
   - jslifecycle.Rescue
 ---
@@ -104,6 +106,18 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
 - **R14** Key every registry entry by `jsregistry.Key`, which carries the kind next to the name.
   Why: both kinds are cluster-scoped and share one registry, so a JSHook and a JSAdmission of the same name must not replace each other's VM.
   Gate: `TestRegistry_SameNameInBothKindsCoexists`.
+- **R15** Never wait for a build in a reconcile or a call: ask `Registry.Ensure`, which reports Ready, Building or Broken at once.
+  Why: a hanging top-level `while(true){}` must not stall the reconcile worker of other hooks.
+  Gate: `TestRegistry_Ensure_BuildsAsyncAndNotifies`, `TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys`.
+- **R16** Cancel the running build of a key through its context when `Ensure` gets other options, and start the new build.
+  Why: a fixed source must not wait for the stuck one to run into its deadline.
+  Gate: `TestRegistry_Ensure_NewOptsCancelRunningBuild`, `TestRegistry_Concurrent_EnsureCallDrop`.
+- **R17** Run one build/retry loop per key: a Broken key is retried only after its backoff, changed options rebuild at once.
+  Why: a bad source must not be rebuilt in a tight loop, and a fix must not wait for the backoff.
+  Gate: `TestRegistry_Ensure_BrokenBacksOffAndSourceChangeRebuildsAtOnce`, `TestBackoff_DoublesCapsAndJitters`.
+- **R18** Notify the key on the `Registry.Watch` channel of its kind when a build ends, whether it installed a VM or failed.
+  Why: reconciles do not wait, so the controller of the kind needs the event to publish the new state.
+  Gate: `TestRegistry_Ensure_BuildsAsyncAndNotifies`, `TestRegistry_Watch_DeliversOnlyOwnKind`.
 
 ## Decisions
 
@@ -113,6 +127,10 @@ calls arrive from a synchronous webhook. Both share one per-VM lock.
   Why: the dispatcher and the admission server each had a copy. Not taken: not recorded anywhere.
 - **The registry caches the whole `BuildOptions` and never loads sources.** Status: accepted (carried over from the block, no date or name recorded).
   Why: rescue callers hold no source. Not taken: not recorded anywhere.
+
+- **Builds run asynchronously; a newer build cancels a running one.** Status: proposed.
+  Why: a build runs user JavaScript that may hang (REG-1); a reconcile or call that waits for it stalls other hooks, and a stuck build blocks the fix. Every key is in one state, Ready, Building or Broken, and `Registry.Ensure` reports it without waiting.
+  Not taken: a synchronous build with a reconcile deadline, because the build lock stays held by the hanging build and the reconcile worker still waits.
 
 ## Open
 
