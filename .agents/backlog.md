@@ -41,6 +41,13 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **EXEC-4** `gap` JS runtime errors are one truncated string. `handle()` and
   `validate()` errors have no stack, line number or export name.
 
+- **EXEC-6** `debt` Dispatcher, admission server, controllers and `jslifecycle`
+  talk to `jsregistry.Registry` and `jsengine.VM` directly. Introduce the port
+  `jsrun.Runner` (ensure, invoke by key, export and input, restart, drop,
+  watch), make the registry its first adapter, and gate the import boundary
+  (GATE-2). The port must also fit an engine that prepares once and invokes
+  statelessly (spike `spike/quickjs-wasm`).
+
 ## REG: JS registry and restarts
 
 - **REG-3** `gap` No finalizer on JSHook / JSAdmission. Deletion is seen via
