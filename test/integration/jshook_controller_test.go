@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -107,4 +108,44 @@ var _ = Describe("JSHook Controller", func() {
 			Expect(updated.Status.Instance.SourceHash).NotTo(BeEmpty())
 		})
 	})
+
+	DescribeTable("When the hook source lacks a required export",
+		func(name, inline, missing string) {
+			// jshook.R2
+			ctx := context.Background()
+			nn := types.NamespacedName{Name: name}
+			Expect(k8sClient.Create(ctx, &corev1alpha1.JSHook{
+				ObjectMeta: metav1.ObjectMeta{Name: name},
+				Spec:       corev1alpha1.JSHookSpec{Source: corev1alpha1.JSSource{Inline: inline}},
+			})).To(Succeed())
+			DeferCleanup(func() {
+				hook := &corev1alpha1.JSHook{}
+				Expect(k8sClient.Get(ctx, nn, hook)).To(Succeed())
+				Expect(k8sClient.Delete(ctx, hook)).To(Succeed())
+			})
+
+			recorder := record.NewFakeRecorder(10)
+			reconciler := &jshookctrl.JSHookReconciler{
+				Client:   k8sClient,
+				Scheme:   k8sClient.Scheme(),
+				Loader:   jssource.NewChain(jssource.InlineLoader{}),
+				Registry: jsregistry.NewRegistry(),
+				Recorder: recorder,
+			}
+			res, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: nn})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(res.RequeueAfter).To(BeNumerically(">", 0))
+
+			updated := &corev1alpha1.JSHook{}
+			Expect(k8sClient.Get(ctx, nn, updated)).To(Succeed())
+			cond := apimeta.FindStatusCondition(updated.Status.Conditions, conditions.Ready)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Message).To(ContainSubstring("missing required export: " + missing + "()"))
+			Expect(recorder.Events).To(Receive(ContainSubstring(conditions.EventEntrypointMissing)))
+			Expect(reconciler.Registry.Len()).To(BeZero())
+		},
+		Entry("no handle", "no-handle-hook", `function config() { return {}; }`, "handle"),
+		Entry("no config", "no-config-hook", `function handle() {}`, "config"),
+	)
 })

@@ -39,6 +39,13 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   benchmark never ran. Fallback if too slow: fork qjs for QuickJS interrupts.
 - **EXEC-4** `gap` JS runtime errors are one truncated string. `handle()` and
   `validate()` errors have no stack, line number or export name.
+- **EXEC-5** `bug` Data race in `VM.withContext` (`internal/jsengine/vm.go:110`).
+  It swaps `qctx.Context` while a wazero goroutine started by
+  `CloseModuleOnCanceledOrTimeout` still reads it through `qjs.Context.Done`.
+  `go test -race` fails on every test that runs JS, for example
+  `TestHandle_ReceivesBindingContext` and `TestRegistry_Drop` (46 reports in
+  `./internal/jshook ./internal/jsregistry`), so the race detector cannot run
+  in CI. Done when `go test -race ./internal/...` is clean and a CI job runs it.
 
 ## REG: JS registry and restarts
 
@@ -133,6 +140,17 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **DISP-11** `gap` Selectors only partly applied: top-level `nameSelector`,
   `fieldSelector`, `namespace.labelSelector`, `matchExpressions` and
   multi-namespace are ignored (`dispatcher.go:208-224`).
+- **DISP-12** `bug` Cancelling a running `handle()` crashes the operator. A
+  timeout deadline, a re-`Subscribe` or a `Drop` while a call runs closes the
+  wazero module; `Registry.Call` reports `OutcomePanic`, the worker rescues,
+  and `VM.Close` on the dead module panics with `failed to call QJS_Free:
+  module closed with context ...` in the worker goroutine. Seen with a
+  dispatcher test: `handle(){ while(true){} }` and `TimeoutSeconds: 1`, and
+  with a re-`Subscribe` during a 300 ms call. A timeout is thus never
+  `OutcomeCancelled`. Blocks tests for jshook.R9, jshook.R11, jshook.R12
+  (panic half) and jsadmission.R11, jsadmission.R12. Done when those three
+  cases leave the process alive, the VM is rebuilt, and tests hold R9, R11
+  and R12.
 ## ADM: Admission webhook
 
 - **ADM-1** `bug` Registrar sync failure is invisible. CA read or API write
@@ -259,9 +277,10 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-16** envtest for SourceLoadFailed (event, condition, recovery), for an
   `oci` source (must yield SourceLoadFailed) and for a ConfigMap edit that
   rebuilds the VM.
-- **GATE-17** Tests for both controllers and the dispatcher. No test imports
-  `internal/jshook/dispatcher`; sync ordering, filters, timeout streak and
-  requeue are untested.
+- **GATE-17** Test for jsadmission.R10. The registrar's `timeoutSeconds` and
+  `failurePolicy` are testable in envtest, but the handler's copy sits in
+  `Server.policies` with no accessor, and a timeout run is blocked by DISP-12.
+  Done when a test shows both sides get the same values.
 - **GATE-18** Webhook envtest suite lives in `internal/`
   (`internal/jsadmission/webhook/v1alpha1/webhook_suite_test.go:76`) and may
   skip silently without `KUBEBUILDER_ASSETS`. Move to `test/integration` or

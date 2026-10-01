@@ -106,20 +106,20 @@ instead of events.
 | ID | Rule | Source | Held by |
 |---|---|---|---|
 | jshook.R1 | `config()` is read once per VM build and its result becomes the hook's bindings; a hook without `config()` yields no bindings. | `jshook.ReadConfig`, `jshook.Config` | `TestReadConfig_FromHookSource`, `TestReadConfig_MissingFunction` |
-| jshook.R2 | A hook that exports no `config` or no `handle` fails to build and reports it. | `jshook.ReadConfig`, controller `readConfig` | missing → GATE-17 |
-| jshook.R3 | A binding delivers its `Synchronization` context first; changes that arrive while it is prepared are delivered after it, not dropped. | `dispatcher.subscription.startWatcher` | missing → GATE-17 |
-| jshook.R4 | An `Added` event for an object that already is in the snapshot is not delivered again. | `dispatcher.subscription.startWatcher` | missing → GATE-17 |
-| jshook.R5 | With `executeHookOnSynchronization: false` no `Synchronization` context is sent and each existing object arrives as `Added`. | `jshook.KubernetesBinding.ExecuteHookOnSynchronization` | missing → GATE-17 |
-| jshook.R6 | Only event types listed in `executeHookOnEvent` are delivered; an empty list means all three. | `jshook.KubernetesBinding.ExecuteHookOnEvent` | missing → GATE-17 |
+| jshook.R2 | A hook that exports no `config` or no `handle` fails to build and reports it. | `jshook.ReadConfig`, controller `readConfig` | `TestReadConfig_PostBuildRejectsMissingExports`, `TestControllers` |
+| jshook.R3 | A binding delivers its `Synchronization` context first; changes that arrive while it is prepared are delivered after it, not dropped. | `dispatcher.subscription.startWatcher` | `TestDispatcher_SynchronizationFirstThenDeltas` |
+| jshook.R4 | An `Added` event for an object that already is in the snapshot is not delivered again. | `dispatcher.subscription.startWatcher` | `TestDispatcher_SynchronizationFirstThenDeltas` |
+| jshook.R5 | With `executeHookOnSynchronization: false` no `Synchronization` context is sent and each existing object arrives as `Added`. | `jshook.KubernetesBinding.ExecuteHookOnSynchronization` | `TestDispatcher_SyncDisabled_ExistingObjectsArriveAsAdded` |
+| jshook.R6 | Only event types listed in `executeHookOnEvent` are delivered; an empty list means all three. | `jshook.KubernetesBinding.ExecuteHookOnEvent` | `TestDispatcher_ExecuteHookOnEvent_ListedTypesOnly`, `TestDispatcher_ExecuteHookOnEvent_EmptyMeansAll` |
 | jshook.R7 | `handle()` receives one BindingContext per call, as a one-element array: `Event` with `binding`, `type`, `watchEvent`, `object`; `Synchronization` with `binding`, `type`, `objects`. | `jshook.BindingContext`, `jshook.Handle` | `TestHandle_ReceivesBindingContext` |
-| jshook.R8 | Changes of one object that wait for a call fold into one call with the newest object. | shell-operator parity, `dispatcher.eventKey` | missing → GATE-17 |
-| jshook.R9 | Calls of one hook never overlap, also not across a re-subscribe. | decision (commit history), `dispatcher.subscription.stop` | missing → GATE-17 |
-| jshook.R10 | A throwing `handle()` records a Warning event, does not restart the VM and the event is retried with backoff. | `dispatcher.subscription.handleEvent` | missing → GATE-17 |
-| jshook.R11 | A call is cancelled at the hook's `timeoutSeconds` and records a Warning event; three timeouts in a row restart the VM. | `jsengine.Limits`, `dispatcher.timeoutStreakThreshold` | missing → GATE-17 |
-| jshook.R12 | A panic or a memory-limit error restarts the VM at once and the event is retried. | [js-registry](../aspects/js-registry.md), REG-4, `dispatcher.subscription.rescue` | missing → GATE-17 |
-| jshook.R13 | A retried event never overwrites a fresher state of the same object; success ends the retries. | `dispatcher.subscription.requeue` | missing → GATE-17 |
-| jshook.R14 | After the hook is deleted it receives no more events. | `dispatcher.Dispatcher.Drop` | missing → GATE-17 |
-| jshook.R15 | A namespace (one name) and `labelSelector.matchLabels` restrict the objects delivered. | `jshook.KubernetesBinding` | missing → GATE-17 |
+| jshook.R8 | Changes of one object that wait for a call fold into one call with the newest object. | shell-operator parity, `dispatcher.eventKey` | `TestDispatcher_BurstOfChangesFoldsIntoNewestObject` |
+| jshook.R9 | Calls of one hook never overlap, also not across a re-subscribe. | decision (commit history), `dispatcher.subscription.stop` | missing → DISP-12 |
+| jshook.R10 | A throwing `handle()` records a Warning event, does not restart the VM and the event is retried with backoff. | `dispatcher.subscription.handleEvent` | `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
+| jshook.R11 | A call is cancelled at the hook's `timeoutSeconds` and records a Warning event; three timeouts in a row restart the VM. | `jsengine.Limits`, `dispatcher.timeoutStreakThreshold` | missing → DISP-12 |
+| jshook.R12 | A panic or a memory-limit error restarts the VM at once and the event is retried. | [js-registry](../aspects/js-registry.md), REG-4, `dispatcher.subscription.rescue` | missing → DISP-12 |
+| jshook.R13 | A retried event never overwrites a fresher state of the same object; success ends the retries. | `dispatcher.subscription.requeue` | `TestDispatcher_RetryKeepsFresherStateOfSameObject`, `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
+| jshook.R14 | After the hook is deleted it receives no more events. | `dispatcher.Dispatcher.Drop` | `TestDispatcher_Drop_NoMoreEvents` |
+| jshook.R15 | A namespace (one name) and `labelSelector.matchLabels` restrict the objects delivered. | `jshook.KubernetesBinding` | `TestControllers` |
 | jshook.R16 | A binding field that gojsop does not act on is not presented as working (project rule API-1). Violated today: `schedule`, `onStartup`, `jqFilter`, `allowFailure`, `queue`, other selector forms. | decision API-1 | missing → DISP-1 |
 
 Every rule is held by a test or is `missing → <KEY>`.
@@ -144,4 +144,4 @@ Every rule is held by a test or is `missing → <KEY>`.
 
 ## Open
 
-DISP-1, DISP-2, DISP-3, DISP-4, DISP-5, DISP-6, DISP-7, DISP-8, DISP-9, DISP-10, DISP-11, STAT-5, API-1, REG-4, EXEC-2, GATE-17
+DISP-1, DISP-2, DISP-3, DISP-4, DISP-5, DISP-6, DISP-7, DISP-8, DISP-9, DISP-10, DISP-11, STAT-5, API-1, REG-4, EXEC-2, DISP-12

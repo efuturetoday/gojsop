@@ -48,6 +48,11 @@ var (
 	k8sClient client.Client
 )
 
+// TestControllers runs every Ginkgo spec of this package. The sdlc-check
+// anchors for the specs sit here, because it only sees comments inside Test
+// functions; each spec repeats its ID in its own body.
+// jshook.R2
+// jshook.R15
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 
