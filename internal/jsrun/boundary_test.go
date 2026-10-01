@@ -3,8 +3,13 @@ package jsrun_test
 import (
 	"bytes"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -104,5 +109,54 @@ func TestImportBoundary_EngineStaysBehindRegistry(t *testing.T) {
 		if pkg == runnerPort && slices.ContainsFunc(imps, func(i string) bool { return strings.HasPrefix(i, modPath) }) {
 			t.Errorf("jsrun imports %v: the port depends on no adapter", imps)
 		}
+	}
+}
+
+// js-execution.R10
+// The data path (dispatcher, admission server, Handle wrappers) holds a
+// jsrun.Runner and nothing of the lifecycle side: no Scripts, Spec, State or
+// Phase. Only the controllers (packages named controller) and cmd see those.
+func TestImportBoundary_DataPathUsesOnlyRunnerSide(t *testing.T) {
+	lifecycle := map[string]bool{"Scripts": true, "Spec": true, "State": true, "PostBuildHook": true}
+	roots := []string{"../jshook", "../jsadmission"}
+	seen := 0
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				if d.Name() == "controller" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			if err != nil {
+				return err
+			}
+			seen++
+			ast.Inspect(f, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "jsrun" &&
+					(lifecycle[sel.Sel.Name] || strings.HasPrefix(sel.Sel.Name, "Phase")) {
+					t.Errorf("%s uses jsrun.%s: the data path depends on jsrun.Runner only", path, sel.Sel.Name)
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if seen < 6 {
+		t.Fatalf("only %d data path files found: the root list is stale", seen)
 	}
 }

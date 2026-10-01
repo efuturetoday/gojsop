@@ -25,14 +25,21 @@ const historyCap = 20
 
 // ManagedVM is the registry's view of a per-resource persistent VM. Opts is
 // cached so the registry can rebuild the VM after a rescue restart without
-// bouncing through the controller. The embedded Instance is the part callers
-// see through jsrun.Runner.
+// bouncing through the controller. PreparedAt, Limits, Meta and Recoveries are
+// what callers see of it, through jsrun.State.
 //
 // js-registry.R9
 type ManagedVM struct {
-	jsrun.Instance
+	PreparedAt time.Time
+	// Limits are the effective limits (defaults applied).
+	Limits jsrun.Limits
+	// Meta is the value the PostBuildHook returned.
+	Meta any
+	// Recoveries is the recovery log as of the install of this VM.
+	Recoveries jsrun.Recoveries
+
 	VM   *jsengine.VM
-	Opts jsrun.Options
+	Opts jsrun.Spec
 
 	// CallMu serializes calls into the qjs runtime. qjs is not goroutine-safe,
 	// and a JSHook + JSAdmission could converge on the same VM in a future
@@ -77,7 +84,7 @@ type slot struct {
 	vm *ManagedVM // installed VM; nil while Broken and before the first build
 
 	// opts are the options of the running build, or of the last attempt.
-	opts     jsrun.Options
+	opts     jsrun.Spec
 	building bool
 	gen      uint64             // bumped for every started or cancelled build
 	cancel   context.CancelFunc // cancels the running build
@@ -88,8 +95,8 @@ type slot struct {
 	nextTry  time.Time
 
 	// restart log, carried over every installed VM.
-	restarts map[jsrun.RestartReason]int32
-	history  []jsrun.RestartEvent
+	restarts map[jsrun.RecoveryReason]int32
+	history  []jsrun.Recovery
 }
 
 func NewRegistry() *Registry {
@@ -102,11 +109,11 @@ func NewRegistry() *Registry {
 func (s *slot) state() jsrun.State {
 	switch {
 	case s.building:
-		return jsrun.State{Kind: jsrun.StateBuilding}
+		return jsrun.State{Phase: jsrun.PhasePreparing}
 	case s.vm != nil:
-		return jsrun.State{Kind: jsrun.StateReady, Instance: &s.vm.Instance}
+		return jsrun.State{Phase: jsrun.PhaseReady, PreparedAt: s.vm.PreparedAt, Meta: s.vm.Meta, Recoveries: s.vm.Recoveries}
 	default:
-		return jsrun.State{Kind: jsrun.StateBroken, Err: s.err, Attempts: s.attempts, NextTry: s.nextTry}
+		return jsrun.State{Phase: jsrun.PhaseFailed, Err: s.err, Attempts: s.attempts, NextAttempt: s.nextTry}
 	}
 }
 
@@ -129,7 +136,7 @@ func (s *slot) abortBuild() {
 // reconcile deadline.
 //
 // js-registry.R6
-func (r *Registry) build(ctx context.Context, key jsrun.Key, opts jsrun.Options) (*ManagedVM, error) {
+func (r *Registry) build(ctx context.Context, key jsrun.Key, opts jsrun.Spec) (*ManagedVM, error) {
 	vm, err := jsengine.New(opts.Limits)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", jsrun.ErrNewVM, err)
@@ -165,23 +172,22 @@ func (r *Registry) build(ctx context.Context, key jsrun.Key, opts jsrun.Options)
 		}
 	}
 	return &ManagedVM{
-		Instance: jsrun.Instance{
-			StartedAt: time.Now(),
-			Limits:    opts.Limits.WithDefaults(),
-			Extra:     extra,
-		},
-		VM:   vm,
-		Opts: opts,
+		PreparedAt: time.Now(),
+		Limits:     opts.Limits.WithDefaults(),
+		Meta:       extra,
+		VM:         vm,
+		Opts:       opts,
 	}, nil
 }
 
 // optsChanged reports whether opts needs a different VM than cur: another
-// source hash or other effective limits (zero fields count as the defaults).
-// Host, PostBuild and Backoff cannot be compared or do not shape the VM;
-// they follow the source.
-func optsChanged(cur, opts jsrun.Options) bool {
+// source hash, other effective limits (zero fields count as the defaults) or
+// another reset token. Host, PostBuild and Backoff cannot be compared or do not
+// shape the VM; they follow the source.
+func optsChanged(cur, opts jsrun.Spec) bool {
 	return cur.SourceHash != opts.SourceHash ||
-		cur.Limits.WithDefaults() != opts.Limits.WithDefaults()
+		cur.Limits.WithDefaults() != opts.Limits.WithDefaults() ||
+		cur.ResetToken != opts.ResetToken
 }
 
 // Ensure reports the state of key for opts and never waits for a build:
@@ -202,7 +208,7 @@ func optsChanged(cur, opts jsrun.Options) bool {
 // js-registry.R15
 // js-registry.R16
 // js-registry.R17
-func (r *Registry) Ensure(key jsrun.Key, opts jsrun.Options) jsrun.State {
+func (r *Registry) Ensure(key jsrun.Key, opts jsrun.Spec) jsrun.State {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -230,11 +236,15 @@ func (r *Registry) Ensure(key jsrun.Key, opts jsrun.Options) jsrun.State {
 		s.err = nil
 	}
 
-	var reason jsrun.RestartReason
+	var reason jsrun.RecoveryReason
 	if s.vm != nil {
-		reason = jsrun.ReasonSourceChanged
-		if s.vm.Opts.SourceHash == opts.SourceHash {
+		switch {
+		case s.vm.Opts.SourceHash != opts.SourceHash:
+			reason = jsrun.ReasonSourceChanged
+		case s.vm.Opts.Limits.WithDefaults() != opts.Limits.WithDefaults():
 			reason = jsrun.ReasonLimitsChanged
+		default:
+			reason = jsrun.ReasonManual // only the reset token differs
 		}
 	}
 	s.abortBuild()
@@ -244,7 +254,7 @@ func (r *Registry) Ensure(key jsrun.Key, opts jsrun.Options) jsrun.State {
 }
 
 // startBuildLocked starts the build goroutine for s.opts. r.mu must be held.
-func (r *Registry) startBuildLocked(key jsrun.Key, s *slot, reason jsrun.RestartReason) {
+func (r *Registry) startBuildLocked(key jsrun.Key, s *slot, reason jsrun.RecoveryReason) {
 	timeout := time.Duration(s.opts.Limits.WithDefaults().TimeoutSeconds) * time.Second
 	// The build outlives the reconcile that asked for it, so it derives from
 	// a background context, bounded by the timeout limit.
@@ -262,7 +272,7 @@ func (r *Registry) startBuildLocked(key jsrun.Key, s *slot, reason jsrun.Restart
 // js-registry.R6
 // js-registry.R7
 // js-registry.R18
-func (r *Registry) runBuild(ctx context.Context, cancel context.CancelFunc, key jsrun.Key, s *slot, gen uint64, opts jsrun.Options, reason jsrun.RestartReason) {
+func (r *Registry) runBuild(ctx context.Context, cancel context.CancelFunc, key jsrun.Key, s *slot, gen uint64, opts jsrun.Spec, reason jsrun.RecoveryReason) {
 	defer cancel()
 
 	s.buildMu.Lock()
@@ -319,9 +329,9 @@ func closeVM(mi *ManagedVM) {
 //
 // js-registry.R11
 // status-conditions.R4
-func (r *Registry) installLocked(s *slot, mi *ManagedVM, reason jsrun.RestartReason) *ManagedVM {
+func (r *Registry) installLocked(s *slot, mi *ManagedVM, reason jsrun.RecoveryReason) *ManagedVM {
 	if reason != "" {
-		next := make(map[jsrun.RestartReason]int32, len(s.restarts)+1)
+		next := make(map[jsrun.RecoveryReason]int32, len(s.restarts)+1)
 		maps.Copy(next, s.restarts)
 		next[reason]++
 		s.restarts = next
@@ -330,10 +340,9 @@ func (r *Registry) installLocked(s *slot, mi *ManagedVM, reason jsrun.RestartRea
 		if len(hist) >= historyCap {
 			hist = hist[len(hist)-historyCap+1:]
 		}
-		s.history = append(append([]jsrun.RestartEvent(nil), hist...), jsrun.RestartEvent{Time: time.Now(), Reason: reason})
+		s.history = append(append([]jsrun.Recovery(nil), hist...), jsrun.Recovery{Time: time.Now(), Reason: reason})
 	}
-	mi.RestartsByReason = s.restarts
-	mi.History = s.history
+	mi.Recoveries = jsrun.Recoveries{ByReason: s.restarts, Recent: s.history}
 
 	old := s.vm
 	s.vm = mi
@@ -352,14 +361,6 @@ func (r *Registry) lookup(key jsrun.Key) (mi *ManagedVM, known bool) {
 		return nil, false
 	}
 	return s.vm, true
-}
-
-// Known reports whether the registry holds an entry for key, in any state.
-// With Get it tells "no VM yet or any more" (retry later) from "never
-// registered or dropped" (give up).
-func (r *Registry) Known(key jsrun.Key) bool {
-	_, known := r.lookup(key)
-	return known
 }
 
 // Get returns the current ManagedVM for key without modifying anything. The
@@ -404,27 +405,43 @@ func (r *Registry) Drop(key jsrun.Key) {
 	}
 }
 
-// Restart is the rescue and manual restart path: it closes the VM of key
-// and starts a rebuild from the cached jsrun.Options, and returns without
-// waiting for it. Until the build ends the key is Building and Registry.Call
-// reports ErrVMUnavailable; a failed build leaves it Broken, holding no VM.
-// The key is notified now and again when the build ends, so its controller
-// publishes both states. Returns ErrUnknownKey if the resource is unknown to
-// the registry.
+// Restart closes the VM of key and starts a rebuild from the cached
+// jsrun.Spec, and returns without waiting for it. It is not part of the port:
+// Invoke recovers a VM itself after a panic, the memory limit or a
+// cancellation, and Ensure rebuilds for a changed jsrun.Spec.ResetToken. This
+// method serves tests and registrytest. Until the build ends the key is
+// Preparing and Registry.Call reports ErrVMUnavailable; a failed build leaves
+// it Failed, holding no VM. The key is notified now and again when the build
+// ends, so its controller publishes both states. Returns ErrUnknownKey if the
+// resource is unknown to the registry.
+//
+// js-registry.R4
+func (r *Registry) Restart(key jsrun.Key, reason jsrun.RecoveryReason) error {
+	_, err := r.restart(key, nil, reason)
+	return err
+}
+
+// restart is the one rebuild path of a key outside Ensure. With only set it
+// acts when only is still the VM of the key, so a second caller of a failed
+// call does not kill the VM that the first one already rebuilt. It reports
+// whether it started a rebuild.
 //
 // The old VM's CallMu is acquired before vm.Close so we don't race in-flight
 // wasm; callers run it after their own call returned. The build runs under
 // the context and deadline of Ensure.
 //
-// js-registry.R4
 // js-registry.R13
 // js-registry.R19
-func (r *Registry) Restart(key jsrun.Key, reason jsrun.RestartReason) error {
+func (r *Registry) restart(key jsrun.Key, only *ManagedVM, reason jsrun.RecoveryReason) (bool, error) {
 	r.mu.Lock()
 	s := r.slots[key]
 	if s == nil {
 		r.mu.Unlock()
-		return fmt.Errorf("%w: %s", jsrun.ErrUnknownKey, key)
+		return false, fmt.Errorf("%w: %s", jsrun.ErrUnknownKey, key)
+	}
+	if only != nil && s.vm != only {
+		r.mu.Unlock()
+		return false, nil
 	}
 	old := s.vm
 	if old != nil {
@@ -432,7 +449,7 @@ func (r *Registry) Restart(key jsrun.Key, reason jsrun.RestartReason) error {
 	} else if s.building {
 		// A build for the same key already runs; it replaces the VM anyway.
 		r.mu.Unlock()
-		return nil
+		return false, nil
 	}
 	s.vm = nil
 	s.abortBuild()
@@ -443,7 +460,23 @@ func (r *Registry) Restart(key jsrun.Key, reason jsrun.RestartReason) error {
 
 	closeVM(old)
 	n.add(key)
-	return nil
+	return true, nil
+}
+
+// recoveryReason maps the outcome of a call to the reason to rebuild the
+// script, or false if the script is fine. A cancelled call closed the module
+// whatever ended it (deadline, client, shutdown), so the VM is dead.
+func recoveryReason(o jsrun.Outcome) (jsrun.RecoveryReason, bool) {
+	switch o {
+	case jsrun.OutcomePanic:
+		return jsrun.ReasonPanic, true
+	case jsrun.OutcomeMemoryLimit:
+		return jsrun.ReasonMemoryLimit, true
+	case jsrun.OutcomeCancelled:
+		return jsrun.ReasonTimeout, true
+	default:
+		return "", false
+	}
 }
 
 // Call runs fn under mi.CallMu with a panic-safe wrapper. The result classifies
@@ -507,28 +540,56 @@ func (r *Registry) Call(ctx context.Context, key jsrun.Key, fn func(ctx context.
 }
 
 // Invoke implements jsrun.Runner: it calls export on the VM of key through
-// Call, so lock, panic recovery and outcome classification are Call's.
+// Call, so lock, panic recovery and outcome classification are Call's. The
+// call is bounded by the timeout limit of the VM. A panic, the memory limit or
+// a cancellation leaves the VM untrusted or dead: Invoke starts the rebuild
+// itself and reports the reason in Result.Recovered. The rebuild does not
+// wait; until it ends the key holds no VM.
 //
 // js-execution.R2
+// js-execution.R3
 // js-registry.R1
+// js-registry.R2
 func (r *Registry) Invoke(ctx context.Context, key jsrun.Key, export string, in, out any) (jsrun.Result, error) {
-	res, _, err := r.Call(ctx, key, func(ctx context.Context, vm *jsengine.VM) error {
+	if mi, _ := r.lookup(key); mi != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(mi.Limits.TimeoutSeconds)*time.Second)
+		defer cancel()
+	}
+	res, mi, err := r.Call(ctx, key, func(ctx context.Context, vm *jsengine.VM) error {
 		return vm.Invoke(ctx, export, in, out)
 	})
-	return res, err
-}
-
-// Instance implements jsrun.Runner: the callers' view of the VM of key.
-func (r *Registry) Instance(key jsrun.Key) (*jsrun.Instance, bool) {
-	mi, ok := r.Get(key)
-	if !ok {
-		return nil, false
+	if err != nil {
+		return res, err
 	}
-	return &mi.Instance, true
+	if reason, ok := recoveryReason(res.Outcome); ok {
+		started, rerr := r.restart(key, mi, reason)
+		if rerr == nil && started {
+			res.Recovered = reason
+		}
+	}
+	return res, nil
 }
 
-// Registry is the first adapter of the script execution port.
-var _ jsrun.Runner = (*Registry)(nil)
+// State returns the state of key without starting anything, and false if the
+// key is unknown. It is not part of the port (no caller needs it): tests read
+// the state of a key with it.
+func (r *Registry) State(key jsrun.Key) (jsrun.State, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.slots[key]
+	if s == nil {
+		return jsrun.State{}, false
+	}
+	return s.state(), true
+}
+
+// Registry is the first adapter of the script execution port: it is both the
+// data path (Runner) and the lifecycle path (Scripts).
+var (
+	_ jsrun.Runner  = (*Registry)(nil)
+	_ jsrun.Scripts = (*Registry)(nil)
+)
 
 // Len reports how many live VMs the registry is holding (test/metrics).
 func (r *Registry) Len() int {

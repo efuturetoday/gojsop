@@ -53,7 +53,7 @@ func TestReconcile_RegistrarSyncFailure_ShowsReadyFalse(t *testing.T) {
 		Client:    c,
 		Scheme:    scheme,
 		Loader:    jssource.NewChain(jssource.InlineLoader{}),
-		Runner:    jsregistry.NewRegistry(),
+		Scripts:   jsregistry.NewRegistry(),
 		Registrar: reg,
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}
@@ -62,7 +62,8 @@ func TestReconcile_RegistrarSyncFailure_ShowsReadyFalse(t *testing.T) {
 	// seconds under -race on a slow CI runner.
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		_, built := r.Runner.Instance(jsrun.AdmissionKey(req.NamespacedName))
+		st, _ := r.Scripts.(*jsregistry.Registry).State(jsrun.AdmissionKey(req.NamespacedName))
+		built := st.Phase == jsrun.PhaseReady
 		if _, err := r.Reconcile(ctx, req); err != nil {
 			t.Fatal(err)
 		}
@@ -122,11 +123,11 @@ func TestReconcile_BuildStates_ShowBuildingThenBuildFailed(t *testing.T) {
 		Client:  c,
 		Scheme:  scheme,
 		Loader:  jssource.NewChain(jssource.InlineLoader{}),
-		Runner:  jsregistry.NewRegistry(),
+		Scripts: jsregistry.NewRegistry(),
 		Backoff: jsrun.Backoff{Base: time.Hour, Max: time.Hour},
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "hang"}}
-	t.Cleanup(func() { r.Runner.Drop(jsrun.AdmissionKey(req.NamespacedName)) })
+	t.Cleanup(func() { r.Scripts.Drop(jsrun.AdmissionKey(req.NamespacedName)) })
 	ready := func() *metav1.Condition {
 		var got corev1alpha1.JSAdmission
 		if err := c.Get(t.Context(), req.NamespacedName, &got); err != nil {

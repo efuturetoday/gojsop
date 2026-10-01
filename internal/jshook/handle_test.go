@@ -18,7 +18,7 @@ func loadHook(t *testing.T, src string) (*jsregistry.Registry, jsrun.Key, *jsreg
 	reg := jsregistry.NewRegistry()
 	key := jsrun.HookKey(types.NamespacedName{Name: "hook"})
 	t.Cleanup(func() { reg.Drop(key) })
-	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Options{Source: []byte(src), SourceHash: "h"})
+	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Spec{Source: []byte(src), SourceHash: "h"})
 	if err != nil {
 		t.Fatalf("load hook: %v", err)
 	}

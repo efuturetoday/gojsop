@@ -38,7 +38,7 @@ func TestReadConfig_PostBuildRejectsMissingExports(t *testing.T) {
 			key := types.NamespacedName{Name: "h"}
 			t.Cleanup(func() { reg.Drop(jsrun.HookKey(key)) })
 
-			_, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Options{
+			_, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Spec{
 				Source: []byte(tc.src), SourceHash: "x", PostBuild: readConfig,
 			})
 			var miss *jsrun.MissingExportError
@@ -67,7 +67,7 @@ func newTestReconciler(t *testing.T, backoff jsrun.Backoff, hooks ...*corev1alph
 		Client:  c,
 		Scheme:  scheme,
 		Loader:  jssource.NewChain(jssource.InlineLoader{}),
-		Runner:  jsregistry.NewRegistry(),
+		Scripts: jsregistry.NewRegistry(),
 		Backoff: backoff,
 	}, c
 }
@@ -122,8 +122,8 @@ func TestReconcile_HangingBuildDoesNotBlockOtherHook(t *testing.T) {
 	r, c := newTestReconciler(t, jsrun.Backoff{},
 		testHook("hang", `while(true){}`, 1), testHook("good", good, 0))
 	t.Cleanup(func() {
-		r.Runner.Drop(jsrun.HookKey(types.NamespacedName{Name: "hang"}))
-		r.Runner.Drop(jsrun.HookKey(types.NamespacedName{Name: "good"}))
+		r.Scripts.Drop(jsrun.HookKey(types.NamespacedName{Name: "hang"}))
+		r.Scripts.Drop(jsrun.HookKey(types.NamespacedName{Name: "good"}))
 	})
 
 	start := time.Now()
@@ -159,7 +159,7 @@ func TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce(t *testing.
 	backoff := jsrun.Backoff{Base: time.Hour, Max: 2 * time.Hour}
 	r, c := newTestReconciler(t, backoff, testHook("bad", `throw new Error("boom")`, 0))
 	key := types.NamespacedName{Name: "bad"}
-	t.Cleanup(func() { r.Runner.Drop(jsrun.HookKey(key)) })
+	t.Cleanup(func() { r.Scripts.Drop(jsrun.HookKey(key)) })
 
 	res, cond := reconcileUntil(t, r, c, "bad", conditions.ReasonBuildFailed)
 	if cond.Status != metav1.ConditionFalse {
@@ -203,7 +203,7 @@ func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
 	hook := testHook("manual", `function config() { return {}; } function handle() {}`, 0)
 	r, c := newTestReconciler(t, jsrun.Backoff{}, hook)
 	key := types.NamespacedName{Name: "manual"}
-	t.Cleanup(func() { r.Runner.Drop(jsrun.HookKey(key)) })
+	t.Cleanup(func() { r.Scripts.Drop(jsrun.HookKey(key)) })
 	reconcileUntil(t, r, c, "manual", conditions.ReasonReconciled)
 
 	var h corev1alpha1.JSHook
@@ -226,8 +226,8 @@ func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mi, _ := r.Runner.Instance(jsrun.HookKey(key))
-	if got := mi.RestartsByReason[jsrun.ReasonManual]; got != 1 {
+	st, _ := r.Scripts.(*jsregistry.Registry).State(jsrun.HookKey(key))
+	if got := st.Recoveries.ByReason[jsrun.ReasonManual]; got != 1 {
 		t.Fatalf("manual restarts = %d, want 1", got)
 	}
 	if cond := readyCondition(t, c, "manual"); cond.Reason != conditions.ReasonReconciled {

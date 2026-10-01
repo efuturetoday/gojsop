@@ -58,7 +58,7 @@ type JSAdmissionReconciler struct {
 	// Loader resolves spec.source to JS bytes (defaults to inline-only).
 	Loader *jssource.Chain
 	// Registry owns the per-policy persistent JS instances.
-	Runner jsrun.Runner
+	Scripts jsrun.Scripts
 	// KubeHost mints the host-function surface installed on every JSAdmission VM.
 	// ForAdmission returns a read-only binder — admission policies must not
 	// write to the cluster from the apiserver request path (sideEffects:
@@ -132,7 +132,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if r.Registrar != nil {
 				r.Registrar.Remove(req.NamespacedName)
 			}
-			r.Runner.Drop(jsrun.AdmissionKey(req.NamespacedName))
+			r.Scripts.Drop(jsrun.AdmissionKey(req.NamespacedName))
 			log.Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
@@ -163,62 +163,45 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
+	resetToken := pol.GetAnnotations()[conditions.ManualRestartAnnotation]
+
 	// The build runs in the background; the registry notifies this controller
 	// when it ends (SetupWithManager), so a reconcile never waits for it.
 	// js-registry.R15
 	// jsadmission.R18
-	st := r.Runner.Ensure(jsrun.AdmissionKey(req.NamespacedName), jsrun.Options{
+	st := r.Scripts.Ensure(jsrun.AdmissionKey(req.NamespacedName), jsrun.Spec{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
 		Host:       host,
 		PostBuild:  admissionPostBuild(mutating),
+		ResetToken: resetToken,
 		Backoff:    r.Backoff,
 	})
-	switch st.Kind {
-	case jsrun.StateBuilding:
+	switch st.Phase {
+	case jsrun.PhasePreparing:
 		log.V(1).Info("instance building")
 		return r.building(ctx, &pol)
-	case jsrun.StateBroken:
+	case jsrun.PhaseFailed:
 		log.Error(st.Err, "instance build failed", "attempts", st.Attempts, "retryIn", st.RetryIn())
 		eventReason, eventMsg := conditions.ClassifyBuildError(st.Err)
 		return r.buildFailed(ctx, &pol, eventReason, eventMsg, st)
 	}
-	mi := st.Instance
+	last := st.Recoveries.Last()
 	restarted := instanceChanged(&pol, srcHash)
-	if restarted {
-		last := mi.LastRestart()
-		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(mi.History), "reason", last.Reason)
+	// A new value of the restart annotation is Spec.ResetToken: Ensure
+	// prepared the script again with reason manual, in the background like any
+	// other build. The status token tells the finished build is not seen twice.
+	var prevToken string
+	if pol.Status.Instance != nil {
+		prevToken = pol.Status.Instance.ManualRestartToken
+	}
+	manual := !restarted && resetToken != prevToken && last.Reason == jsrun.ReasonManual
+	if restarted || manual {
+		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(st.Recoveries.Recent), "reason", last.Reason)
 		if conditions.WasBuilding(pol.Status.Conditions) && last.Reason.ReportedByReconcile() {
 			r.event(&pol, corev1.EventTypeNormal, conditions.EventRestarted,
 				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
-		}
-	}
-
-	// Manual-restart annotation, mirrors the JSHook flow.
-	if token, ok := pol.GetAnnotations()[conditions.ManualRestartAnnotation]; ok && !restarted {
-		var prev string
-		if pol.Status.Instance != nil {
-			prev = pol.Status.Instance.ManualRestartToken
-		}
-		if token != prev {
-			// The restart builds in the background like any other build; the
-			// token is recorded now so the finished build does not restart
-			// again.
-			if err := r.Runner.Restart(jsrun.AdmissionKey(req.NamespacedName), jsrun.ReasonManual); err != nil {
-				log.Error(err, "manual restart")
-				return r.failAdmission(ctx, &pol, conditions.EventBuildFailed,
-					"build failed: manual restart",
-					fmt.Sprintf("manual restart: %v", err))
-			}
-			log.Info("manual restart started", "token", token)
-			r.event(&pol, corev1.EventTypeNormal, conditions.EventRestarted,
-				fmt.Sprintf("restarted: %s (hash %s)", jsrun.ReasonManual, srcHash[:12]))
-			if pol.Status.Instance == nil {
-				pol.Status.Instance = &corev1alpha1.JSInstanceStatus{}
-			}
-			pol.Status.Instance.ManualRestartToken = token
-			return r.building(ctx, &pol)
 		}
 	}
 
@@ -282,7 +265,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	startedAt := metav1.NewTime(mi.StartedAt)
+	startedAt := metav1.NewTime(st.PreparedAt)
 	apimeta.SetStatusCondition(&pol.Status.Conditions, metav1.Condition{
 		Type:               conditions.Ready,
 		Status:             metav1.ConditionTrue,
@@ -297,7 +280,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	} else {
 		pol.Status.WebhookConfigName = jsadmission.ValidatingConfigName
 	}
-	byReason, recent := jslifecycle.RestartHistoryFor(mi)
+	byReason, recent := jslifecycle.RestartHistoryFor(st.Recoveries)
 	pol.Status.Instance = &corev1alpha1.JSInstanceStatus{
 		StartedAt:          &startedAt,
 		SourceHash:         srcHash,
@@ -424,8 +407,8 @@ func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Loader == nil {
 		r.Loader = jssource.NewChain(jssource.InlineLoader{})
 	}
-	if r.Runner == nil {
-		return errors.New("jsrun.Runner is required")
+	if r.Scripts == nil {
+		return errors.New("jsrun.Scripts is required")
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSAdmission{}).
@@ -438,7 +421,7 @@ func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// changed sync outcome of the registrar.
 	ch := make(chan event.TypedGenericEvent[*corev1alpha1.JSAdmission], 64)
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		for key := range r.Runner.Watch(ctx, jsrun.KindJSAdmission) {
+		for key := range r.Scripts.Watch(ctx, jsrun.KindJSAdmission) {
 			pol := &corev1alpha1.JSAdmission{ObjectMeta: metav1.ObjectMeta{Name: key.Name.Name, Namespace: key.Name.Namespace}}
 			select {
 			case ch <- event.TypedGenericEvent[*corev1alpha1.JSAdmission]{Object: pol}:

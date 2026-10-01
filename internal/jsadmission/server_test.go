@@ -36,7 +36,7 @@ func loadPolicy(t *testing.T, src string, key types.NamespacedName) *jsregistry.
 	if !strings.Contains(src, "function config(") {
 		source = append([]byte("function config(){return {configVersion:'v1'}}\n"), source...)
 	}
-	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.AdmissionKey(key), jsrun.Options{Source: source, SourceHash: "h1"}); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.AdmissionKey(key), jsrun.Spec{Source: source, SourceHash: "h1"}); err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
 	return reg
@@ -264,8 +264,8 @@ func TestServer_NoVM_AppliesFailurePolicyAtOnce(t *testing.T) {
 			t.Cleanup(func() { reg.Drop(regKey) })
 			// A top-level endless loop: the build runs until the default 30 s
 			// deadline, the key stays Building for the whole test.
-			if st := reg.Ensure(regKey, jsrun.Options{Source: []byte(`while(true){}`), SourceHash: "h"}); st.Kind != jsrun.StateBuilding {
-				t.Fatalf("Ensure: %v, want Building", st.Kind)
+			if st := reg.Ensure(regKey, jsrun.Spec{Source: []byte(`while(true){}`), SourceHash: "h"}); st.Phase != jsrun.PhasePreparing {
+				t.Fatalf("Ensure: %v, want Building", st.Phase)
 			}
 			srv := NewServer(reg, logr.Log)
 			srv.Register(PolicyEntry{Key: key, FailurePolicy: tc.policy, Timeout: 5 * time.Second})

@@ -67,7 +67,7 @@ type JSHookReconciler struct {
 
 	// Registry owns the per-hook persistent JS instances.
 	// Defaults to a fresh registry via SetupWithManager when nil.
-	Runner jsrun.Runner
+	Scripts jsrun.Scripts
 
 	// KubeHost mints the host-function surface installed on every JSHook VM.
 	// SharedFactory hands out the same client to all hooks; Phase 2 swaps in
@@ -114,8 +114,8 @@ func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message 
 // +kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch;create;update;patch;delete
 
 // readConfig is the registry PostBuildHook that runs jshook.ReadConfig on a
-// freshly built VM and stashes the *jshook.Config in ManagedVM.Extra. The
-// reconciler reads it back via configFromExtra. This keeps the config off the
+// freshly built VM and stashes the *jshook.Config in State.Meta. The
+// reconciler reads it back via configFromMeta. This keeps the config off the
 // engine and inside the feature package.
 // jshook.R2
 func readConfig(ctx context.Context, s jsrun.Script) (any, error) {
@@ -132,11 +132,11 @@ func readConfig(ctx context.Context, s jsrun.Script) (any, error) {
 	return cfg, nil
 }
 
-func configFromExtra(extra any) *jshook.Config {
-	if extra == nil {
+func configFromMeta(meta any) *jshook.Config {
+	if meta == nil {
 		return nil
 	}
-	if cfg, ok := extra.(*jshook.Config); ok {
+	if cfg, ok := meta.(*jshook.Config); ok {
 		return cfg
 	}
 	return nil
@@ -156,7 +156,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if r.Dispatcher != nil {
 				r.Dispatcher.Drop(req.NamespacedName)
 			}
-			r.Runner.Drop(jsrun.HookKey(req.NamespacedName))
+			r.Scripts.Drop(jsrun.HookKey(req.NamespacedName))
 			log.Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
@@ -185,69 +185,49 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	resetToken := hook.GetAnnotations()[ManualRestartAnnotation]
+
 	// The build runs in the background; the registry notifies this controller
 	// when it ends (SetupWithManager), so a reconcile never waits for it.
 	// js-registry.R15
 	// jshook.R18
-	st := r.Runner.Ensure(jsrun.HookKey(req.NamespacedName), jsrun.Options{
+	st := r.Scripts.Ensure(jsrun.HookKey(req.NamespacedName), jsrun.Spec{
 		Source:     source,
 		SourceHash: srcHash,
 		Limits:     lim,
 		Host:       host,
 		PostBuild:  readConfig,
+		ResetToken: resetToken,
 		Backoff:    r.Backoff,
 	})
-	switch st.Kind {
-	case jsrun.StateBuilding:
+	switch st.Phase {
+	case jsrun.PhasePreparing:
 		log.V(1).Info("instance building")
 		return r.building(ctx, &hook)
-	case jsrun.StateBroken:
+	case jsrun.PhaseFailed:
 		log.Error(st.Err, "instance build failed", "attempts", st.Attempts, "retryIn", st.RetryIn())
 		eventReason, eventMsg := conditions.ClassifyBuildError(st.Err)
 		return r.buildFailed(ctx, &hook, eventReason, eventMsg, st)
 	}
-	mi := st.Instance
+	last := st.Recoveries.Last()
 	restarted := instanceChanged(&hook, srcHash)
-	if restarted {
-		last := mi.LastRestart()
-		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(mi.History), "reason", last.Reason)
+	// A new value of the restart annotation is Spec.ResetToken: Ensure
+	// prepared the script again with reason manual, in the background like any
+	// other build. The status token tells the finished build is not seen twice.
+	var prevToken string
+	if hook.Status.Instance != nil {
+		prevToken = hook.Status.Instance.ManualRestartToken
+	}
+	manual := !restarted && resetToken != prevToken && last.Reason == jsrun.ReasonManual
+	if restarted || manual {
+		log.Info("instance (re)started", "hash", srcHash[:12], "restarts", len(st.Recoveries.Recent), "reason", last.Reason)
 		if conditions.WasBuilding(hook.Status.Conditions) && last.Reason.ReportedByReconcile() {
 			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
 				fmt.Sprintf("restarted: %s (hash %s)", last.Reason, srcHash[:12]))
 		}
 	}
 
-	// Manual-restart annotation: a new value of gojsop.io/restart triggers
-	// exactly one rebuild. We compare against status.instance.manualRestartToken
-	// so the contract is "edit the annotation to force a restart" without
-	// needing controller-internal flags.
-	if token, ok := hook.GetAnnotations()[ManualRestartAnnotation]; ok && !restarted {
-		var prev string
-		if hook.Status.Instance != nil {
-			prev = hook.Status.Instance.ManualRestartToken
-		}
-		if token != prev {
-			// The restart builds in the background like any other build; the
-			// token is recorded now so the finished build does not restart
-			// again.
-			if err := r.Runner.Restart(jsrun.HookKey(req.NamespacedName), jsrun.ReasonManual); err != nil {
-				log.Error(err, "manual restart")
-				return r.fail(ctx, &hook, conditions.EventBuildFailed,
-					"build failed: manual restart",
-					fmt.Sprintf("manual restart: %v", err))
-			}
-			log.Info("manual restart started", "token", token)
-			r.event(&hook, corev1.EventTypeNormal, conditions.EventRestarted,
-				fmt.Sprintf("restarted: %s (hash %s)", jsrun.ReasonManual, srcHash[:12]))
-			if hook.Status.Instance == nil {
-				hook.Status.Instance = &corev1alpha1.JSInstanceStatus{}
-			}
-			hook.Status.Instance.ManualRestartToken = token
-			return r.building(ctx, &hook)
-		}
-	}
-
-	cfg := configFromExtra(mi.Extra)
+	cfg := configFromMeta(st.Meta)
 	if cfg == nil {
 		return r.fail(ctx, &hook, conditions.EventConfigInvalid,
 			"config() returned non-object",
@@ -271,7 +251,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	bindings := summarizeBindings(cfg)
-	startedAt := metav1.NewTime(mi.StartedAt)
+	startedAt := metav1.NewTime(st.PreparedAt)
 	apimeta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
 		Type:               conditions.Ready,
 		Status:             metav1.ConditionTrue,
@@ -281,7 +261,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	})
 	hook.Status.ObservedGeneration = hook.Generation
 	hook.Status.Bindings = bindings
-	byReason, recent := jslifecycle.RestartHistoryFor(mi)
+	byReason, recent := jslifecycle.RestartHistoryFor(st.Recoveries)
 	hook.Status.Instance = &corev1alpha1.JSInstanceStatus{
 		StartedAt:          &startedAt,
 		SourceHash:         srcHash,
@@ -423,14 +403,14 @@ func (r *JSHookReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Loader == nil {
 		r.Loader = jssource.NewChain(jssource.InlineLoader{})
 	}
-	if r.Runner == nil {
-		return errors.New("jsrun.Runner is required")
+	if r.Scripts == nil {
+		return errors.New("jsrun.Scripts is required")
 	}
 	// The registry reports every finished build of a JSHook; the forwarder
 	// turns it into a reconcile request.
 	ch := make(chan event.TypedGenericEvent[*corev1alpha1.JSHook])
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		for key := range r.Runner.Watch(ctx, jsrun.KindJSHook) {
+		for key := range r.Scripts.Watch(ctx, jsrun.KindJSHook) {
 			hook := &corev1alpha1.JSHook{ObjectMeta: metav1.ObjectMeta{Name: key.Name.Name, Namespace: key.Name.Namespace}}
 			select {
 			case ch <- event.TypedGenericEvent[*corev1alpha1.JSHook]{Object: hook}:

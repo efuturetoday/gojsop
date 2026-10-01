@@ -79,10 +79,10 @@ var _ = Describe("JSAdmission Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &jsadmissionctrl.JSAdmissionReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-				Loader: jssource.NewChain(jssource.InlineLoader{}),
-				Runner: jsregistry.NewRegistry(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				Loader:  jssource.NewChain(jssource.InlineLoader{}),
+				Scripts: jsregistry.NewRegistry(),
 			}
 
 			// The first reconcile only starts the build; reconcile again until Ready.
@@ -91,8 +91,8 @@ var _ = Describe("JSAdmission Controller", func() {
 					NamespacedName: typeNamespacedName,
 				})
 				g.Expect(err).NotTo(HaveOccurred())
-				_, ok := controllerReconciler.Runner.Instance(jsrun.AdmissionKey(typeNamespacedName))
-				g.Expect(ok).To(BeTrue())
+				st, _ := controllerReconciler.Scripts.(*jsregistry.Registry).State(jsrun.AdmissionKey(typeNamespacedName))
+				g.Expect(st.Phase).To(Equal(jsrun.PhaseReady))
 			}, "10s", "20ms").Should(Succeed())
 		})
 	})

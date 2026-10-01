@@ -1,11 +1,14 @@
-// Package jsrun is the port for script execution. The dispatcher, the
-// admission server, the controllers and jslifecycle talk to a Runner: they
-// hand in a key, an export name and an input and get an output or a
-// classified outcome. They never see a VM, a lock or the engine.
+// Package jsrun is the port for script execution, in two interfaces. Runner
+// is the data path: the dispatcher, the admission server and the Handle
+// wrappers hand in a key, an export name and an input and get an output or a
+// classified outcome. Scripts is the lifecycle path: the controllers ensure,
+// drop and watch the scripts of their kind. Neither shows a VM, a lock or the
+// engine.
 //
 // The first adapter is jsregistry.Registry (one persistent VM per key). The
 // port also fits an engine that prepares a script once (compile, bake,
 // snapshot) and invokes it statelessly: Ensure is "prepare", Invoke is "run".
+// An adapter recovers a script that a call left unusable inside Invoke.
 //
 // js-execution.R10
 package jsrun
@@ -61,7 +64,7 @@ type Script interface {
 }
 
 // PostBuildHook is invoked once per fresh script after the source has
-// loaded. It returns the value to stash on Instance.Extra. JSHook uses it to
+// loaded. It returns the value to stash on State.Meta. JSHook uses it to
 // call jshook.ReadConfig and cache the parsed Config. Returning a non-nil
 // error aborts the build.
 //
@@ -69,139 +72,141 @@ type Script interface {
 // deadline applies.
 //
 // js-registry.R10
-type PostBuildHook func(ctx context.Context, s Script) (extra any, err error)
+type PostBuildHook func(ctx context.Context, s Script) (meta any, err error)
 
-// Options bundles every input a runner needs to build (or rebuild) a script.
-// The runner caches the whole struct, so Restart can rebuild without callers
-// re-supplying source, limits or host binding.
+// Spec bundles every input a runner needs to prepare (or prepare again) a
+// script. The runner caches the whole struct, so it can recover a script
+// without callers re-supplying source, limits or host binding.
 //
 // js-registry.R4
-type Options struct {
+type Spec struct {
 	Source     []byte
 	SourceHash string
 	Limits     Limits
 	Host       Host
 	PostBuild  PostBuildHook
-	// Backoff spaces the retries of a Broken key. It does not shape the
-	// script, so a change does not rebuild.
+	// ResetToken asks for a fresh script: when it differs from the token of
+	// the prepared one, Ensure prepares again, the same path as a changed
+	// source. The controller passes the value of the manual-restart
+	// annotation, so editing the annotation resets the script.
+	ResetToken string
+	// Backoff spaces the retries of a Failed key. It does not shape the
+	// script, so a change does not prepare again.
 	Backoff Backoff
 }
 
-// RestartReason is the documented enum of triggers that cause a script to be
-// rebuilt. Recorded into JSHook.status.instance.lastRestartReason.
-type RestartReason string
+// RecoveryReason is the documented enum of causes that make a runner prepare a
+// script again. Recorded into the status.instance counters of JSHook and
+// JSAdmission (the CRD keeps its older field names, API-10).
+type RecoveryReason string
 
-// Restart reasons. Every value is wired to a real trigger:
-//   - ReasonSourceChanged: spec.source's hash differs on Reconcile (Ensure)
-//   - ReasonMemoryLimit:   handle() returned an "out of memory" error (dispatcher worker / admission)
-//   - ReasonPanic:         handle() panicked (recovered by Invoke)
-//   - ReasonTimeout:       handle() exceeded the per-call deadline (admission, dispatcher)
-//   - ReasonTimeoutStreak: no longer set: a cancelled call closes the module, so every timeout restarts with ReasonTimeout; kept as CRD enum value
-//   - ReasonManual:        gojsop.io/restart annotation changed on the JSHook (reconciler)
-//   - ReasonLimitsChanged: spec.limits changed with the source hash unchanged (Ensure)
+// Recovery reasons. Every value is wired to a real trigger:
+//   - ReasonSourceChanged: Spec.SourceHash differs on Ensure
+//   - ReasonLimitsChanged: Spec.Limits changed with the source hash unchanged (Ensure)
+//   - ReasonManual:        Spec.ResetToken changed (Ensure)
+//   - ReasonMemoryLimit:   Invoke ended with OutcomeMemoryLimit (adapter recovers)
+//   - ReasonPanic:         Invoke ended with OutcomePanic (adapter recovers)
+//   - ReasonTimeout:       Invoke ended with OutcomeCancelled (adapter recovers)
+//   - ReasonTimeoutStreak: no longer set: a cancelled call closes the module, so every timeout recovers with ReasonTimeout; kept as CRD enum value
 const (
-	ReasonSourceChanged RestartReason = "source-changed"
-	ReasonMemoryLimit   RestartReason = "memory-limit"
-	ReasonPanic         RestartReason = "panic"
-	ReasonTimeout       RestartReason = "timeout"
-	ReasonTimeoutStreak RestartReason = "timeout-streak"
-	ReasonManual        RestartReason = "manual"
-	ReasonLimitsChanged RestartReason = "limits-changed"
+	ReasonSourceChanged RecoveryReason = "source-changed"
+	ReasonMemoryLimit   RecoveryReason = "memory-limit"
+	ReasonPanic         RecoveryReason = "panic"
+	ReasonTimeout       RecoveryReason = "timeout"
+	ReasonTimeoutStreak RecoveryReason = "timeout-streak"
+	ReasonManual        RecoveryReason = "manual"
+	ReasonLimitsChanged RecoveryReason = "limits-changed"
 )
 
-// ReportedByReconcile reports whether a controller reports the restart with
-// this reason as a Restarted event after the build. Restarts that a call
-// started (panic, memory limit, timeout) are reported by jslifecycle.Rescue
-// when they start.
-func (r RestartReason) ReportedByReconcile() bool {
+// ReportedByReconcile reports whether a controller reports the recovery with
+// this reason as a Restarted event after the build. Recoveries that a call
+// started (panic, memory limit, timeout) are announced by the caller of Invoke
+// through Result.Recovered.
+func (r RecoveryReason) ReportedByReconcile() bool {
 	switch r {
-	case ReasonSourceChanged, ReasonLimitsChanged:
+	case ReasonSourceChanged, ReasonLimitsChanged, ReasonManual:
 		return true
 	default:
 		return false
 	}
 }
 
-// RestartEvent records one transition from an old script to a new one for a
-// key. The slice of these on Instance is the authoritative restart log;
-// per-reason counters are an aggregate cache.
-type RestartEvent struct {
+// Recovery records one transition from an old script to a new one for a key.
+type Recovery struct {
 	Time   time.Time
-	Reason RestartReason
-	// Err carries the diagnostic for rescue-driven restarts (panic / OOM /
-	// timeout / timeout-streak). Empty for source-changed and manual.
+	Reason RecoveryReason
+	// Err carries the diagnostic for call-driven recoveries. Empty for
+	// source-changed, limits-changed and manual.
 	Err string
 }
 
-// Instance is what a caller may know of a ready script: when it started, the
-// effective limits, the restart log and the value of the PostBuildHook.
-type Instance struct {
-	StartedAt time.Time
-	// Limits are the effective limits (defaults applied).
-	Limits Limits
-	// RestartsByReason aggregates History so callers don't recompute it.
-	RestartsByReason map[RestartReason]int32
-	// History is the restart log (oldest first), capped by the adapter.
-	// Empty on the very first build of a key.
-	History []RestartEvent
-	// Extra is the value the PostBuildHook returned (e.g. JSHook caches its
-	// parsed Config here so reconciles never enter the script).
-	Extra any
+// Recoveries is the recovery log of a key: counts per reason and the recent
+// entries. The adapter owns it and carries it across every prepared script.
+type Recoveries struct {
+	// ByReason aggregates Recent and older entries so callers don't recompute it.
+	ByReason map[RecoveryReason]int32
+	// Recent is the log (oldest first), capped by the adapter. Empty on the
+	// very first preparation of a key.
+	Recent []Recovery
 }
 
-// LastRestart returns the most recent RestartEvent, or the zero value if the
-// script has never been restarted (first build).
-func (i *Instance) LastRestart() RestartEvent {
-	if len(i.History) == 0 {
-		return RestartEvent{}
+// Last returns the most recent Recovery, or the zero value if the key has
+// never been recovered (first preparation).
+func (r Recoveries) Last() Recovery {
+	if len(r.Recent) == 0 {
+		return Recovery{}
 	}
-	return i.History[len(i.History)-1]
+	return r.Recent[len(r.Recent)-1]
 }
 
-// StateKind is the lifecycle state of a runner key.
-type StateKind int
+// Phase is the lifecycle phase of a runner key.
+type Phase int
 
 const (
-	// StateReady: a script matching the requested options is installed.
-	StateReady StateKind = iota
-	// StateBuilding: a build runs; an older script may still serve calls until
-	// it finishes.
-	StateBuilding
-	// StateBroken: the last build failed. The entry holds no script.
-	StateBroken
+	// PhasePreparing: a preparation runs; an older script may still serve
+	// calls until it finishes. The zero value, so an empty State is not Ready.
+	PhasePreparing Phase = iota
+	// PhaseReady: a script matching the requested spec is prepared.
+	PhaseReady
+	// PhaseFailed: the last preparation failed. The entry holds no script.
+	PhaseFailed
 )
 
-func (k StateKind) String() string {
-	switch k {
-	case StateReady:
+func (p Phase) String() string {
+	switch p {
+	case PhaseReady:
 		return "Ready"
-	case StateBuilding:
-		return "Building"
+	case PhasePreparing:
+		return "Preparing"
 	default:
-		return "Broken"
+		return "Failed"
 	}
 }
 
-// State is what Ensure reports for a key.
+// State is what Ensure reports for a key. It names no engine detail.
 type State struct {
-	Kind StateKind
-	// Instance is set when Kind == StateReady.
-	Instance *Instance
-	// Err, Attempts and NextTry are set when Kind == StateBroken: the last
-	// build error, how many builds failed in a row and the earliest time Ensure
-	// starts the next try.
-	Err      error
-	Attempts int
-	NextTry  time.Time
+	Phase Phase
+	// Err, Attempts and NextAttempt are set when Phase == PhaseFailed: the
+	// last preparation error, how many failed in a row and the earliest time
+	// Ensure starts the next try.
+	Err         error
+	Attempts    int
+	NextAttempt time.Time
+	// PreparedAt, Meta and Recoveries are set when Phase == PhaseReady.
+	PreparedAt time.Time
+	// Meta is the value the PostBuildHook returned (e.g. JSHook caches its
+	// parsed Config here so reconciles never enter the script).
+	Meta       any
+	Recoveries Recoveries
 }
 
 // minRetryIn keeps RetryIn from asking for a requeue in the past.
 const minRetryIn = 10 * time.Millisecond
 
-// RetryIn is how long a Broken key waits until Ensure starts the next build:
-// the time left to NextTry, at least minRetryIn.
+// RetryIn is how long a Failed key waits until Ensure starts the next try:
+// the time left to NextAttempt, at least minRetryIn.
 func (s State) RetryIn() time.Duration {
-	return max(time.Until(s.NextTry), minRetryIn)
+	return max(time.Until(s.NextAttempt), minRetryIn)
 }
 
 // Outcome classifies how an Invoke ran. Callers drive rescue and failure
@@ -216,41 +221,46 @@ const (
 	OutcomeError                      // any other error from the script
 )
 
-// Result is what Invoke hands back. Outcome drives the rescue and
-// failure-policy decision; Duration is for metrics; Panic and Err carry the
-// diagnostic detail.
+// Result is what Invoke hands back. Outcome drives the failure-policy
+// decision; Duration is for metrics; Panic and Err carry the diagnostic
+// detail. Recovered is set when the adapter started to prepare the script
+// again because of the outcome (panic, memory limit, cancellation); callers
+// only announce it, they never trigger it.
 type Result struct {
-	Outcome  Outcome
-	Duration time.Duration
-	Panic    any   // populated when Outcome == OutcomePanic
-	Err      error // populated when Outcome is neither OK nor Panic
+	Outcome   Outcome
+	Duration  time.Duration
+	Panic     any            // populated when Outcome == OutcomePanic
+	Err       error          // populated when Outcome is neither OK nor Panic
+	Recovered RecoveryReason // empty when the call needed no recovery
 }
 
-// Runner runs the scripts of JSHooks and JSAdmissions. Every key is in one
-// state: Ready, Building or Broken.
+// Runner is the data path: it runs a script. The dispatcher, the admission
+// server and the typed Handle wrappers depend on this interface only.
 //
 // js-execution.R10
 type Runner interface {
-	// Ensure reports the state of key for opts and never waits for a build.
-	// Other opts than the installed ones start a build; the key is notified
-	// on Watch when it ends.
-	Ensure(key Key, opts Options) State
 	// Invoke calls export of the script of key with in as its one argument
 	// (none if in is nil) and decodes the JSON form of the result into out
 	// (untouched when the export returns undefined; nil discards it). The
 	// error is ErrUnknownKey or ErrVMUnavailable when nothing ran; otherwise
-	// the Result classifies how the call ended.
+	// the Result classifies how the call ended. The adapter bounds the call
+	// by the timeout of the Spec and recovers a script that a panic, the
+	// memory limit or a cancellation left unusable (Result.Recovered).
 	Invoke(ctx context.Context, key Key, export string, in, out any) (Result, error)
-	// Restart drops the script of key and rebuilds it from the cached
-	// options, without waiting. ErrUnknownKey if the key is not known.
-	Restart(key Key, reason RestartReason) error
-	// Drop forgets key, cancels its build and releases its script.
+}
+
+// Scripts is the lifecycle path: controllers keep the scripts of their kind
+// prepared. Every key is in one phase: Preparing, Ready or Failed.
+//
+// js-execution.R10
+type Scripts interface {
+	// Ensure reports the state of key for spec and never waits for a
+	// preparation. Another spec (source hash, effective limits or ResetToken)
+	// starts one; the key is notified on Watch when it ends.
+	Ensure(key Key, spec Spec) State
+	// Drop forgets key, cancels its preparation and releases its script.
 	Drop(key Key)
-	// Instance returns the ready script of key, if any.
-	Instance(key Key) (*Instance, bool)
-	// Known reports whether key is held in any state. With Instance it tells
-	// "not ready yet" (retry later) from "never registered or dropped".
-	Known(key Key) bool
-	// Watch delivers the keys of one kind whose build ended, until ctx ends.
+	// Watch delivers the keys of one kind whose preparation ended, until ctx
+	// ends.
 	Watch(ctx context.Context, kind Kind) <-chan Key
 }

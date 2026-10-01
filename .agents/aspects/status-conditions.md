@@ -13,7 +13,7 @@ This aspect describes how gojsop reports the state of a JSHook or JSAdmission in
 its CRD status.
 
 Status holds only what the controller observed at reconcile time, plus a
-projection of the restart log of the registry. There is one condition type,
+projection of the recovery log (`jsrun.State.Recoveries`) of the runner. There is one condition type,
 `Ready`. It has five reasons: `Reconciled`, `Failed`, `WebhookSyncFailed` (the registrar could not write the central webhook configurations), `Building` (the JS instance is being built, nothing failed) and `BuildFailed` (the last build failed, the controller retries with backoff). Richer detail lives in
 typed status fields and in Kubernetes Events. Why only one condition type and
 two reasons is not recorded.
@@ -75,10 +75,10 @@ Add a new failure cause to status:
   Why: the recorder dedupes on reason and message, so unbounded messages flood
   the event stream.
   Gate: `TestClassifyBuildError`.
-- **R4** Take restart counters and history from the registry through
-  `jslifecycle.RestartHistoryFor`. Never keep a second count in a controller.
-  Why: two counts drift apart.
-  Gate: `TestRegistry_RestartHistory_RingAndCounters`, `TestRescue_*`.
+- **R4** Take restart counters and history from the runner's `State.Recoveries` through
+  `jslifecycle.RestartHistoryFor`, which maps them onto the CRD fields `restartsByReason` and `recentRestarts`. Never keep a second count in a controller.
+  Why: two counts drift apart. The neutral `Recoveries` of the port and the older CRD names meet in this one function (API-10).
+  Gate: `TestRegistry_RestartHistory_RingAndCounters`, `TestAnnounce_Recovery_EmitsRestarted`.
 - **R5** Put only the reconcile outcome into `lastReconcile`, never a runtime
   call result.
   Why: the removed fields lied about what the controller knew.
@@ -103,7 +103,11 @@ Add a new failure cause to status:
   Why: six triggers had collapsed into one counter and one string.
   Not taken: a single counter and a single string, because they lose the cause.
 
+- **Map the neutral `jsrun.State.Recoveries` onto the existing CRD fields in the controllers.** Status: proposed (2026-10-01, open).
+  Why: the port dropped its persistent-VM words (js-registry Decisions); the CRD is a public API and stays as is until API-10 and API-8 decide on a rename.
+  Not taken: renaming `status.instance.restartsByReason` and `recentRestarts` now, because it breaks `v1alpha1` users without a decided policy (API-8).
+
 ## Open
 
-Tracked in [backlog](../backlog.md): STAT-1 to STAT-5, API-1, API-5; gates
+Tracked in [backlog](../backlog.md): STAT-1 to STAT-5, API-1, API-5, API-10; gates
 GATE-8 to GATE-11, GATE-13.

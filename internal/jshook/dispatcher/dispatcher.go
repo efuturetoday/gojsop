@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
-	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -468,52 +467,42 @@ func (s *subscription) runWorker(ctx context.Context) {
 // the outcome. The locking + recover + OOM/cancel classification lives in
 // jsrun.Runner.Invoke; the dispatcher only owns the policy table:
 //
-//   - panic / OOM / cancelled (timeout) → rescue + requeue
+//   - panic / OOM / cancelled (timeout) → announce the recovery the runner
+//     started itself (Result.Recovered) + requeue
 //   - other error → log + emit Warning + requeue
 //   - ok → forget
 //
-// Cancellation: the wazero deadline (carried by callCtx) bounds wall-clock at
-// the spec'd budget and surfaces as OutcomeCancelled. wazero closes the module
-// when the context ends, so the VM is dead afterwards and is rescued at once.
+// Cancellation: the runner bounds the call by spec.limits.timeoutSeconds and
+// it surfaces as OutcomeCancelled. wazero closes the module when the context
+// ends, so the VM is dead afterwards and the runner rebuilds it at once.
 // jshook.R10
 // jshook.R11
 // jshook.R12
 func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
-	inst, ok := s.reg.Instance(jsrun.HookKey(s.key))
-	if !ok {
-		s.noVM(logger, qkey, bc)
-		return
-	}
-
-	budget := time.Duration(inst.Limits.TimeoutSeconds) * time.Second
-	callCtx, cancel := contextWithOptionalTimeout(parent, budget)
-	defer cancel()
-
-	out, res, err := jshook.Handle(callCtx, s.reg, jsrun.HookKey(s.key), []jshook.BindingContext{bc})
+	out, res, err := jshook.Handle(parent, s.reg, jsrun.HookKey(s.key), []jshook.BindingContext{bc})
 	if err != nil {
-		// ErrVMUnavailable (rescued meanwhile) retries; ErrUnknownKey: the VM
-		// was dropped between Get and Call (race with reconciler delete).
+		// ErrVMUnavailable: no script now (prepared again meanwhile), retry.
+		// ErrUnknownKey: the hook was dropped (race with reconciler delete).
 		if errors.Is(err, jsrun.ErrVMUnavailable) {
 			s.noVM(logger, qkey, bc)
 			return
 		}
-		logger.Info("hook vanished mid-call", "binding", bc.Binding, "event", bc.WatchEvent)
+		logger.Info("hook not in runner — dropping event", "binding", bc.Binding, "event", bc.WatchEvent)
 		s.queue.Forget(qkey)
 		return
 	}
+	jslifecycle.Announce(s.emit, res.Recovered)
 
 	switch res.Outcome {
 	case jsrun.OutcomePanic:
 		logger.Error(fmt.Errorf("panic in handle(): %v", res.Panic),
 			"handle() panicked — restarting instance",
 			"binding", bc.Binding, "event", bc.WatchEvent, "stack", string(debug.Stack()))
-		s.rescue(logger, jsrun.ReasonPanic)
 		s.requeue(qkey, bc)
 
 	case jsrun.OutcomeMemoryLimit:
 		logger.Error(res.Err, "handle() hit memory limit — restarting instance",
 			"binding", bc.Binding, "event", bc.WatchEvent)
-		s.rescue(logger, jsrun.ReasonMemoryLimit)
 		s.requeue(qkey, bc)
 
 	case jsrun.OutcomeCancelled:
@@ -523,11 +512,10 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		// cancelled parent means Subscribe or Drop is stopping this worker.
 		if parent.Err() == nil {
 			s.publish(corev1.EventTypeWarning, conditions.EventHandleTimeout,
-				fmt.Sprintf("handle() exceeded %s", budget))
+				"handle() exceeded its timeout")
 		}
 		logger.Info("handle() cancelled — restarting instance",
 			"binding", bc.Binding, "event", bc.WatchEvent, "elapsed", res.Duration)
-		s.rescue(logger, jsrun.ReasonTimeout)
 		s.requeue(qkey, bc)
 
 	case jsrun.OutcomeError:
@@ -548,40 +536,14 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 }
 
 // noVM handles an event for a hook that has no VM now. A hook that is
-// Building or Broken keeps its events: they are requeued with the rate limiter
-// and meet the new VM. A hook the registry no longer knows loses them.
+// Preparing or Failed keeps its events: they are requeued with the rate limiter
+// and meet the new VM. A hook the runner no longer knows loses them (Invoke
+// reports ErrUnknownKey, handleEvent forgets the event).
 // jshook.R19
 func (s *subscription) noVM(logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
-	if !s.reg.Known(jsrun.HookKey(s.key)) {
-		logger.Error(nil, "hook not in registry — dropping event",
-			"binding", bc.Binding, "event", bc.WatchEvent)
-		s.queue.Forget(qkey)
-		return
-	}
 	logger.V(1).Info("hook has no VM yet — requeueing event",
 		"binding", bc.Binding, "event", bc.WatchEvent)
 	s.requeue(qkey, bc)
-}
-
-// contextWithOptionalTimeout returns a derived context with the given
-// timeout, or the parent unchanged (with a no-op cancel) when timeout <= 0.
-func contextWithOptionalTimeout(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return parent, func() {}
-	}
-	return context.WithTimeout(parent, timeout)
-}
-
-// rescue closes the instance and starts its rebuild via jslifecycle.Rescue
-// (which publishes the canonical Restarted / RescueFailed events). It does not
-// wait for the build: until it ends calls find no VM and the event is requeued
-// with backoff (handleEvent); a failed build shows as BuildFailed on the hook.
-// jshook.R11
-// jshook.R12
-func (s *subscription) rescue(logger logr.Logger, reason jsrun.RestartReason) {
-	if err := jslifecycle.Rescue(s.reg, jsrun.HookKey(s.key), reason, s.emit); err != nil {
-		logger.Error(err, "rescue restart failed", "reason", reason)
-	}
 }
 
 // publish forwards to the EventEmitter the reconciler installed at

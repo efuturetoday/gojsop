@@ -189,7 +189,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **API-4** `debt` `config/samples/core_v1alpha1_jshook.yaml` uses fields without
   effect (schedule, jqFilter, queue, allowFailure). Samples should match what
   works.
-- **API-5** `debt` `RestartReason` constants and the CRD doc list
+- **API-5** `debt` `RecoveryReason` constants and the CRD doc list
   (`api/v1alpha1/js_shared.go:118`) can drift. Use a kubebuilder `Enum`
   marker. Gate: GATE-11.
 
@@ -205,6 +205,14 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `ClusterScriptHook` (anywhere), Kyverno style. gojsop has only
   cluster-scoped kinds and a wildcard RBAC (OPS-2). Decide whether gojsop
   needs the split. Done when the decision is recorded in api-design.
+- **API-10** `decision` Rename the CRD status fields that still speak of VMs
+  and restarts (`status.instance`, `restartsByReason`, `recentRestarts`,
+  `manualRestartToken`, type `JSRestartEvent`) to the neutral names of the
+  port (`recoveries`, `byReason`, `recent`), now that `jsrun.State.Recoveries`
+  carries them. Needs the breaking-change policy first (API-8).
+  Controllers map the port onto the old names in `jslifecycle.RestartHistoryFor`.
+  Done when the names are decided and recorded in api-design.
+
 ## OPS: Operations
 
 - **OPS-1** `gap` No Prometheus metrics. `--metrics-bind-address` exists, but
@@ -243,7 +251,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   reconcile; `lastReconcile.error` cleared after fail-then-fix (STAT-1).
 - **GATE-10** Table test that lists every spec field with an owner (code path
   or status field) (API-1).
-- **GATE-11** Test that `RestartReason` constants match the CRD enum (API-5).
+- **GATE-11** Test that `RecoveryReason` constants match the CRD enum (API-5).
 - **GATE-12** Coverage floor per package. Unit run 2026-10-01: conditions 100,
   jssource 88.1, jshook 75.0, kubehost 67.5, jsregistry 67.4, jsadmission
   66.2, jsengine 49.3, jslifecycle 36.4; 0 for both controllers, the

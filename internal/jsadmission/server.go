@@ -226,12 +226,6 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	log := s.Log.WithValues("policy", entry.Key, "uid", req.UID)
 	resp := &admissionv1.AdmissionResponse{UID: req.UID}
 
-	if _, ok := s.Runner.Instance(jsrun.AdmissionKey(entry.Key)); !ok {
-		log.Info("admission instance not loaded yet — applying failurePolicy")
-		applyFailurePolicy(resp, entry.FailurePolicy, "policy instance not loaded")
-		return resp
-	}
-
 	jsReq, err := buildJSRequest(req)
 	if err != nil {
 		log.Error(err, "build JS request")
@@ -248,11 +242,14 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 
 	result, res, callErr := Handle(callCtx, s.Runner, jsrun.AdmissionKey(entry.Key), jsReq, entry.Mutating)
 	if callErr != nil {
-		// ErrUnknownKey: VM was dropped between Get and Call (race with controller delete).
-		log.Info("admission instance vanished mid-review — applying failurePolicy")
+		// ErrVMUnavailable: not prepared yet or being prepared again.
+		// ErrUnknownKey: never registered or dropped (race with controller delete).
+		log.Info("admission instance not available — applying failurePolicy", "err", callErr)
 		applyFailurePolicy(resp, entry.FailurePolicy, "policy instance not loaded")
 		return resp
 	}
+
+	jslifecycle.Announce(entry.Emit, res.Recovered)
 
 	switch res.Outcome {
 	case jsrun.OutcomePanic:
@@ -261,17 +258,11 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 		publishEntry(entry, corev1.EventTypeWarning,
 			conditions.EventReviewPanicked,
 			"panic in admission handler")
-		if err := jslifecycle.Rescue(s.Runner, jsrun.AdmissionKey(entry.Key), jsrun.ReasonPanic, entry.Emit); err != nil {
-			log.Error(err, "admission rescue failed", "reason", jsrun.ReasonPanic)
-		}
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("panic in admission handler: %v", res.Panic))
 		return resp
 
 	case jsrun.OutcomeMemoryLimit:
 		log.Error(res.Err, "admission JS call hit memory limit — rescuing")
-		if err := jslifecycle.Rescue(s.Runner, jsrun.AdmissionKey(entry.Key), jsrun.ReasonMemoryLimit, entry.Emit); err != nil {
-			log.Error(err, "admission rescue failed", "reason", jsrun.ReasonMemoryLimit)
-		}
 		applyFailurePolicy(resp, entry.FailurePolicy, res.Err.Error())
 		return resp
 
@@ -289,9 +280,6 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 		publishEntry(entry, corev1.EventTypeWarning,
 			conditions.EventReviewTimeout,
 			fmt.Sprintf("review exceeded %s", timeout))
-		if err := jslifecycle.Rescue(s.Runner, jsrun.AdmissionKey(entry.Key), jsrun.ReasonTimeout, entry.Emit); err != nil {
-			log.Error(err, "admission rescue failed", "reason", jsrun.ReasonTimeout)
-		}
 		applyFailurePolicy(resp, entry.FailurePolicy, fmt.Sprintf("timeout after %s", timeout))
 		return resp
 

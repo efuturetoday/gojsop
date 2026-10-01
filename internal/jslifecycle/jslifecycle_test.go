@@ -1,21 +1,16 @@
 package jslifecycle
 
 import (
-	"context"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
 // captureEmitter buffers (eventType, reason, message) tuples so tests can
-// assert what Rescue published.
+// assert what Announce published.
 func captureEmitter(buf int) (chan [3]string, EventEmitter) {
 	ch := make(chan [3]string, buf)
 	return ch, func(eventType, reason, message string) {
@@ -23,42 +18,11 @@ func captureEmitter(buf int) (chan [3]string, EventEmitter) {
 	}
 }
 
-// loadInstance parks a real qjs VM in reg under key so Restart has
-// something to rebuild from cached BuildOptions.
-func loadInstance(t *testing.T, reg *jsregistry.Registry, key types.NamespacedName) {
-	t.Helper()
-	src := []byte(`function config(){return {configVersion:'v1'}} function handle(){}`)
-	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Options{Source: src, SourceHash: "h1"}); err != nil {
-		t.Fatalf("seed registry: %v", err)
-	}
-	t.Cleanup(func() { reg.Drop(jsrun.HookKey(key)) })
-}
-
 // js-registry.R2
 // status-conditions.R4
-func TestRescue_Success_EmitsRestarted(t *testing.T) {
-	reg := jsregistry.NewRegistry()
-	key := types.NamespacedName{Namespace: "ns", Name: "ok"}
-	loadInstance(t, reg, key)
-
+func TestAnnounce_Recovery_EmitsRestarted(t *testing.T) {
 	events, emit := captureEmitter(2)
-	before, _ := reg.Get(jsrun.HookKey(key))
-	if err := Rescue(reg, jsrun.HookKey(key), jsrun.ReasonPanic, emit); err != nil {
-		t.Fatalf("Rescue: unexpected error: %v", err)
-	}
-	// Rescue does not wait for the rebuild; it ends with a fresh VM and the
-	// reason in the restart log.
-	var mi *jsregistry.ManagedVM
-	for deadline := time.Now().Add(20 * time.Second); mi == nil || mi == before; {
-		if time.Now().After(deadline) {
-			t.Fatal("Rescue: the VM was not rebuilt")
-		}
-		time.Sleep(5 * time.Millisecond)
-		mi, _ = reg.Get(jsrun.HookKey(key))
-	}
-	if last := mi.LastRestart(); last.Reason != jsrun.ReasonPanic {
-		t.Fatalf("Rescue: LastRestart.Reason=%q want %q", last.Reason, jsrun.ReasonPanic)
-	}
+	Announce(emit, jsrun.ReasonPanic)
 
 	select {
 	case ev := <-events:
@@ -77,43 +41,17 @@ func TestRescue_Success_EmitsRestarted(t *testing.T) {
 }
 
 // js-registry.R2
-// status-conditions.R4
-func TestRescue_Failure_EmitsRescueFailed(t *testing.T) {
-	reg := jsregistry.NewRegistry()
-	// Deliberately don't seed: Restart on an unknown key returns an
-	// error, which is exactly the path we want to assert publishes
-	// RescueFailed (not Restarted).
-	key := types.NamespacedName{Namespace: "ns", Name: "ghost"}
-
+func TestAnnounce_NoRecovery_PublishesNothing(t *testing.T) {
 	events, emit := captureEmitter(2)
-	if err := Rescue(reg, jsrun.HookKey(key), jsrun.ReasonMemoryLimit, emit); err == nil {
-		t.Fatal("Rescue on unknown key: want error, got nil")
-	}
-
+	Announce(emit, "")
 	select {
 	case ev := <-events:
-		if ev[0] != corev1.EventTypeWarning {
-			t.Errorf("eventType=%q want Warning", ev[0])
-		}
-		if ev[1] != conditions.EventRescueFailed {
-			t.Errorf("reason=%q want %q", ev[1], conditions.EventRescueFailed)
-		}
-		if ev[2] != "rescue memory-limit failed" {
-			t.Errorf("message=%q want stable template (no leaked underlying error)", ev[2])
-		}
+		t.Fatalf("no recovery, but event published: %v", ev)
 	default:
-		t.Fatal("expected RescueFailed event, none captured")
 	}
 }
 
 // js-registry.R2
-// status-conditions.R4
-func TestRescue_NilEmitter_NoOps(t *testing.T) {
-	reg := jsregistry.NewRegistry()
-	key := types.NamespacedName{Namespace: "ns", Name: "noemit"}
-	loadInstance(t, reg, key)
-
-	if err := Rescue(reg, jsrun.HookKey(key), jsrun.ReasonManual, nil); err != nil {
-		t.Fatalf("Rescue with nil emitter must succeed: %v", err)
-	}
+func TestAnnounce_NilEmitter_NoOps(t *testing.T) {
+	Announce(nil, jsrun.ReasonManual)
 }

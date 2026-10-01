@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Backoff is the retry delay of a Broken key: Base doubles with every failed
+// Backoff is the retry delay of a Failed key: Base doubles with every failed
 // build in a row, is capped at Max and then spread by jitter. Zero fields use
 // DefaultBackoffBase and DefaultBackoffMax.
 type Backoff struct {

@@ -20,7 +20,7 @@ func loadPolicy(t *testing.T, src string) (jsrun.Runner, jsrun.Key) {
 	reg := jsregistry.NewRegistry()
 	key := jsrun.AdmissionKey(types.NamespacedName{Name: "policy"})
 	t.Cleanup(func() { reg.Drop(key) })
-	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Options{Source: []byte(src), SourceHash: "h"}); err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Spec{Source: []byte(src), SourceHash: "h"}); err != nil {
 		t.Fatalf("load policy: %v", err)
 	}
 	return reg, key

@@ -54,7 +54,7 @@ function handle(c) { log.push(c[0]); }`
 		mkCM("sel-b", "other-ns", match)
 
 		reg := jsregistry.NewRegistry()
-		opts := jsrun.Options{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}}
+		opts := jsrun.Spec{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}}
 		_, _, err := registrytest.GetOrLoad(reg, ctx, jsrun.HookKey(key), opts)
 		Expect(err).NotTo(HaveOccurred())
 		dyn, err := dynamic.NewForConfig(cfg)

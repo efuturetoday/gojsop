@@ -86,10 +86,10 @@ var _ = Describe("JSHook Controller", func() {
 		It("should reconcile and write resolved bindings into status", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &jshookctrl.JSHookReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-				Loader: jssource.NewChain(jssource.InlineLoader{}),
-				Runner: jsregistry.NewRegistry(),
+				Client:  k8sClient,
+				Scheme:  k8sClient.Scheme(),
+				Loader:  jssource.NewChain(jssource.InlineLoader{}),
+				Scripts: jsregistry.NewRegistry(),
 			}
 
 			// The first reconcile only starts the build and reports it
@@ -133,7 +133,7 @@ var _ = Describe("JSHook Controller", func() {
 				Client:   k8sClient,
 				Scheme:   k8sClient.Scheme(),
 				Loader:   jssource.NewChain(jssource.InlineLoader{}),
-				Runner:   reg,
+				Scripts:  reg,
 				Recorder: recorder,
 			}
 			// jshook.R18: while the build runs the hook is Ready=False/Building.

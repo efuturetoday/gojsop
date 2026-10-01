@@ -90,7 +90,7 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 		}))
 		return nil
 	})
-	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsrun.HookKey(e.key), jsrun.Options{
+	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsrun.HookKey(e.key), jsrun.Spec{
 		Source: []byte(src), SourceHash: "h", Limits: lim, Host: binder,
 		PostBuild: func(ctx context.Context, _ jsrun.Script) (any, error) {
 			if gate := e.hold.Load(); gate != nil {
@@ -421,8 +421,8 @@ function handle(c) {
 		}
 	}
 	after, _ := e.reg.Get(jsrun.HookKey(e.key))
-	if after != before || len(after.History) != 0 {
-		t.Fatalf("VM was replaced after a thrown error (history %v)", after.History)
+	if after != before || len(after.Recoveries.Recent) != 0 {
+		t.Fatalf("VM was replaced after a thrown error (history %v)", after.Recoveries.Recent)
 	}
 	// R13: success ends the retries.
 	time.Sleep(300 * time.Millisecond)
