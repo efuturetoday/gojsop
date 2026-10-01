@@ -66,6 +66,11 @@ type Engine struct {
 	rt    wazero.Runtime
 	mod   wazero.CompiledModule
 	cache wazero.CompilationCache
+
+	// base is the memory of a fresh instance (see baseImage).
+	baseOnce sync.Once
+	base     []byte
+	baseErr  error
 }
 
 // NewEngine compiles engine.wasm (or loads the machine code from the cache)

@@ -29,48 +29,21 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## EXEC: JS execution
 
-- **EXEC-9** `decision` Single shot (a fresh VM per call from a snapshot) instead
-  of long-lived VMs. Spike `hack/spikes/quickjs-wasm` (own QuickJS-ng build,
-  Apple M1 Pro, wazero 1.9.0, pod request of 4 KB): build, load the policy,
-  call `validate`, close takes 0.47 ms from source (small policy), 0.44 ms from
-  bytecode, 0.28 ms from a memory snapshot (1.3 MB per policy); with lodash
-  (544 KB) 21.7 ms from source, 4.0 ms from bytecode (1.37 MB, 124 KB without
-  source text) and 0.44 ms from a snapshot (4.0 MB); 0.14 ms and 0.17 ms per
-  shot on 10 goroutines. Costs and gaps: (1) top-level state no longer
-  survives between calls, which breaks js-registry.R5 and the promise to hook
-  authors, so it is a product decision; (2) restored VMs share one random
-  state: two VMs from one snapshot return the same `Math.random()` and share
-  `hash_seed`, and QuickJS-ng has no reseed API, so the build needs a small
-  patch (`JS_SetRandomSeed`) and a reseed after every restore (not done in the
-  spike); (3) bytecode (`JS_WriteObject`) is bound to the exact `engine.wasm`
-  and `JS_ReadObject` does not validate, so only bytecode the operator wrote
-  itself may be read, never from a CR or ConfigMap; (4) a snapshot is 1.3 to
-  4 MB of Go heap per policy (a sparse snapshot would shrink it). The port
-  (`jsrun.Runner`, `jsrun.Scripts`) already fits: `Ensure` prepares, `Invoke`
-  runs. Done when the decision is taken: keep long-lived VMs (close with the
-  reason), or add a per-script opt-in single-shot mode behind the port.
-
 ## REG: JS registry and restarts
 
 - **REG-3** `gap` No finalizer on JSHook / JSAdmission. Deletion is seen via
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
   already declares `jshooks/finalizers`.
-- **REG-4** `decision` Restart contract: triggers are a panic or wasm trap,
-  manual and source-changed (plus limits-changed); since EXEC-8 a timeout or
-  the memory limit alone leave the VM usable and restart nothing. One user knob
-  (`restart` annotation). No `spec.restartPolicy`. `ReasonTimeoutStreak` is
-  still never set but still a CRD enum value (violates API-1), and
-  `ReasonTimeout` and `ReasonMemoryLimit` are set only when a trap came with
-  the call. Decide: drop `timeout-streak` from the enum, or give it a meaning
-  again (the VM survives timeouts now, so a script whose state makes every call
-  hang would time out for ever: restart after N timeouts in a row).
+- **REG-4** `decision` Recovery reasons: a call never prepares a script again
+  (js-registry.R2), so only source-changed, limits-changed and manual are set.
+  The CRD enum also lists `panic`, `timeout`, `memory-limit` and
+  `timeout-streak`, which nothing sets (violates
+  API-1). Decide: drop them from the enum and the `RecoveryReason` constants,
+  or count call outcomes somewhere else (metrics, OPS-1).
 - **REG-5** `decision` Uncommitted debug logging in `Registry.Drop` and
   "cleanup started/done" logs in both controllers. Keep, lower to V(1), or
   remove.
-- **REG-6** `doc` Two concurrency models on one lock: JSHook uses informer
-  queue plus FIFO worker, JSAdmission is a synchronous webhook. Document the
-  asymmetry in the js-registry block.
 
 ## STAT: Status and conditions
 
@@ -250,6 +223,14 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **OPS-6** `decision` Audit log. scrippy kept an audit trail of what hooks
   did to the cluster (`kube.apply`, `kube.delete`). Decide whether gojsop
   needs one and where it lives. Done when decided and recorded in an aspect.
+- **OPS-7** `bug` Manager resources do not fit single shot. Every running call
+  has its own VM with up to `spec.limits.memoryMB` (default 32 MB) of heap,
+  and `--max-concurrent-calls` (default 16) calls may run at once, so the
+  worst case is 16 × 32 MB = 512 MB of wasm memory plus one sparse snapshot per
+  script, while `config/manager/manager.yaml` limits the container to 128Mi.
+  Decide the defaults together (memory limit of the pod, `memoryMB` default,
+  `--max-concurrent-calls`) and document the sizing formula. Done when the
+  manifest and the defaults match and the formula is in an aspect.
 
 ## GATE: Gates and test infrastructure
 

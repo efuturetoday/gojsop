@@ -77,6 +77,7 @@ func TestRegistry_Ensure_BuildsAsyncAndNotifies(t *testing.T) {
 	}
 }
 
+// js-registry.R6
 // js-registry.R13
 // js-registry.R15
 // js-execution.R3
@@ -252,7 +253,7 @@ func TestRegistry_Concurrent_EnsureCallDrop(t *testing.T) {
 					return
 				default:
 				}
-				_, _, _ = reg.Call(context.Background(), key, func(ctx context.Context, vm *jsengine.VM) error {
+				_, _ = reg.Call(context.Background(), key, func(ctx context.Context, vm *jsengine.VM) error {
 					_, err := vm.CallExport(ctx, "ping")
 					return err
 				})

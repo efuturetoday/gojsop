@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -28,9 +29,10 @@ func (configMapMapper) RESTMapping(schema.GroupKind, ...string) (*dispatcher.RES
 }
 
 var _ = Describe("JSHook dispatcher against a real API server", func() {
+	// Every call starts from the snapshot, so the contexts are logged on the
+	// Go side through the host function record().
 	const src = `
-globalThis.log = [];
-function handle(c) { log.push(c[0]); }`
+function handle(c) { record(c[0]); }`
 
 	It("delivers only objects of the selected namespace and labels", func() {
 		// jshook.R15
@@ -54,7 +56,20 @@ function handle(c) { log.push(c[0]); }`
 		mkCM("sel-b", "other-ns", match)
 
 		reg := jsregistry.NewRegistry()
-		opts := jsrun.Spec{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}}
+		var (
+			mu  sync.Mutex
+			log []json.RawMessage
+		)
+		record := jsengine.HostBinderFunc(func(h *jsengine.Host) error {
+			h.Func("record", func(_ context.Context, arg json.RawMessage) (any, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				log = append(log, append(json.RawMessage(nil), arg...))
+				return nil, nil
+			})
+			return nil
+		})
+		opts := jsrun.Spec{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}, Host: record}
 		_, _, err := registrytest.GetOrLoad(reg, ctx, jsrun.HookKey(key), opts)
 		Expect(err).NotTo(HaveOccurred())
 		dyn, err := dynamic.NewForConfig(cfg)
@@ -80,21 +95,17 @@ function handle(c) { log.push(c[0]); }`
 
 		type meta struct{ Metadata struct{ Name string } }
 		delivered := func() []string {
-			var out string
-			_, _, err := reg.Call(ctx, jsrun.HookKey(key), func(c context.Context, vm *jsengine.VM) error {
-				var err error
-				out, err = vm.Eval(c, "log.js", `JSON.stringify(globalThis.log)`)
-				return err
-			})
-			Expect(err).NotTo(HaveOccurred())
-			var cs []struct {
-				Type    string
-				Object  meta
-				Objects []struct{ Object meta }
-			}
-			Expect(json.Unmarshal([]byte(out), &cs)).To(Succeed())
+			mu.Lock()
+			raw := append([]json.RawMessage(nil), log...)
+			mu.Unlock()
 			var names []string
-			for _, c := range cs {
+			for _, r := range raw {
+				var c struct {
+					Type    string
+					Object  meta
+					Objects []struct{ Object meta }
+				}
+				Expect(json.Unmarshal(r, &c)).To(Succeed())
 				if c.Type == "Synchronization" {
 					for _, o := range c.Objects {
 						names = append(names, o.Object.Metadata.Name)

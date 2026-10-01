@@ -51,17 +51,25 @@ type env struct {
 
 	mu     sync.Mutex
 	events []emitted
+	log    []call // contexts handed to record()
 
 	entered atomic.Int32 // handle() calls started (JS reached enter())
 	ooms    atomic.Int32 // how many times oomNow() still answers true
 	crashes atomic.Int32 // how many times crashNow() still panics in the host
+	fails   atomic.Int32 // how many times failNow() still answers true
 
 	// hold, while set, blocks every build of the hook's VM until it is closed.
 	hold atomic.Pointer[chan struct{}]
+	// gate, while set, blocks every waitGate() until it is closed.
+	gate atomic.Pointer[chan struct{}]
+
+	spec jsrun.Spec
 }
 
-// newEnv builds a hook VM from src. The JS sees the host functions enter()
-// (counts started calls) and oomNow() (true while armed).
+// newEnv builds a hook VM from src. Every call starts from the snapshot, so the
+// JS keeps nothing between calls; the host functions keep the test state:
+// enter() counts started calls, record(x) logs x, oomNow(), crashNow() and
+// failNow() misbehave while armed, waitGate() blocks while a gate is set.
 func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Object) *env {
 	t.Helper()
 	e := &env{
@@ -93,9 +101,31 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 		h.Func("oomNow", func(context.Context, json.RawMessage) (any, error) {
 			return e.ooms.Add(-1) >= 0, nil
 		})
+		h.Func("failNow", func(context.Context, json.RawMessage) (any, error) {
+			return e.fails.Add(-1) >= 0, nil
+		})
+		h.Func("record", func(_ context.Context, arg json.RawMessage) (any, error) {
+			var c call
+			if err := json.Unmarshal(arg, &c); err != nil {
+				return nil, err
+			}
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.log = append(e.log, c)
+			return nil, nil
+		})
+		h.Func("waitGate", func(ctx context.Context, _ json.RawMessage) (any, error) {
+			if gate := e.gate.Load(); gate != nil {
+				select {
+				case <-*gate:
+				case <-ctx.Done():
+				}
+			}
+			return nil, nil
+		})
 		return nil
 	})
-	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsrun.HookKey(e.key), jsrun.Spec{
+	e.spec = jsrun.Spec{
 		Source: []byte(src), SourceHash: "h", Limits: lim, Host: binder,
 		PostBuild: func(ctx context.Context, _ jsrun.Script) (any, error) {
 			if gate := e.hold.Load(); gate != nil {
@@ -106,7 +136,8 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 			}
 			return nil, nil
 		},
-	})
+	}
+	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsrun.HookKey(e.key), e.spec)
 	if err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}
@@ -152,32 +183,11 @@ func (e *env) subscribe(b jshook.KubernetesBinding) {
 
 type call = map[string]any
 
-// calls returns the contexts the hook has recorded in globalThis.log. It goes
-// through Registry.Call, so it waits for a running handle() to finish.
+// calls returns the contexts the hook has handed to record() so far.
 func (e *env) calls() []call {
-	e.t.Helper()
-	var out string
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		_, _, err := e.reg.Call(context.Background(), jsrun.HookKey(e.key), func(ctx context.Context, vm *jsengine.VM) error {
-			var err error
-			out, err = vm.Eval(ctx, "log.js", `JSON.stringify(globalThis.log || [])`)
-			return err
-		})
-		if err == nil {
-			break
-		}
-		// A rescue rebuilds in the background; the key holds no VM meanwhile.
-		if !errors.Is(err, jsrun.ErrVMUnavailable) || time.Now().After(deadline) {
-			e.t.Fatalf("read log: %v", err)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	var cs []call
-	if err := json.Unmarshal([]byte(out), &cs); err != nil {
-		e.t.Fatalf("decode log %q: %v", out, err)
-	}
-	return cs
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]call(nil), e.log...)
 }
 
 func (e *env) waitCalls(n int) []call {
@@ -277,8 +287,7 @@ const bcSynchronization = "Synchronization"
 func boolp(b bool) *bool { return &b }
 
 const recordSrc = `
-globalThis.log = [];
-function handle(c) { log.push(c[0]); }
+function handle(c) { record(c[0]); }
 `
 
 // jshook.R3
@@ -374,21 +383,23 @@ func TestDispatcher_ExecuteHookOnEvent_EmptyMeansAll(t *testing.T) {
 
 // jshook.R8
 func TestDispatcher_BurstOfChangesFoldsIntoNewestObject(t *testing.T) {
-	e := newEnv(t, recordSrc, jsengine.Limits{}, newCM("a", "uid-a", "0"))
+	const src = `
+function handle(c) { waitGate(); record(c[0]); }`
+	e := newEnv(t, src, jsengine.Limits{}, newCM("a", "uid-a", "0"))
 	e.subscribe(jshook.KubernetesBinding{})
 	e.waitCalls(1)
 
-	// Hold the VM so the worker blocks inside its next call; later changes
+	// Close the gate so the worker blocks inside its next call; later changes
 	// pile up in the queue meanwhile.
-	mi, _ := e.reg.Get(jsrun.HookKey(e.key))
-	mi.CallMu.Lock()
+	gate := make(chan struct{})
+	e.gate.Store(&gate)
 	e.update(newCM("a", "uid-a", "1")) // goes in flight
 	time.Sleep(200 * time.Millisecond)
 	e.update(newCM("a", "uid-a", "2"))
 	e.update(newCM("a", "uid-a", "3"))
 	e.update(newCM("a", "uid-a", "4"))
 	time.Sleep(300 * time.Millisecond)
-	mi.CallMu.Unlock()
+	close(gate)
 
 	e.waitCalls(3)
 	time.Sleep(300 * time.Millisecond)
@@ -405,13 +416,12 @@ func TestDispatcher_BurstOfChangesFoldsIntoNewestObject(t *testing.T) {
 // jshook.R13
 func TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart(t *testing.T) {
 	const src = `
-globalThis.log = [];
-globalThis.fails = 2;
 function handle(c) {
-  log.push(c[0]);
-  if (globalThis.fails-- > 0) { throw new Error("boom"); }
+  record(c[0]);
+  if (failNow()) { throw new Error("boom"); }
 }`
 	e := newEnv(t, src, jsengine.Limits{})
+	e.fails.Store(2)
 	before, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(jshook.KubernetesBinding{})
 
@@ -427,7 +437,7 @@ function handle(c) {
 	}
 	after, _ := e.reg.Get(jsrun.HookKey(e.key))
 	if after != before || len(after.Recoveries.Recent) != 0 {
-		t.Fatalf("VM was replaced after a thrown error (history %v)", after.Recoveries.Recent)
+		t.Fatalf("script was prepared again after a thrown error (history %v)", after.Recoveries.Recent)
 	}
 	// R13: success ends the retries.
 	time.Sleep(300 * time.Millisecond)
@@ -439,10 +449,9 @@ function handle(c) {
 // jshook.R12
 func TestDispatcher_MemoryLimit_WarnsKeepsVMAndRetries(t *testing.T) {
 	const src = `
-globalThis.log = [];
 function handle(c) {
   if (oomNow()) { var a = []; while (true) { a.push(new Array(100000).fill(1)); } }
-  log.push(c[0]);
+  record(c[0]);
 }`
 	e := newEnv(t, src, jsengine.Limits{MemoryMB: 1})
 	e.ooms.Store(1)
@@ -453,12 +462,12 @@ function handle(c) {
 	if ev := e.emitted()[0]; ev.Type != corev1.EventTypeWarning || ev.Message != "handle() exceeded its memory limit" {
 		t.Fatalf("event %v, want the memory-limit Warning", ev)
 	}
-	cs := e.waitCalls(1) // the retry runs on the same VM
+	cs := e.waitCalls(1) // the retry runs on a fresh VM of the same script
 	if cs[0]["type"] != bcSynchronization {
 		t.Fatalf("retried context %v", cs[0])
 	}
 	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now != first || len(now.Recoveries.Recent) != 0 {
-		t.Fatal("the memory limit must not replace the VM")
+		t.Fatal("the memory limit must not prepare the script again")
 	}
 	for _, ev := range e.emitted() {
 		if ev.Reason == conditions.EventRestarted {
@@ -470,18 +479,17 @@ function handle(c) {
 // jshook.R13
 func TestDispatcher_RetryKeepsFresherStateOfSameObject(t *testing.T) {
 	const src = `
-globalThis.log = [];
 function handle(c) {
   enter();
-  log.push(c[0]);
-  if (c[0].type === "Event" && !globalThis.failed) {
-    globalThis.failed = true;
+  record(c[0]);
+  if (c[0].type === "Event" && failNow()) {
     var end = Date.now() + 400;
     while (Date.now() < end) {}
     throw new Error("boom");
   }
 }`
 	e := newEnv(t, src, jsengine.Limits{}, newCM("a", "uid-a", "0"))
+	e.fails.Store(1)
 	e.subscribe(jshook.KubernetesBinding{})
 	e.waitCalls(1)
 	before := e.entered.Load()
@@ -504,8 +512,7 @@ function handle(c) {
 // jshook.R14
 func TestDispatcher_Drop_NoMoreEvents(t *testing.T) {
 	const src = `
-globalThis.log = [];
-function handle(c) { enter(); log.push(c[0]); }`
+function handle(c) { enter(); record(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
 	e.subscribe(jshook.KubernetesBinding{})
 	e.waitCalls(1)
@@ -524,7 +531,6 @@ function handle(c) { enter(); log.push(c[0]); }`
 // js-execution.R3
 func TestDispatcher_Timeout_CancelsWarnsAndKeepsVM(t *testing.T) {
 	const src = `
-globalThis.log = [];
 function handle(c) { enter(); while (true) {} }`
 	e := newEnv(t, src, jsengine.Limits{TimeoutSeconds: 1})
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
@@ -540,9 +546,9 @@ function handle(c) { enter(); while (true) {} }`
 		}
 	}
 	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now != first {
-		t.Fatal("VM was replaced after the timeout")
+		t.Fatal("script was prepared again after the timeout")
 	}
-	// The retried event reaches the same VM again.
+	// The retried event runs again, on a fresh VM of the same script.
 	n := e.entered.Load()
 	e.waitEntered(n)
 }
@@ -550,8 +556,7 @@ function handle(c) { enter(); while (true) {} }`
 // jshook.R9
 func TestDispatcher_ResubscribeDuringCall_NoOverlapAndProcessAlive(t *testing.T) {
 	const src = `
-globalThis.log = [];
-function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {} log.push(c[0]); }`
+function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {} record(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
 	e.subscribe(jshook.KubernetesBinding{})
 	e.waitEntered(0)
@@ -560,8 +565,7 @@ function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {
 	// and the new one must not start before the old call has ended.
 	e.subscribe(jshook.KubernetesBinding{})
 
-	// calls() goes through Registry.Call, so it also proves the VM is usable
-	// and not left closed. The new subscription delivers its own Synchronization.
+	// The new subscription delivers its own Synchronization.
 	deadline := time.Now().Add(10 * time.Second)
 	for e.entered.Load() < 2 {
 		if time.Now().After(deadline) {
@@ -569,33 +573,38 @@ function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	e.calls()
+	e.waitCalls(1)
 }
 
 // jshook.R12
+// js-registry.R2
 //
-// A host function that panics makes the wasm call trap: the module state is
-// unknown. The worker must classify it as a panic, rebuild the VM and retry
-// the event.
-func TestDispatcher_PanicInHandle_RestartsVMAndRetries(t *testing.T) {
+// A host function that panics makes the wasm call trap. The VM of that call
+// is thrown away; the retried event runs on a fresh VM of the same prepared
+// script, nothing is prepared again and no Restarted event is emitted.
+func TestDispatcher_PanicInHandle_RetriesOnFreshVM(t *testing.T) {
 	const src = `
-globalThis.log = [];
-function handle(c) { crashNow(); log.push(c[0]); }`
+function handle(c) { crashNow(); record(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
 	e.crashes.Store(1)
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(jshook.KubernetesBinding{})
 
-	e.waitEmitted(conditions.EventRestarted, 1)
-	if ev := e.emitted()[0]; ev.Message != "restarted: "+string(jsrun.ReasonPanic) {
-		t.Fatalf("event %v, want restarted: panic", ev)
-	}
 	cs := e.waitCalls(1)
 	if cs[0]["type"] != bcSynchronization {
 		t.Fatalf("retried context %v", cs[0])
 	}
-	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now == first {
-		t.Fatal("VM was not replaced")
+	if e.crashes.Load() >= 0 {
+		t.Fatal("crashNow() never panicked")
+	}
+	now, _ := e.reg.Get(jsrun.HookKey(e.key))
+	if now != first || len(now.Recoveries.Recent) != 0 {
+		t.Fatalf("a panic must not prepare the script again (history %v)", now.Recoveries.Recent)
+	}
+	for _, ev := range e.emitted() {
+		if ev.Reason == conditions.EventRestarted {
+			t.Fatalf("a panic must not emit Restarted: %v", e.emitted())
+		}
 	}
 }
 
@@ -671,22 +680,25 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 	}
 }
 
-// While the hook has no VM (a rescue rebuild runs) events are kept and retried
-// with the rate limiter; they reach the new VM, none is dropped.
+// While the hook has no prepared script (its first build runs) events are
+// kept and retried with the rate limiter; they reach the script once it is
+// prepared, none is dropped.
 //
 // jshook.R19
-func TestDispatcher_NoVM_KeepsEventsAndDeliversAfterRebuild(t *testing.T) {
+// js-registry.R19
+func TestDispatcher_NoVM_KeepsEventsAndDeliversAfterBuild(t *testing.T) {
 	const src = `
-globalThis.log = [];
-function handle(c) { enter(); log.push(c[0]); }`
+function handle(c) { enter(); record(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
 	gate := make(chan struct{})
 	e.hold.Store(&gate)
-	if err := e.reg.Restart(jsrun.HookKey(e.key), jsrun.ReasonManual); err != nil {
-		t.Fatal(err)
+	// Forget the script and register it again: the new build blocks on the gate.
+	e.reg.Drop(jsrun.HookKey(e.key))
+	if st := e.reg.Ensure(jsrun.HookKey(e.key), e.spec); st.Phase != jsrun.PhasePreparing {
+		t.Fatalf("state %v, want Preparing", st)
 	}
 	if _, ok := e.reg.Get(jsrun.HookKey(e.key)); ok {
-		t.Fatal("a restarting hook must hold no VM")
+		t.Fatal("a building hook must hold no script")
 	}
 	e.subscribe(jshook.KubernetesBinding{})
 

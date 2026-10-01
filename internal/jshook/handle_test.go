@@ -13,28 +13,25 @@ import (
 )
 
 // loadHook loads src as the hook of a fresh key in a real registry.
-func loadHook(t *testing.T, src string) (*jsregistry.Registry, jsrun.Key, *jsregistry.ManagedVM) {
+func loadHook(t *testing.T, src string) (*jsregistry.Registry, jsrun.Key) {
 	t.Helper()
 	reg := jsregistry.NewRegistry()
 	key := jsrun.HookKey(types.NamespacedName{Name: "hook"})
 	t.Cleanup(func() { reg.Drop(key) })
-	mi, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Spec{Source: []byte(src), SourceHash: "h"})
-	if err != nil {
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Spec{Source: []byte(src), SourceHash: "h"}); err != nil {
 		t.Fatalf("load hook: %v", err)
 	}
-	return reg, key, mi
+	return reg, key
 }
 
 // jshook.R7
 func TestHandle_ReceivesBindingContext(t *testing.T) {
 	const src = `
-		var lastEvent = null;
 		function handle(ctx) {
-			lastEvent = ctx[0];
-			return { ack: ctx.length };
+			return { ack: ctx.length, watchEvent: ctx[0].watchEvent };
 		}
 	`
-	reg, key, mi := loadHook(t, src)
+	reg, key := loadHook(t, src)
 
 	bctx := []jshook.BindingContext{{
 		Binding:    "watch",
@@ -48,22 +45,17 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 	if err != nil || hres.Outcome != jsrun.OutcomeOK {
 		t.Fatalf("Handle: %v, %+v", err, hres)
 	}
-	want := `{"ack":1}`
+	// The export returns both the ack and the watchEvent it saw in one shot:
+	// every call restores a fresh instance from the snapshot, so nothing set
+	// by this call could be inspected through a later, separate call.
+	want := `{"ack":1,"watchEvent":"Added"}`
 	if got != want {
 		t.Fatalf("return: got %q want %q", got, want)
-	}
-
-	res, err := mi.VM.Eval(context.Background(), "inspect.js", `lastEvent.watchEvent`)
-	if err != nil {
-		t.Fatalf("Eval inspect: %v", err)
-	}
-	if res != "Added" {
-		t.Fatalf("lastEvent.watchEvent = %q", res)
 	}
 }
 
 func TestHandle_MissingFunction(t *testing.T) {
-	reg, key, _ := loadHook(t, `function config(){return {}}`)
+	reg, key := loadHook(t, `function config(){return {}}`)
 	_, hres, err := jshook.Handle(context.Background(), reg, key, nil)
 	if err != nil {
 		t.Fatalf("Handle: %v", err)

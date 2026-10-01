@@ -1,26 +1,20 @@
 // Package jslifecycle centralizes the bits of lifecycle plumbing that JSHook's
-// dispatcher and JSAdmission's HTTP server share verbatim:
+// dispatcher and JSAdmission's HTTP server share verbatim: the EventEmitter
+// callback shape both packages use to publish corev1.Events about their
+// owning resource without depending on controller-runtime, and the projection
+// of the runner's recovery log onto the CRD status shape (RestartHistoryFor).
 //
-//   - the EventEmitter callback shape both packages use to publish corev1.Events
-//     about their owning resource without depending on controller-runtime;
-//   - the helper that announces a recovery of a script (which the runner
-//     starts itself inside Invoke) as the canonical Restarted event with a
-//     stable, low-cardinality message template.
-//
-// Putting this in one place collapses two parallel callback types and two
-// near-identical bodies into a single contract, so adding a third
-// caller (or tweaking an event message) doesn't require touching both
-// dispatcher and server.
+// A runner's Invoke never recovers a script itself (backlog REG-4): a panic,
+// a trap, a timeout or the memory limit just end that call, and the next call
+// gets a fresh instance from the same prepared script. Only Ensure prepares a
+// script again (source changed, limits changed, manual reset), and that is
+// reported through the Scripts.Ensure state, not through this package.
 package jslifecycle
 
 import (
-	"fmt"
-
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
@@ -33,26 +27,6 @@ import (
 // reconciles. The (eventType, reason, message) tuple is forwarded verbatim;
 // message stability rules (see internal/conditions) are the caller's job.
 type EventEmitter func(eventType, reason, message string)
-
-// Announce publishes the canonical lifecycle event for a recovery that the
-// runner started inside Invoke (Result.Recovered): Warning Restarted, message
-// "restarted: <reason>". It does nothing for an empty reason (the call needed
-// no recovery). The runner recovers the script itself; callers only announce.
-//
-// The message template is drawn from the small set of recovery reasons
-// (jsrun.ReasonPanic / ReasonMemoryLimit / ReasonTimeout), so the recorder's
-// (Reason, Message) dedup window collapses bursts of identical failures.
-//
-// The emitter is optional; passing nil is supported.
-//
-// js-registry.R2
-func Announce(emit EventEmitter, reason jsrun.RecoveryReason) {
-	if reason == "" {
-		return
-	}
-	publish(emit, corev1.EventTypeWarning, conditions.EventRestarted,
-		fmt.Sprintf("restarted: %s", reason))
-}
 
 // RestartHistoryFor projects the runner's recovery log onto the CRD
 // status shape: RestartsByReason as string-keyed counters and RecentRestarts
@@ -82,10 +56,4 @@ func RestartHistoryFor(rec jsrun.Recoveries) (map[string]int32, []corev1alpha1.J
 		}
 	}
 	return byReason, recent
-}
-
-func publish(emit EventEmitter, eventType, reason, message string) {
-	if emit != nil {
-		emit(eventType, reason, message)
-	}
 }

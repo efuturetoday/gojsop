@@ -5,10 +5,12 @@
 // drop and watch the scripts of their kind. Neither shows a VM, a lock or the
 // engine.
 //
-// The first adapter is jsregistry.Registry (one persistent VM per key). The
-// port also fits an engine that prepares a script once (compile, bake,
-// snapshot) and invokes it statelessly: Ensure is "prepare", Invoke is "run".
-// An adapter recovers a script that a call left unusable inside Invoke.
+// The first adapter is jsregistry.Registry: Ensure prepares a script once
+// (compile, bake, snapshot) and every Invoke runs it statelessly on a fresh
+// instance restored from that snapshot. Nothing survives between calls and
+// nothing is recovered after one: a panic, a trap, a timeout or the memory
+// limit just end that call, and the next call still gets a fresh instance
+// from the same prepared script.
 //
 // js-execution.R10
 package jsrun
@@ -104,10 +106,15 @@ type RecoveryReason string
 //   - ReasonSourceChanged: Spec.SourceHash differs on Ensure
 //   - ReasonLimitsChanged: Spec.Limits changed with the source hash unchanged (Ensure)
 //   - ReasonManual:        Spec.ResetToken changed (Ensure)
-//   - ReasonMemoryLimit:   Invoke ended with OutcomeMemoryLimit (adapter recovers)
-//   - ReasonPanic:         Invoke ended with OutcomePanic (adapter recovers)
-//   - ReasonTimeout:       Invoke ended with OutcomeCancelled (adapter recovers)
-//   - ReasonTimeoutStreak: no longer set: a cancelled call closes the module, so every timeout recovers with ReasonTimeout; kept as CRD enum value
+//   - ReasonMemoryLimit:   no longer set by the adapter: every call starts
+//     from a fresh instance, so a memory limit needs no recovery; kept as a
+//     CRD enum value (backlog REG-4)
+//   - ReasonPanic:         no longer set by the adapter, same reason as above
+//     (backlog REG-4)
+//   - ReasonTimeout:       no longer set by the adapter, same reason as above
+//     (backlog REG-4)
+//   - ReasonTimeoutStreak: no longer set by the adapter, same reason as above
+//     (backlog REG-4)
 const (
 	ReasonSourceChanged RecoveryReason = "source-changed"
 	ReasonMemoryLimit   RecoveryReason = "memory-limit"
@@ -119,9 +126,9 @@ const (
 )
 
 // ReportedByReconcile reports whether a controller reports the recovery with
-// this reason as a Restarted event after the build. Recoveries that a call
-// started (panic, memory limit, timeout) are announced by the caller of Invoke
-// through Result.Recovered.
+// this reason as a Restarted event after the build. The remaining reasons
+// (memory limit, panic, timeout, timeout streak) are no longer set by the
+// adapter: nothing is recovered after a call (backlog REG-4).
 func (r RecoveryReason) ReportedByReconcile() bool {
 	switch r {
 	case ReasonSourceChanged, ReasonLimitsChanged, ReasonManual:
@@ -223,15 +230,14 @@ const (
 
 // Result is what Invoke hands back. Outcome drives the failure-policy
 // decision; Duration is for metrics; Panic and Err carry the diagnostic
-// detail. Recovered is set when the adapter started to prepare the script
-// again because of the outcome (panic, memory limit, cancellation); callers
-// only announce it, they never trigger it.
+// detail. Nothing is recovered after a call, whatever the outcome: the
+// instance Invoke ran on is thrown away either way, and the next Invoke gets
+// a fresh one restored from the same prepared script.
 type Result struct {
-	Outcome   Outcome
-	Duration  time.Duration
-	Panic     any            // populated when Outcome == OutcomePanic
-	Err       error          // populated when Outcome is neither OK nor Panic
-	Recovered RecoveryReason // empty when the call needed no recovery
+	Outcome  Outcome
+	Duration time.Duration
+	Panic    any   // populated when Outcome == OutcomePanic
+	Err      error // populated when Outcome is neither OK nor Panic
 }
 
 // Runner is the data path: it runs a script. The dispatcher, the admission
@@ -243,9 +249,10 @@ type Runner interface {
 	// (none if in is nil) and decodes the JSON form of the result into out
 	// (untouched when the export returns undefined; nil discards it). The
 	// error is ErrUnknownKey or ErrVMUnavailable when nothing ran; otherwise
-	// the Result classifies how the call ended. The adapter bounds the call
-	// by the timeout of the Spec and recovers a script that a panic, the
-	// memory limit or a cancellation left unusable (Result.Recovered).
+	// the Result classifies how the call ended. Every call runs in a fresh
+	// script instance prepared by Ensure: no state survives between calls,
+	// and nothing is recovered after a call, whatever the outcome. The
+	// adapter bounds the call by the timeout of the Spec.
 	Invoke(ctx context.Context, key Key, export string, in, out any) (Result, error)
 }
 

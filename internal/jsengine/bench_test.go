@@ -85,3 +85,36 @@ func BenchmarkVM_New(b *testing.B) {
 		vm.Close()
 	}
 }
+
+// BenchmarkSnapshot_Shot is one single-shot call: restore a VM from the
+// snapshot, call validate, close. It is the cost of every Runner.Invoke.
+// js-execution.R16
+func BenchmarkSnapshot_Shot(b *testing.B) {
+	vm, err := New(Limits{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := vm.LoadModule(context.Background(), "p.js", benchSrc); err != nil {
+		b.Fatal(err)
+	}
+	s, err := vm.Snapshot(context.Background())
+	vm.Close()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(s.Bytes()), "snapshot-bytes")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+	var out map[string]any
+	b.ReportAllocs()
+	for b.Loop() {
+		v, err := s.NewVM(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := v.Invoke(ctx, "validate", benchReq, &out); err != nil {
+			b.Fatal(err)
+		}
+		v.Close()
+	}
+}

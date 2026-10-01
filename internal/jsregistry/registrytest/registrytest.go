@@ -12,16 +12,17 @@ import (
 )
 
 // GetOrLoad calls Registry.Ensure for key until the key is Ready or Broken
-// and returns the VM or the build error. The boolean reports whether a
-// different VM is installed than before the call. ctx bounds the wait only.
-func GetOrLoad(reg *jsregistry.Registry, ctx context.Context, key jsrun.Key, opts jsrun.Spec) (*jsregistry.ManagedVM, bool, error) { //nolint:revive // mirrors the removed Registry.GetOrLoad
+// and returns the prepared script or the build error. The boolean reports
+// whether a different script is installed than before the call. ctx bounds
+// the wait only.
+func GetOrLoad(reg *jsregistry.Registry, ctx context.Context, key jsrun.Key, opts jsrun.Spec) (*jsregistry.Prepared, bool, error) { //nolint:revive // mirrors the removed Registry.GetOrLoad
 	before, _ := reg.Get(key)
 	for {
 		st := reg.Ensure(key, opts)
 		switch st.Phase {
 		case jsrun.PhaseReady:
-			mi, _ := reg.Get(key)
-			return mi, mi != before, nil
+			p, _ := reg.Get(key)
+			return p, p != before, nil
 		case jsrun.PhaseFailed:
 			return nil, false, st.Err
 		}
@@ -30,32 +31,5 @@ func GetOrLoad(reg *jsregistry.Registry, ctx context.Context, key jsrun.Key, opt
 			return nil, false, ctx.Err()
 		case <-time.After(2 * time.Millisecond):
 		}
-	}
-}
-
-// Restart calls Registry.Restart and waits until the rebuilt VM is Ready
-// (or the build failed), like the synchronous restart the registry had before
-// builds went to the background.
-func Restart(reg *jsregistry.Registry, key jsrun.Key, reason jsrun.RecoveryReason) (*jsregistry.ManagedVM, error) {
-	before, ok := reg.Get(key)
-	if !ok {
-		return nil, reg.Restart(key, reason) // the error for the unknown key
-	}
-	if err := reg.Restart(key, reason); err != nil {
-		return nil, err
-	}
-	deadline := time.Now().Add(time.Minute)
-	for {
-		st := reg.Ensure(key, before.Opts)
-		mi, _ := reg.Get(key)
-		switch {
-		case st.Phase == jsrun.PhaseReady && mi != before:
-			return mi, nil
-		case st.Phase == jsrun.PhaseFailed:
-			return nil, st.Err
-		case time.Now().After(deadline):
-			return nil, context.DeadlineExceeded
-		}
-		time.Sleep(2 * time.Millisecond)
 	}
 }

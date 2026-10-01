@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
@@ -59,5 +60,28 @@ func TestFlags_EngineCacheDir_DefaultsToInMemory(t *testing.T) {
 	f, err := parse(t, "--engine-cache-dir=/var/cache/engine")
 	if err != nil || f.engineCacheDir != "/var/cache/engine" {
 		t.Fatalf("engineCacheDir = %q, %v", f.engineCacheDir, err)
+	}
+}
+
+// js-registry.R20
+func TestFlags_MaxConcurrentCalls_DefaultsAndRejectsNonsense(t *testing.T) {
+	def, err := parse(t)
+	if err != nil || def.maxConcurrentCalls != jsregistry.DefaultMaxConcurrentCalls {
+		t.Fatalf("default maxConcurrentCalls = %d, %v; want %d",
+			def.maxConcurrentCalls, err, jsregistry.DefaultMaxConcurrentCalls)
+	}
+
+	f, err := parse(t, "--max-concurrent-calls=4")
+	if err != nil || f.maxConcurrentCalls != 4 {
+		t.Fatalf("maxConcurrentCalls = %d, %v", f.maxConcurrentCalls, err)
+	}
+
+	for _, args := range [][]string{
+		{"--max-concurrent-calls=0"},
+		{"--max-concurrent-calls=-1"},
+	} {
+		if _, err := parse(t, args...); err == nil {
+			t.Errorf("%v: want an error", args)
+		}
 	}
 }

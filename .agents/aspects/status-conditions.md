@@ -78,7 +78,7 @@ Add a new failure cause to status:
 - **R4** Take restart counters and history from the runner's `State.Recoveries` through
   `jslifecycle.RestartHistoryFor`, which maps them onto the CRD fields `restartsByReason` and `recentRestarts`. Never keep a second count in a controller.
   Why: two counts drift apart. The neutral `Recoveries` of the port and the older CRD names meet in this one function (API-10).
-  Gate: `TestRegistry_RestartHistory_RingAndCounters`, `TestAnnounce_Recovery_EmitsRestarted`.
+  Gate: `TestRegistry_RecoveryHistory_RingAndCounters`.
 - **R5** Put only the reconcile outcome into `lastReconcile`, never a runtime
   call result.
   Why: the removed fields lied about what the controller knew.

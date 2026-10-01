@@ -8,6 +8,8 @@ entrypoints:
   - jsengine.VM.CallExport
   - jsengine.VM.Invoke
   - jsengine.VM.BindHost
+  - jsengine.VM.Snapshot
+  - jsengine.Snapshot.NewVM
   - jsrun.Runner.Invoke
   - jsrun.Scripts.Ensure
   - jsregistry.Registry.Call
@@ -41,17 +43,22 @@ runtime inside. Four properties follow from this choice:
   functions cross through one import, `env.host_call(name, json) -> json`
   (R11).
 
-Runtimes are long-lived. The top-level state of a script survives between
-calls, so a hook can keep caches. A VM that a wasm trap left in an unknown state
-must be found and rebuilt. The [js-registry](js-registry.md) aspect covers that.
-Whether calls could run from a snapshot instead (single shot) is open: EXEC-9.
+Every call runs single shot. When a script is prepared, its module is loaded
+into a fresh VM and the top-level code runs once; then the registry takes a
+sparse memory snapshot of that VM (`jsengine.VM.Snapshot`: only the pages that
+differ from a fresh instance). Every call restores its own VM from the
+snapshot (`jsengine.Snapshot.NewVM`, about 0.24 ms), runs one export and
+closes it. Top-level state does not survive between calls; a hook that needs
+state across calls keeps it in the cluster. `Math.random` is reseeded on every
+restore (R16). The [js-registry](js-registry.md) aspect covers how calls get
+their VM.
 
 A call ends when its context ends. The execution deadline comes from
 `spec.limits.timeoutSeconds`, the heap limit from `spec.limits.memoryMB`. The
-defaults are 30 s and 32 MB (`jsengine.DefaultLimits`). A timeout or the memory
-limit ends the call, not the VM. Only a wasm trap (`jsengine.TrapError`: a
-trap, or a panic in a host function) makes a VM unusable; the registry then
-rebuilds it.
+defaults are 30 s and 32 MB (`jsengine.DefaultLimits`). A timeout, the memory
+limit or a wasm trap (`jsengine.TrapError`: a trap, or a panic in a host
+function) end the call; its VM is thrown away in any case, and the next call
+starts from the snapshot.
 
 Scripts reach the outside world only through the global object `kube`. Hooks
 get `apply`, `get`, `list` and `delete`. Admission policies get read-only
@@ -60,7 +67,8 @@ timers. The [kube-access](kube-access.md) aspect covers the details.
 
 The ABI of `engine.wasm` is small. Exports: `gj_init(mem_limit, stack_size)`,
 `gj_eval`, `gj_call(name, json)`, `gj_has_export`, the output buffer
-(`gj_out_ptr`, `gj_out_len`) and `gj_alloc`/`gj_free`. Every call returns a
+(`gj_out_ptr`, `gj_out_len`), `gj_alloc`/`gj_free`, and for restores from a
+snapshot `gj_reseed(seed)` and `gj_update_stack_top()`. Every call returns a
 status: 0 ok, 1 script exception (output: `message\nstack`), 2 interrupted,
 3 out of memory, 4 bad input. Imports (module `env`): `interrupt`, `host_call`,
 `host_read`. `glue.c` documents them.
@@ -97,15 +105,15 @@ stays at tens of microseconds, a timeout costs its deadline).
   Gate: `TestImportBoundary_EngineStaysBehindRegistry`.
 - **R2** Run user JavaScript only through `jsrun.Runner.Invoke`, which the registry runs inside `Registry.Call`. The only
   exception is building a VM inside the registry (module load and `config()`).
-  Why: one place for the call lock, panic recovery and result classification.
+  Why: one place for the call semaphore, panic recovery and result classification.
   Gate: missing → GATE-4.
 - **R3** Give every call, and every build (module load and `config()`), a context with a deadline from
   `spec.limits.timeoutSeconds`; the adapter applies it inside `Runner.Invoke`, so the dispatcher and the admission server (which add a tighter deadline of their own) need not know the limit.
   Why: without a deadline an endless loop holds the VM forever. A build that runs into its deadline leaves the hook `Ready=False` with reason `BuildFailed` (status-conditions.R7).
-  Gate: `TestDispatcher_Timeout_CancelsWarnsAndKeepsVM`, `TestRegistry_Invoke_TimeoutAndOOMKeepVMTrapRecovers`. The build deadline: `TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys`.
+  Gate: `TestDispatcher_Timeout_CancelsWarnsAndKeepsVM`, `TestRegistry_Invoke_EveryOutcomeGetsAFreshInstance`. The build deadline: `TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys`.
 - **R4** Classify engine errors with `errors.Is` against `jsengine.ErrCancelled` and `jsengine.ErrOOM`, and with `errors.As` against `*jsengine.JSError` (a script exception) and `*jsengine.TrapError` (a failure of the module; the registry reports it as a panic). Never read error text. Only the C glue reads exception text, once, to tell an out-of-memory error from other exceptions.
   Why: the status codes of the ABI are the contract; message wording is not.
-  Gate: `TestMemoryLimit_Honoured`, `TestCallExport_Deadline_IsErrCancelledAndVMStaysUsable`, `TestEval_Deadline_IsErrCancelled`, `TestHost_PanicIsTrapAndBreaksVM`, `TestRegistry_Invoke_TimeoutAndOOMKeepVMTrapRecovers`.
+  Gate: `TestMemoryLimit_Honoured`, `TestCallExport_Deadline_IsErrCancelledAndVMStaysUsable`, `TestEval_Deadline_IsErrCancelled`, `TestHost_PanicIsTrapAndBreaksVM`, `TestRegistry_Invoke_ClassifiesOutcomes`.
 - **R5** Every VM has a memory limit: `JS_SetMemoryLimit` from `spec.limits.memoryMB` for the QuickJS heap, and the wazero option `WithMemoryLimitPages` as one process-wide hard cap (`jsengine.MaxMemoryMB` plus headroom) below which the per-VM limit works. A script that hits the limit gets `ErrOOM`, and the VM stays usable.
   Why: one script must not exhaust the memory of the operator.
   Gate: `TestMemoryLimit_Honoured`, `TestMemoryLimit_GrowingHeapEndsInErrOOM`, `TestDefaultLimits_MatchKubebuilderTags`.
@@ -113,9 +121,9 @@ stays at tens of microseconds, a timeout costs its deadline).
   Why: an admission policy decides on a request; it must not change the
   cluster while it does so. The wiring check is missing (GATE-7).
   Gate: `TestSharedFactory_ForAdmission_ReadOnlySurface`, `TestReadOnlyKubeHost_ScriptSeesOnlyGetAndList`.
-- **R7** Close a VM only while you hold its call lock.
-  Why: closing during a running call races inside wazero.
-  Gate: `TestRegistry_Concurrent_CallRestartDrop`.
+- **R7** Use a VM in one call only: restore it from the snapshot, run one export, close it when the call ends. Never close a VM while a call on it runs.
+  Why: a VM instance is not goroutine-safe, and closing during a call races inside wazero.
+  Gate: `TestSnapshot_ConcurrentRestores`, `TestRegistry_Concurrent_CallsBuildsAndDrop`.
 - **R8** Never share one VM between two resources.
   Why: isolation between scripts depends on it.
   Gate: `TestVMs_AreIsolated`, `TestRegistry_SameNameInBothKindsCoexists`.
@@ -132,15 +140,18 @@ stays at tens of microseconds, a timeout costs its deadline).
 - **R12** Offer the operator flag `--engine-cache-dir` for the wazero compilation cache. Empty (the default) keeps the compiled machine code in memory; a directory keeps it across restarts, so the first VM after a start takes about 15 ms instead of about 320 ms. Point it at a directory only the operator can write (for example an `emptyDir`): wazero runs the machine code it finds there. `cmd` compiles the engine at start-up (`jsregistry.ConfigureEngine`), so a bad directory stops the operator at once.
   Why: a restart of the operator rebuilds every VM; the compile of 1 MB of wasm would delay the first one.
   Gate: `TestFlags_EngineCacheDir_DefaultsToInMemory`, `TestCompilationCache_DirIsFilledAndReused`.
-- **R13** Stop a running call through the QuickJS interrupt handler: the host import `env.interrupt` answers from `ctx.Err()` of the call. Do not use the wazero option `CloseOnContextDone`. A call that the deadline or a cancelled context stopped ends with `jsengine.ErrCancelled` (wrapping the context error); the VM keeps its state and serves the next call, so the registry does not rebuild it after a timeout or the memory limit. A context that is over before the call starts never runs the script.
-  Why: `CloseOnContextDone` kills the module (every timeout then needs a rebuild) and costs 4x to 7x on warm calls and loops (spike numbers in Decisions); the interrupt costs nothing measurable.
-  Gate: `TestCallExport_Deadline_IsErrCancelledAndVMStaysUsable`, `TestDeadline_CannotBeCaught`, `TestCall_ContextAlreadyDone_DoesNotRun`, `TestDeadline_StopsCatastrophicRegex`, `TestRegistry_CancelledCall_KeepsVMAndRestartStillRebuilds`; the cost guard is `BenchmarkVM_WarmCall` and `BenchmarkVM_Timeout`.
+- **R13** Stop a running call through the QuickJS interrupt handler: the host import `env.interrupt` answers from `ctx.Err()` of the call. Do not use the wazero option `CloseOnContextDone`. A call that the deadline or a cancelled context stopped ends with `jsengine.ErrCancelled` (wrapping the context error); the VM keeps its state, so the engine itself never needs a rebuild after a timeout or the memory limit. A context that is over before the call starts never runs the script.
+  Why: `CloseOnContextDone` kills the module and costs 4x to 7x on warm calls and loops (spike numbers in Decisions); the interrupt costs nothing measurable.
+  Gate: `TestCallExport_Deadline_IsErrCancelledAndVMStaysUsable`, `TestDeadline_CannotBeCaught`, `TestCall_ContextAlreadyDone_DoesNotRun`, `TestDeadline_StopsCatastrophicRegex`, `TestRegistry_CancelledCall_NextCallGetsFreshInstance`; the cost guard is `BenchmarkVM_WarmCall` and `BenchmarkVM_Timeout`.
 - **R14** Build `internal/jsengine/engine.wasm` only with `make engine-wasm`, from `glue/glue.c`, with the toolchain pinned in `internal/jsengine/glue/versions.env` (QuickJS-ng, wasi-sdk, binaryen; downloaded into `./bin`), and commit it with the change to `glue.c`.
   Why: the embedded binary must be reproducible from the repository; versions live in one file.
   Gate: missing → GATE-27.
 - **R15** An error from a script carries its message, its stack with file and line, and the name of the export: `calling handle(): TypeError: x\n    at handle (hook.js:3:9)`. `*jsengine.JSError` holds `Message` and `Stack`; `Error()` has both.
   Why: an author must find the failing line from a log, an event or a denial message.
   Gate: `TestScriptError_CarriesMessageStackFileLine`, `TestScriptError_NonErrorThrow`.
+- **R16** Restore a VM only through `jsengine.Snapshot.NewVM` from a snapshot that `jsengine.VM.Snapshot` took: a new instance without its start function, memory grown to the size of the snapshot, only the pages that differ from a fresh instance written back, the host binder and the limits of the snapshot set again, then `gj_update_stack_top` and `gj_reseed` with a new random seed. `Math.random` is our own xorshift64* in `glue.c`, seeded per VM.
+  Why: a restore must cost a fraction of a millisecond and the same memory must not repeat in every snapshot (a sparse snapshot of a small policy is tens of KB, not the whole heap); without a reseed every call of a script would see the same random numbers. The QuickJS atom hash seed stays the one of the snapshot, which only shapes hash tables.
+  Gate: `TestSnapshot_EveryVMStartsFromTheSameState`, `TestSnapshot_KeepsLimitsAndHost`, `TestSnapshot_ReseedsMathRandom`, `TestSnapshot_ConcurrentRestores`, `TestSnapshot_IsSparse`; the cost guard is `BenchmarkSnapshot_Shot`.
 
 ## Decisions
 
@@ -155,9 +166,9 @@ stays at tens of microseconds, a timeout costs its deadline).
 - **Cancel calls with the QuickJS interrupt handler, not with `CloseOnContextDone`.** Status: proposed (2026-10-01, open) (EXEC-8; replaces the accepted decision "Cancel calls with the wazero option `CloseOnContextDone`", closes EXEC-3).
   Why: spike numbers, same engine with the option off and on: a warm `validate` on the large policy 81 µs against 304 µs (3.8x), a busy loop of 2M iterations 140 ms against 996 ms (7.1x), eval of lodash 22 ms against 114 ms (5.1x). With a deadline and the interrupt handler the busy loop stays at 136 ms. The module survives a timeout, so a timeout needs no rebuild (REG-4).
   Not taken: `CloseOnContextDone`, as above. A watchdog goroutine that closes the module, because it kills the VM like `CloseOnContextDone` does.
-- **Keep long-lived VMs; a snapshot per call (single shot) is not part of this engine.** Status: proposed (2026-10-01, open) (EXEC-8, EXEC-9).
-  Why: top-level state surviving between calls is part of the promise to hook authors (js-registry.R5). Whether to give it up for a snapshot per call is a product decision (EXEC-9).
-  Not taken: single shot from a memory snapshot now, because it changes what a script may rely on.
+- **Run every call single shot from a snapshot.** Status: proposed (2026-10-01, open) (EXEC-9).
+  Why: every call starts from the same prepared state, so calls of one key run in parallel and a failed call leaves nothing behind; a call costs about 0.24 ms (`BenchmarkSnapshot_Shot`, 2.8 MB allocated). Scripts keep no top-level state between calls. Details and the semaphore: js-registry Decisions.
+  Not taken: patching QuickJS to reseed `Math.random`, because an override in `glue.c` does it without carrying a patch. A full memory copy per snapshot, because the sparse one is much smaller.
 - **Keep the compiled machine code in a wazero compilation cache with an optional directory.** Status: proposed (2026-10-01, open) (EXEC-8).
   Why: the first VM of a process costs 318 ms without a cache and 13 ms with a warm `wazero.NewCompilationCacheWithDir`; the operator would pay it at every restart.
   Not taken: the wazero interpreter, because every call is much slower (31 ms for the first VM, but slow after).
@@ -168,7 +179,6 @@ stays at tens of microseconds, a timeout costs its deadline).
 
 ## Open
 
-EXEC-9
 GATE-4
 GATE-7
 GATE-27

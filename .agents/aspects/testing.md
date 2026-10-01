@@ -11,7 +11,7 @@ commands run them, and which gates run in CI.
 
 There are three layers, each with its own cost. Unit tests are the default.
 They sit next to the code under `internal/`, use the standard `testing`
-package and are named like `TestRegistry_RestartByKey_RebuildsFromCachedSource`.
+package and are named like `TestRegistry_Ensure_ResetTokenRebuildsFromCachedSpec`.
 envtest integration tests (Ginkgo) in `test/integration` run the controllers
 against a real API server without a kubelet. e2e tests in `test/e2e` run the
 built image on an isolated Kind cluster. They carry the build tag `e2e`, so a
@@ -35,7 +35,7 @@ Per-package coverage numbers are in the backlog, see GATE-12.
 | Part | Question | Answer |
 |---|---|---|
 | block | What code does the work, once? | Standard `testing` for unit tests; Ginkgo with envtest (`TestControllers` in `test/integration`) for controller tests; Kind with `TestE2E` in `test/e2e` for e2e. Make targets `test`, `test-e2e`, `lint`. Searched `Makefile`, `test/`, `internal/`. |
-| example | Which real use should others copy? | `TestRegistry_RestartByKey_RebuildsFromCachedSource` for unit tests; `test/integration/jshook_controller_test.go` for envtest. |
+| example | Which real use should others copy? | `TestRegistry_Ensure_ResetTokenRebuildsFromCachedSpec` for unit tests; `test/integration/jshook_controller_test.go` for envtest. |
 | test helper | How does a test use the aspect without effort? | The envtest suites (`TestControllers` in `test/integration`, `TestAPIs` in `internal/jsadmission/webhook/v1alpha1`), `test/utils` (`utils.Run`, `utils.InstallCertManager`, `utils.LoadImageToKindClusterWithName`) for e2e, and controller-runtime and dynamic fake clients in unit tests (`fake.NewClientBuilder`, `fake.NewSimpleDynamicClient`). |
 | sides | Which sides does it touch? | Back end and infrastructure (Kind cluster, CI workflows `test.yml`, `test-e2e.yml`, `lint.yml`). |
 | tie | How do the sides stay in step? | n/a, because tests only run Go code against the cluster; the CI workflows call the same make targets as a developer (searched `.github/workflows`, `Makefile`). |

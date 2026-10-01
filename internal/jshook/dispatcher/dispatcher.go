@@ -1,12 +1,11 @@
 // Package dispatcher subscribes the controller to the Kubernetes events that
 // each JSHook's config() declared, and forwards them as BindingContext payloads
-// to that hook's persistent JS instance.
+// to a fresh instance of that hook's prepared script.
 //
 // One Dispatcher serves all JSHooks. Per JSHook it owns:
 //   - a context (so Drop can cancel the goroutines deterministically),
-//   - a per-hook FIFO queue (serializes handle() calls — required by the
-//     persistent-instance contract: top-level state isn't safe under parallel
-//     access from inside the same QuickJS runtime),
+//   - a per-hook FIFO queue (serializes handle() calls so a burst on one
+//     object folds into the newest view instead of racing),
 //   - one watcher goroutine per kubernetes binding,
 //   - one worker goroutine that drains the queue.
 //
@@ -85,9 +84,9 @@ type RESTMapping struct {
 
 // New creates an empty Dispatcher. Pass the cluster's dynamic client, a
 // RESTMapper (controller-runtime's mgr.GetRESTMapper() can be wrapped to fit),
-// and the Runner that owns per-hook persistent JS instances. The runner
-// is required so that worker rescue paths (memory/panic/timeout) can rebuild
-// the instance and the next call sees the new one transparently.
+// and the Runner that runs the hook's prepared script. Every call runs on a
+// fresh instance restored from that script (single shot); the runner is
+// required so the worker can invoke it.
 func New(dyn dynamic.Interface, mapper RESTMapper, reg jsrun.Runner) *Dispatcher {
 	return &Dispatcher{
 		dyn:      dyn,
@@ -463,20 +462,20 @@ func (s *subscription) runWorker(ctx context.Context) {
 	}
 }
 
-// handleEvent runs one BindingContext through the live VM and dispatches on
-// the outcome. The locking + recover + OOM/cancel classification lives in
-// jsrun.Runner.Invoke; the dispatcher only owns the policy table:
+// handleEvent runs one BindingContext through a fresh script instance and
+// dispatches on the outcome. The locking + recover + OOM/cancel classification
+// lives in jsrun.Runner.Invoke; the dispatcher only owns the policy table:
 //
-//   - panic (or wasm trap) → announce the recovery the runner started itself
-//     (Result.Recovered) + requeue
-//   - OOM / cancelled (timeout) → Warning + requeue; the VM stays usable, so
-//     the runner recovers nothing
+//   - panic (or wasm trap) → log + requeue; the next call still gets a fresh
+//     instance, nothing to recover
+//   - OOM / cancelled (timeout) → Warning + requeue
 //   - other error → log + emit Warning + requeue
 //   - ok → forget
 //
 // Cancellation: the runner bounds the call by spec.limits.timeoutSeconds and
 // it surfaces as OutcomeCancelled. The engine stops the script through the
-// QuickJS interrupt handler; the VM keeps its state and serves the next call.
+// QuickJS interrupt handler; the instance is thrown away either way, and the
+// retried event runs on a fresh one from the same prepared script.
 // jshook.R10
 // jshook.R11
 // jshook.R12
@@ -493,12 +492,11 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		s.queue.Forget(qkey)
 		return
 	}
-	jslifecycle.Announce(s.emit, res.Recovered)
 
 	switch res.Outcome {
 	case jsrun.OutcomePanic:
 		logger.Error(fmt.Errorf("panic in handle(): %v", res.Panic),
-			"handle() panicked — restarting instance",
+			"handle() panicked",
 			"binding", bc.Binding, "event", bc.WatchEvent, "stack", string(debug.Stack()))
 		s.requeue(qkey, bc)
 

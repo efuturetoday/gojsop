@@ -122,6 +122,7 @@ type runFlags struct {
 	buildBackoffBase     time.Duration
 	buildBackoffMax      time.Duration
 	engineCacheDir       string
+	maxConcurrentCalls   int
 	zap                  zap.Options
 }
 
@@ -139,6 +140,9 @@ func (f runFlags) validate() error {
 	if f.buildBackoffMax < f.buildBackoffBase {
 		return fmt.Errorf("--build-backoff-max (%s) must not be below --build-backoff-base (%s)",
 			f.buildBackoffMax, f.buildBackoffBase)
+	}
+	if f.maxConcurrentCalls <= 0 {
+		return fmt.Errorf("--max-concurrent-calls must be positive, got %d", f.maxConcurrentCalls)
 	}
 	return nil
 }
@@ -181,6 +185,9 @@ func parseFlagSet(fs *flag.FlagSet, args []string) (runFlags, error) {
 		"Directory for the compiled machine code of the JS engine (engine.wasm). With it the first JS VM after a "+
 			"restart starts in about 15 ms instead of 320 ms. Must be private to the operator, e.g. an emptyDir. "+
 			"Empty keeps the cache in memory only.")
+	fs.IntVar(&f.maxConcurrentCalls, "max-concurrent-calls", jsregistry.DefaultMaxConcurrentCalls,
+		"Process-wide number of JS calls that may run at once, across every JSHook and JSAdmission. "+
+			"Every call holds a VM of its own, so this bounds the memory of a burst.")
 	f.zap.BindFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return f, err
@@ -288,7 +295,7 @@ func main() {
 		setupLog.Error(err, "unable to start the JS engine", "engineCacheDir", f.engineCacheDir)
 		os.Exit(1)
 	}
-	registry := jsregistry.NewRegistry()
+	registry := jsregistry.New(jsregistry.Options{MaxConcurrentCalls: f.maxConcurrentCalls})
 	// One factory per process. SharedFactory hands every reconcile a binder
 	// over the same dynamic client + RESTMapper; ForHook returns the full
 	// read+write kube.* surface, ForAdmission returns a read-only view (the

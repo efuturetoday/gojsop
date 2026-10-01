@@ -216,9 +216,10 @@ func publishWarning(entry PolicyEntry, reason, message string) {
 //
 // Uses the Runner, which serializes calls, applies the per-call deadline and
 // classifies the outcome (panic / OOM / cancelled / error / ok) under one
-// roof. The engine stops the script at the deadline through the QuickJS
-// interrupt handler and the VM stays usable, so a timeout or the memory limit
-// rebuilds nothing; only a panic (wasm trap) does.
+// roof. Every call runs on a fresh instance restored from the policy's
+// prepared script; whatever the outcome, that instance is thrown away and
+// the next call still gets a fresh one from the same prepared script, so
+// nothing needs recovering here.
 // jsadmission.R12
 // jsadmission.R14
 func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
@@ -241,19 +242,18 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 
 	result, res, callErr := Handle(callCtx, s.Runner, jsrun.AdmissionKey(entry.Key), jsReq, entry.Mutating)
 	if callErr != nil {
-		// ErrVMUnavailable: not prepared yet or being prepared again.
+		// ErrVMUnavailable: not prepared yet, or the policy's prepared script
+		// is being built again (source/limits changed, manual reset).
 		// ErrUnknownKey: never registered or dropped (race with controller delete).
 		log.Info("admission instance not available — applying failurePolicy", "err", callErr)
 		applyFailurePolicy(resp, entry.FailurePolicy, "policy instance not loaded")
 		return resp
 	}
 
-	jslifecycle.Announce(entry.Emit, res.Recovered)
-
 	switch res.Outcome {
 	case jsrun.OutcomePanic:
 		log.Error(fmt.Errorf("panic in admission handler: %v", res.Panic),
-			"admission JS call panicked — instance is prepared again")
+			"admission JS call panicked — the call ended, the next call starts from a fresh instance")
 		publishWarning(entry,
 			conditions.EventReviewPanicked,
 			"panic in admission handler")
@@ -271,8 +271,8 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	case jsrun.OutcomeCancelled:
 		// Distinguish the two cancellation sources: client disconnect vs
 		// our deadline. Client disconnect is benign. Our deadline tripped →
-		// the script ran too long; the interrupt handler stopped it and the
-		// VM keeps serving.
+		// the script ran too long; the call ended and that instance is
+		// thrown away, the next call starts from a fresh one.
 		if r.Context().Err() != nil && callCtx.Err() != nil && r.Context().Err() == context.Canceled {
 			log.Info("client disconnected during admission review")
 			applyFailurePolicy(resp, entry.FailurePolicy, "client disconnected")

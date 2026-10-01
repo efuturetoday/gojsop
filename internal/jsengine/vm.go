@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -24,6 +25,7 @@ const (
 // All calls must be serialised by the caller (the registry holds a lock);
 // Close must not run during a call.
 type VM struct {
+	eng    *Engine
 	m      api.Module
 	limits Limits
 	host   map[string]HostFunc
@@ -32,6 +34,7 @@ type VM struct {
 	pending []byte
 
 	alloc, free, outPtr, outLen api.Function
+	reseed, stackTop            api.Function
 	eval, call, hasExport       api.Function
 
 	broken bool
@@ -48,27 +51,43 @@ func New(lim Limits) (*VM, error) {
 	return e.NewVM(context.Background(), lim)
 }
 
-// NewVM instantiates the module and creates a fresh QuickJS runtime with the
-// memory limit of lim.
-func (e *Engine) NewVM(ctx context.Context, lim Limits) (*VM, error) {
-	lim = lim.WithDefaults()
+// instantiate creates an instance of the module. start runs the WASI reactor
+// initialisation; a restore from a snapshot skips it, because the snapshot
+// already holds its effects.
+func (e *Engine) instantiate(ctx context.Context, lim Limits, start bool) (*VM, error) {
 	cfg := wazero.NewModuleConfig().
 		WithName("").
-		WithStartFunctions("_initialize").
 		WithSysWalltime().
 		WithSysNanotime()
+	if start {
+		cfg = cfg.WithStartFunctions("_initialize")
+	} else {
+		cfg = cfg.WithStartFunctions()
+	}
 	m, err := e.rt.InstantiateModule(ctx, e.mod, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("instantiate engine.wasm: %w", err)
 	}
 	f := m.ExportedFunction
-	vm := &VM{
-		m: m, limits: lim,
+	return &VM{
+		eng: e, m: m, limits: lim,
 		alloc: f("gj_alloc"), free: f("gj_free"),
 		outPtr: f("gj_out_ptr"), outLen: f("gj_out_len"),
 		eval: f("gj_eval"), call: f("gj_call"), hasExport: f("gj_has_export"),
+		reseed: f("gj_reseed"), stackTop: f("gj_update_stack_top"),
+	}, nil
+}
+
+// NewVM instantiates the module and creates a fresh QuickJS runtime with the
+// memory limit of lim.
+func (e *Engine) NewVM(ctx context.Context, lim Limits) (*VM, error) {
+	lim = lim.WithDefaults()
+	vm, err := e.instantiate(ctx, lim, true)
+	if err != nil {
+		return nil, err
 	}
-	r, err := f("gj_init").Call(vm.callCtx(ctx), uint64(lim.MemoryMB)*1024*1024, maxStackBytes)
+	m := vm.m
+	r, err := m.ExportedFunction("gj_init").Call(vm.callCtx(ctx), uint64(lim.MemoryMB)*1024*1024, maxStackBytes)
 	if err != nil {
 		_ = m.Close(ctx)
 		return nil, fmt.Errorf("gj_init: %w", err)
@@ -76,6 +95,10 @@ func (e *Engine) NewVM(ctx context.Context, lim Limits) (*VM, error) {
 	if r[0] != statusOK {
 		_ = m.Close(ctx)
 		return nil, fmt.Errorf("gj_init: status %d", r[0])
+	}
+	if _, err := vm.invoke(ctx, vm.reseed, rand.Uint64()); err != nil {
+		_ = m.Close(ctx)
+		return nil, fmt.Errorf("gj_reseed: %w", err)
 	}
 	return vm, nil
 }

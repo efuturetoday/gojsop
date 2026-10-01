@@ -5,6 +5,10 @@
 // output through gj_out_ptr/gj_out_len. Values cross as JSON, so Go never
 // holds a JSValue.
 //
+// All state lives in linear memory, so the host snapshots an instance after
+// the script is loaded and restores a fresh instance from it for every call.
+// After a restore it calls gj_update_stack_top and gj_reseed (Math.random).
+//
 // Status codes of every call: 0 ok, 1 JS exception, 2 interrupted,
 // 3 out of memory, 4 bad input.
 //
@@ -43,6 +47,28 @@ static JSRuntime *rt;
 static JSContext *ctx;
 static uint8_t *out_buf;
 static size_t out_len;
+
+// random_state drives Math.random. It lives in linear memory like all other
+// state, so every VM restored from one snapshot starts with the same value;
+// the host reseeds it after each restore (gj_reseed).
+static uint64_t random_state = 1;
+
+static uint64_t xorshift64star(void) {
+    uint64_t x = random_state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    random_state = x;
+    return x * 0x2545F4914F6CDD1DULL;
+}
+
+// js_random replaces Math.random: a double in [0, 1) from 52 random bits.
+static JSValue js_random(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    (void)argc;
+    (void)argv;
+    return JS_NewFloat64(c, (double)(xorshift64star() >> 12) * 0x1.0p-52);
+}
 
 static int on_interrupt(JSRuntime *r, void *opaque) {
     (void)r;
@@ -187,9 +213,21 @@ EXPORT(gj_init) int gj_init(uint32_t mem_limit, uint32_t stack_size) {
         return GJ_OOM;
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "__gj_host", JS_NewCFunction(ctx, js_host, "__gj_host", 2));
+    JSValue math = JS_GetPropertyStr(ctx, global, "Math");
+    JS_DefinePropertyValueStr(ctx, math, "random", JS_NewCFunction(ctx, js_random, "random", 0),
+                              JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+    JS_FreeValue(ctx, math);
     JS_FreeValue(ctx, global);
     return GJ_OK;
 }
+
+// gj_reseed sets the state of Math.random (0 becomes 1: xorshift needs a
+// non-zero state). The host calls it after every restore from a snapshot.
+EXPORT(gj_reseed) void gj_reseed(uint64_t seed) { random_state = seed ? seed : 1; }
+
+// gj_update_stack_top re-reads the C stack top. The stack pointer is back at
+// its base between calls, but a restored snapshot must not trust the old one.
+EXPORT(gj_update_stack_top) void gj_update_stack_top(void) { JS_UpdateStackTop(rt); }
 
 // gj_eval runs source as a global script; function declarations become
 // globals. The output is the string form of the last expression (empty for
