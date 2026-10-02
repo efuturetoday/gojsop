@@ -138,15 +138,21 @@ bounds the memory all running calls take together.
   Why: a bad source must not be rebuilt in a tight loop, and a fix must not wait for the backoff.
   Gate: `TestRegistry_Ensure_BrokenBacksOffAndSourceChangeRebuildsAtOnce`, `TestBackoff_DoublesCapsAndJitters`, `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce`, `TestFlags_BuildBackoffReachesReconcilers`, `TestFlags_BuildBackoffRejectsNonsense`.
   Base and cap are the operator flags `--build-backoff-base` (1s) and `--build-backoff-max` (5m); both reconcilers hand them to `Ensure`.
-- **R18** Notify the key on the `Scripts.Watch` channel of its kind when a build ends, whether it installed a script or failed.
-  Why: reconciles do not wait, so the controller of the kind needs the event to publish the new state.
-  Gate: `TestRegistry_Ensure_BuildsAsyncAndNotifies`, `TestRegistry_Watch_DeliversOnlyOwnKind`.
+- **R18** Notify the key on the `Scripts.Watch` channel of its kind when a build ends, whether it installed a script or failed. A build that ends before any reader exists is kept: a reader inherits the keys of its kind that already finished one, and a dropped key leaves that backlog again.
+  Why: reconciles do not wait, so the controller of the kind needs the event to publish the new state, and a reader that starts after the first build must not miss it.
+  Gate: `TestRegistry_Ensure_BuildsAsyncAndNotifies`, `TestRegistry_Watch_DeliversOnlyOwnKind`, `TestRegistry_Watch_LateSubscriberInheritsFinishedBuilds`, `TestRegistry_Watch_DroppedKeyLeavesTheBacklog`.
 - **R19** Hold no script in a Failed entry, and let `Runner.Invoke` return `ErrVMUnavailable` at once for it and for a key whose first build still runs. A build for changed options or a changed reset token keeps the old script serving until the new one is installed; every failed build drops the old script.
   Why: a script whose rebuild failed must not keep serving the old code as if nothing happened; callers must see "not ready" and apply their own policy (requeue, `failurePolicy`).
   Gate: `TestRegistry_Call_WithoutScript_IsErrVMUnavailable`, `TestRegistry_Ensure_RebuildHasDeadlineAndFailureHoldsNoScript`, `TestDispatcher_NoVM_KeepsEventsAndDeliversAfterBuild`.
 - **R20** Bound the calls that run at the same time, over all keys, by one process-wide semaphore: the operator flag `--max-concurrent-calls` (default `jsregistry.DefaultMaxConcurrentCalls`, 8; zero or less is rejected). A call waits for a slot inside its own context; a context that ends while it waits gives `OutcomeCancelled` and runs nothing. Size the memory limit of the manager container as `max-concurrent-calls` × `spec.limits.memoryMB` + one snapshot per script + 128 MiB for the Go process (informer caches, the compiled engine); the defaults, 8 × 32 MB + 128 MiB, leave 128 MiB for snapshots in the 512Mi of `config/manager/manager.yaml`. Raise the limit with either flag or `memoryMB`.
   Why: every call has its own VM with up to `spec.limits.memoryMB` of heap, so without a bound a burst of admission requests or events multiplies the memory of the operator; the bound makes it `max-concurrent-calls` × memory limit, and a container limit below that gets the operator OOM-killed under load.
   Gate: `TestRegistry_Semaphore_BoundsConcurrentCalls`, `TestFlags_MaxConcurrentCalls_DefaultsAndRejectsNonsense`, `TestManagerManifest_MemoryFitsDefaultCalls`.
+- **R21** Give every `Scripts.Watch` call a stream of its own, and deliver every finished build to every stream of that kind. A stream ends with its context and frees its subscription.
+  Why: the admission kind has two readers — the leader-only status controller and the server controller that runs on every replica (jsadmission.R20) — and a reader that consumed a notification must not take it away from the other.
+  Gate: `TestRegistry_Watch_FansOutToEverySubscriber`, `TestRegistry_Watch_SubscriptionEndsWithTheContext`.
+- **R22** Report the source hash the runner holds for a key in `State.SourceHash`, in every phase: the prepared script when Ready, the attempt in flight when Preparing, the failed attempt when Failed.
+  Why: a caller that only reports state — the leader-only admission controller after the split — must not have to load the source again to tell whether the status describes the current script.
+  Gate: `TestRegistry_Ensure_StateCarriesSourceHash`.
 
 ## Decisions
 

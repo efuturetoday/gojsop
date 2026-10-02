@@ -71,7 +71,7 @@ type Options struct {
 type Registry struct {
 	mu        sync.Mutex
 	slots     map[jsrun.Key]*slot
-	notifiers map[jsrun.Kind]*notifier
+	notifiers map[jsrun.Kind]*fanout
 
 	// calls is the process-wide call semaphore.
 	//
@@ -124,7 +124,7 @@ func New(o Options) *Registry {
 	}
 	return &Registry{
 		slots:     make(map[jsrun.Key]*slot),
-		notifiers: make(map[jsrun.Kind]*notifier),
+		notifiers: make(map[jsrun.Kind]*fanout),
 		calls:     make(chan struct{}, n),
 	}
 }
@@ -132,11 +132,23 @@ func New(o Options) *Registry {
 func (s *slot) state() jsrun.State {
 	switch {
 	case s.building:
-		return jsrun.State{Phase: jsrun.PhasePreparing}
+		return jsrun.State{Phase: jsrun.PhasePreparing, SourceHash: s.opts.SourceHash}
 	case s.prep != nil:
-		return jsrun.State{Phase: jsrun.PhaseReady, PreparedAt: s.prep.PreparedAt, Meta: s.prep.Meta, Recoveries: s.prep.Recoveries}
+		return jsrun.State{
+			Phase:      jsrun.PhaseReady,
+			PreparedAt: s.prep.PreparedAt,
+			SourceHash: s.prep.Opts.SourceHash,
+			Meta:       s.prep.Meta,
+			Recoveries: s.prep.Recoveries,
+		}
 	default:
-		return jsrun.State{Phase: jsrun.PhaseFailed, Err: s.err, Attempts: s.attempts, NextAttempt: s.nextTry}
+		return jsrun.State{
+			Phase:       jsrun.PhaseFailed,
+			Err:         s.err,
+			Attempts:    s.attempts,
+			NextAttempt: s.nextTry,
+			SourceHash:  s.opts.SourceHash,
+		}
 	}
 }
 
@@ -320,10 +332,12 @@ func (r *Registry) runBuild(ctx context.Context, cancel context.CancelFunc, key 
 	} else {
 		r.installLocked(s, p, reason)
 	}
-	n := r.notifierLocked(key.Kind)
+	n := r.notifyLocked(key)
 	r.mu.Unlock()
 
-	n.add(key)
+	for _, sub := range n {
+		sub.add(key)
+	}
 }
 
 // installLocked makes p the script of s, carries the recovery log over and
@@ -378,6 +392,7 @@ func (r *Registry) Get(key jsrun.Key) (*Prepared, bool) {
 func (r *Registry) Drop(key jsrun.Key) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.forgetLocked(key)
 	if s := r.slots[key]; s != nil {
 		s.abortBuild()
 		delete(r.slots, key)

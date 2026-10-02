@@ -177,6 +177,12 @@ type State struct {
 	NextAttempt time.Time
 	// PreparedAt, Meta and Recoveries are set when Phase == PhaseReady.
 	PreparedAt time.Time
+	// SourceHash is the hash of the source the runner currently holds for the
+	// key: the prepared script when Ready, the attempt in flight when
+	// Preparing, the failed attempt when Failed. A caller that only reports
+	// state (and does not Ensure) reads it instead of loading the source
+	// again.
+	SourceHash string
 	// Meta is the value the PostBuildHook returned (e.g. JSHook caches its
 	// parsed Config here so reconciles never enter the script).
 	Meta       any
@@ -244,6 +250,7 @@ type Scripts interface {
 	// Drop forgets key, cancels its preparation and releases its script.
 	Drop(key Key)
 	// Watch delivers the keys of one kind whose preparation ended, until ctx
-	// ends.
+	// ends. Every call gets a stream of its own and every stream sees every
+	// preparation, so a kind may have more than one reader.
 	Watch(ctx context.Context, kind Kind) <-chan Key
 }
