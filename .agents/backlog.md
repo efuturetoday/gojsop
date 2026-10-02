@@ -29,22 +29,20 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## EXEC: JS execution
 
-- **EXEC-11** `bug` The entry point is looked up as a property of
-  `globalThis`, so only `function handle(){}` and `var handle = ...` are
-  found (`gj_has_export` and `gj_call` in `internal/jsengine/glue/glue.c`).
-  A top-level `const handle = ...` or `class`-based entry point is invisible:
-  ES6 lexical declarations live in the global lexical environment, not on the
-  global object. The hook then fails with "missing required export:
-  handle()". Resolving the identifier instead of the property reaches both.
-  Blocks the TypeScript/esbuild plan (EXEC-12), because `const` is what a
-  bundler emits. Needs an `engine.wasm` rebuild (`make engine-wasm`).
-- **EXEC-12** `decision` TypeScript support. A bundler (esbuild) would run
-  before apply, outside the operator. Open: which output format the operator
-  promises to accept. `--format=iife` hides every top-level declaration, so
-  the entry point has to be an explicit `globalThis.handle = ...` assignment,
-  or the operator stops looking for a global and offers a registration call
-  (`gojsop.onEvent(fn)`) that works in any format. Done when the contract is
-  recorded in js-execution and held by a test over real bundler output.
+- **EXEC-11** `decision` The shape of an entry point is now written down
+  (js-execution.R18) but was never chosen: the engine finds a function only as
+  a property of `globalThis`, so a top-level `const handle = ...` fails with
+  "missing required export: handle()" although the function is there. Decide
+  whether that stays, or whether the engine also resolves the identifier
+  (which reaches `const`, `let` and `class`). Changing it means `glue.c` and a
+  `make engine-wasm` rebuild. Done when the choice is recorded in
+  js-execution.
+- **EXEC-12** `decision` TypeScript support. A bundler would run before apply,
+  outside the operator. Open: which output gojsop promises to accept.
+  `esbuild --format=iife` wraps every top-level declaration in a closure, so
+  no entry point survives on `globalThis` (js-execution.R18) unless the author
+  assigns one explicitly. Done when the contract is recorded in js-execution
+  and held by a test over real bundler output.
 
 ## REG: JS registry and restarts
 

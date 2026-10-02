@@ -155,6 +155,19 @@ stays at tens of microseconds, a timeout costs its deadline).
 - **R17** Every VM gets `globalThis.console` (`log`, `info`, `debug`, `warn`, `error`), bound by `jslog.Binder` next to the `kube` surface. The lines go to the `jslog.Sink` in the context of the running call, so one prepared script serves calls of different callers. A call whose caller installed no sink drops the lines and runs on. Callers send every line to the operator log at `V(1)`; `warn` and `error` also become an Event with reason `ScriptMessage` on the hook or policy that wrote them, capped at `jslog.MaxTextBytes` per line and `jslog.MaxVisibleEvents` per call. That Message is the one exception to the low-cardinality rule for Event messages (status-conditions): it is written by the author of the script, for the person who deployed it.
   Why: without it a script has no voice at all — the only other globals are `kube.*`, so an author can neither trace their own code nor explain a failure to the person who deployed the hook, who usually cannot read the operator log.
   Gate: `TestConsole_EveryLevelReachesTheSink`, `TestConsole_JoinsEveryArgument`, `TestConsole_LogsAnErrorReadably`, `TestConsole_CapsOneLine`, `TestConsole_WithoutSink_DoesNotFailTheScript`, `TestConsole_RawHostFunctionIsHidden`, `TestSharedFactory_BothSurfaces_BindTheConsole`; the routing to log and Event: `TestDispatcher_ConsoleWarning_BecomesAnEvent`.
+- **R18** An entry point is a function that is a property of `globalThis`.
+  `gj_has_export` and `gj_call` in `glue.c` read it off the global object and
+  look nowhere else. `function handle() {}`, `var handle = ...` and
+  `globalThis.handle = ...` are found; a top-level `const`, `let` or `class`
+  is not, because ES6 puts those in the global lexical environment, which the
+  global object does not reach. Neither is anything a bundler wrapped in a
+  closure. A script the engine cannot see the entry point in fails with
+  `missing required export: handle()`.
+  Why: this is what the engine does today, not a choice anyone recorded. It
+  is written down so that widening it (accepting `const`, or offering a
+  registration call for bundled code) is a decision someone takes on purpose
+  — see EXEC-11.
+  Gate: `TestEntrypoint_IsAPropertyOfGlobalThis`.
 
 ## Decisions
 
@@ -182,5 +195,7 @@ stays at tens of microseconds, a timeout costs its deadline).
 
 ## Open
 
+EXEC-11
+EXEC-12
 GATE-7
 GATE-27
