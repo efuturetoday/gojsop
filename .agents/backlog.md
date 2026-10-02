@@ -35,9 +35,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
   already declares `jshooks/finalizers`.
-- **REG-5** `decision` Uncommitted debug logging in `Registry.Drop` and
-  "cleanup started/done" logs in both controllers. Keep, lower to V(1), or
-  remove.
 
 ## STAT: Status and conditions
 
@@ -120,16 +117,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **ADM-8** `decision` When the patch diff fails, `fillResponse` allows the
   request. The reason is not recorded; confirm or deny instead.
-- **ADM-9** `gate` No test that the script receives every field of the
-  request (`uid`, `kind`, `resource`, `oldObject`, `userInfo`, `dryRun`, …)
-  through the server. Done when a server test asserts each field
-  (jsadmission.R3).
-- **ADM-10** `gate` No test that an omitted `allowed` denies, or that a `null`
-  or `undefined` return is a script failure. Done when both cases are tested
-  (jsadmission.R4).
-- **ADM-11** `gate` No test that a validating policy's `modifiedObject` is
-  ignored. Done when a server test shows no patch for a validating policy
-  (jsadmission.R7).
+
 ## KUBE: Kubernetes access from JS
 
 - **KUBE-1** `debt` `kube.apply` is not server-side apply. It does Get, then

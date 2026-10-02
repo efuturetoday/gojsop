@@ -79,11 +79,11 @@ A policy decides on a request and must not change the cluster, so it can read ot
 |---|---|---|---|
 | jsadmission.R1 | Only requests that match the policy's `rules`, selectors and `matchPolicy` reach the script; a changed or deleted policy changes or ends that at once. | `api/v1alpha1/jsadmission_types.go` (`JSAdmissionSpec`) | `TestRegistrar_Update_OverwritesEntry`, `TestRegistrar_RemoveLastEntry_DeletesConfig` |
 | jsadmission.R2 | A validating policy runs `validate(req)` and a mutating one `mutate(req)`; a missing function is a script failure. | `internal/jsadmission/handle.go` (`Handle`) | `TestHandle_Validate_Allow`, `TestHandle_MissingExport` |
-| jsadmission.R3 | The script receives `uid`, `kind`, `resource`, `subResource`, `name`, `namespace`, `operation`, `userInfo`, `object`, `oldObject` and `dryRun`, with `object` and `oldObject` as real objects. | `internal/jsadmission/handle.go` (`AdmissionRequest`) | missing → ADM-9 |
-| jsadmission.R4 | A script that omits `allowed` denies; a return of `undefined` or `null` is a script failure. | `internal/jsadmission/handle.go` (`AdmissionResult`, `Handle`) | missing → ADM-10 |
+| jsadmission.R3 | The script receives `uid`, `kind`, `resource`, `subResource`, `name`, `namespace`, `operation`, `userInfo`, `object`, `oldObject` and `dryRun`, with `object` and `oldObject` as real objects. | `internal/jsadmission/handle.go` (`AdmissionRequest`) | `TestServer_PassesEveryRequestFieldToScript` |
+| jsadmission.R4 | A script that omits `allowed` denies; a return of `undefined` or `null` is a script failure. | `internal/jsadmission/handle.go` (`AdmissionResult`, `Handle`) | `TestServer_MissingAllowedDenies_NullOrUndefinedFails` |
 | jsadmission.R5 | `message`, `code` and `warnings` of the result reach the apiserver. | `internal/jsadmission/handle.go` (`AdmissionResult`) | `TestHandle_Validate_Deny` |
 | jsadmission.R6 | For a mutating policy `modifiedObject` becomes a JSON patch against the original object; server-managed fields and `/status` are never in the patch. | `internal/jsadmission/diff.go` (`CreatePatch`) | `TestCreatePatch_FiltersImmutable`, `TestServer_Mutate_AddsLabel_AsJSONPatch` |
-| jsadmission.R7 | A `modifiedObject` returned by a validating policy is ignored. | `AdmissionResult.ModifiedObject` comment in `handle.go` | missing → ADM-11 |
+| jsadmission.R7 | A `modifiedObject` returned by a validating policy is ignored. | `AdmissionResult.ModifiedObject` comment in `handle.go` | `TestServer_Validate_IgnoresModifiedObject` |
 | jsadmission.R8 | When the patch cannot be computed the request stays allowed and gets a warning. | `fillResponse` in `server.go`; reason open in ADM-8 | missing → ADM-8 |
 | jsadmission.R9 | On every script failure `failurePolicy` decides: `Ignore` allows with a warning, anything else denies with code 500. | `api/v1alpha1/jsadmission_types.go` (`FailurePolicy`) | `TestServer_Validate_FailurePolicy_Fail_OnJSThrow`, `TestServer_Validate_FailurePolicy_Ignore_OnJSThrow` |
 | jsadmission.R10 | `failurePolicy` is the same for the apiserver (operator unreachable) and for the handler, and the handler's deadline is never longer than the `timeoutSeconds` the apiserver waits. | `Registrar` and `PolicyEntry` in `internal/jsadmission` | missing → GATE-17 |
@@ -119,4 +119,4 @@ A policy decides on a request and must not change the cluster, so it can read ot
 
 ## Open
 
-ADM-3, ADM-4, ADM-6, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, ADM-9, ADM-10, ADM-11
+ADM-3, ADM-4, ADM-6, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23

@@ -154,12 +154,12 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	var hook corev1alpha1.JSHook
 	if err := r.Get(ctx, req.NamespacedName, &hook); err != nil {
 		if apierrors.IsNotFound(err) {
-			log.Info("cleanup started", "phase", "delete")
+			log.V(1).Info("cleanup started", "phase", "delete")
 			if r.Dispatcher != nil {
 				r.Dispatcher.Drop(req.NamespacedName)
 			}
 			r.Scripts.Drop(jsrun.HookKey(req.NamespacedName))
-			log.Info("cleanup done", "phase", "delete")
+			log.V(1).Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err

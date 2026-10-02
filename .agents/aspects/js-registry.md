@@ -174,6 +174,9 @@ bounds the memory all running calls take together.
   Why: a VM per call needs no per-key lock, so calls of one hook or policy run in parallel and a slow call does not hold up the admission webhook; nothing has to be recovered after a call, and a call cannot leave state that breaks the next. A restore from the sparse snapshot costs about 0.24 ms (`BenchmarkSnapshot_Shot`) against 12 µs for a warm call on a kept VM; that is small against an admission round trip. The semaphore (R20) bounds the memory that parallel calls take.
   Not taken: one long-lived VM per key, because its lock serialises calls and a trap needs a rebuild. A pool of warm VMs per key, because a pooled VM carries state from call to call.
 
+- **The "cleanup started/done" logs of the delete path are `V(1)`, and `Registry.Drop` logs nothing.** Status: accepted (2026-10-02, project) (REG-5).
+  Why: a delete reconcile runs for every unrelated NotFound too, so at default verbosity the lines are noise; at `V(1)` they still show the path when debugging. Not taken: removing them, because the delete path has no other trace; keeping them at `Info`, because they say nothing an operator acts on.
+
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-3, REG-5.
+Tracked in [backlog](../backlog.md): REG-3.

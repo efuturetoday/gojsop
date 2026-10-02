@@ -12,6 +12,7 @@ import (
 
 	admissionv1 "k8s.io/api/admission/v1"
 	admissionregv1 "k8s.io/api/admissionregistration/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -225,6 +226,137 @@ func TestServer_Mutate_Denied_HasNoPatch(t *testing.T) {
 	}
 	if resp.Patch != nil || resp.PatchType != nil {
 		t.Fatalf("denied response carries a patch: %s (%v)", resp.Patch, resp.PatchType)
+	}
+}
+
+// The script sees every field of the request, object and oldObject as real
+// objects.
+//
+// jsadmission.R3
+func TestServer_PassesEveryRequestFieldToScript(t *testing.T) {
+	key := types.NamespacedName{Namespace: "default", Name: "policy-echo"}
+	reg := loadPolicy(t, `function validate(req){ return {allowed: true, message: JSON.stringify(req)}; }`, key)
+	srv := NewServer(reg, logr.Log)
+	srv.Register(PolicyEntry{Key: key, Timeout: 2 * time.Second})
+
+	dryRun := true
+	resp := postReview(t, srv.ValidateHandler(), PathFor(key, false), &admissionv1.AdmissionRequest{
+		UID:         "uid-1",
+		Kind:        metav1.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"},
+		Resource:    metav1.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
+		SubResource: "scale",
+		Name:        "web",
+		Namespace:   "shop",
+		Operation:   admissionv1.Update,
+		UserInfo: authenticationv1.UserInfo{
+			Username: "alice", UID: "u-alice", Groups: []string{"dev"},
+			Extra: map[string]authenticationv1.ExtraValue{"team": {"a"}},
+		},
+		Object:    runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"web"},"spec":{"replicas":3}}`)},
+		OldObject: runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"web"},"spec":{"replicas":1}}`)},
+		DryRun:    &dryRun,
+	})
+	if resp.Result == nil {
+		t.Fatalf("no message: %+v", resp)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(resp.Result.Message), &got); err != nil {
+		t.Fatalf("decode echoed req: %v\n%s", err, resp.Result.Message)
+	}
+	want := map[string]any{
+		"uid":         "uid-1",
+		"kind":        map[string]any{"group": "apps", "version": "v1", "kind": "Deployment"},
+		"resource":    map[string]any{"group": "apps", "version": "v1", "resource": "deployments"},
+		"subResource": "scale",
+		"name":        "web",
+		"namespace":   "shop",
+		"operation":   "UPDATE",
+		"userInfo": map[string]any{
+			"username": "alice", "uid": "u-alice", "groups": []any{"dev"},
+			"extra": map[string]any{"team": []any{"a"}},
+		},
+		"object":    map[string]any{"metadata": map[string]any{"name": "web"}, "spec": map[string]any{"replicas": float64(3)}},
+		"oldObject": map[string]any{"metadata": map[string]any{"name": "web"}, "spec": map[string]any{"replicas": float64(1)}},
+		"dryRun":    true,
+	}
+	for field, w := range want {
+		g, ok := got[field]
+		if !ok {
+			t.Errorf("field %q missing in req", field)
+			continue
+		}
+		gb, _ := json.Marshal(g)
+		wb, _ := json.Marshal(w)
+		if string(gb) != string(wb) {
+			t.Errorf("field %q: got %s, want %s", field, gb, wb)
+		}
+	}
+}
+
+// A result without `allowed` denies; a result of undefined or null is a
+// script failure and goes to failurePolicy (Ignore admits it with a warning,
+// which a plain deny never does).
+//
+// jsadmission.R4
+func TestServer_MissingAllowedDenies_NullOrUndefinedFails(t *testing.T) {
+	t.Run("omitted allowed denies", func(t *testing.T) {
+		key := types.NamespacedName{Namespace: "default", Name: "policy-no-allowed"}
+		reg := loadPolicy(t, `function validate(req){ return {message: "forgot"}; }`, key)
+		srv := NewServer(reg, logr.Log)
+		srv.Register(PolicyEntry{Key: key, FailurePolicy: admissionregv1.Ignore, Timeout: 2 * time.Second})
+
+		resp := postReview(t, srv.ValidateHandler(), PathFor(key, false), &admissionv1.AdmissionRequest{UID: "u"})
+		if resp.Allowed {
+			t.Fatalf("omitted allowed must deny: %+v", resp)
+		}
+		if resp.Result == nil || resp.Result.Message != "forgot" {
+			t.Fatalf("message not passed through: %+v", resp.Result)
+		}
+	})
+	for _, tc := range []struct{ name, body string }{
+		{"undefined", `function validate(req){ }`},
+		{"null", `function validate(req){ return null; }`},
+	} {
+		t.Run(tc.name+" is a script failure", func(t *testing.T) {
+			key := types.NamespacedName{Namespace: "default", Name: "policy-" + tc.name}
+			reg := loadPolicy(t, tc.body, key)
+			srv := NewServer(reg, logr.Log)
+			srv.Register(PolicyEntry{Key: key, FailurePolicy: admissionregv1.Ignore, Timeout: 2 * time.Second})
+
+			resp := postReview(t, srv.ValidateHandler(), PathFor(key, false), &admissionv1.AdmissionRequest{UID: "u"})
+			if !resp.Allowed {
+				t.Fatalf("failurePolicy Ignore must admit a script failure: %+v", resp)
+			}
+			if len(resp.Warnings) == 0 || !strings.HasPrefix(resp.Warnings[0], "gojsop: ") {
+				t.Fatalf("no failurePolicy warning: %v", resp.Warnings)
+			}
+		})
+	}
+}
+
+// jsadmission.R7
+func TestServer_Validate_IgnoresModifiedObject(t *testing.T) {
+	key := types.NamespacedName{Namespace: "default", Name: "policy-validate-mod"}
+	src := `
+		function validate(req) {
+			const obj = req.object;
+			obj.metadata.labels = { team: "frontend" };
+			return { allowed: true, modifiedObject: obj };
+		}`
+	reg := loadPolicy(t, src, key)
+	srv := NewServer(reg, logr.Log)
+	srv.Register(PolicyEntry{Key: key, Timeout: 2 * time.Second})
+
+	resp := postReview(t, srv.ValidateHandler(), PathFor(key, false), &admissionv1.AdmissionRequest{
+		UID:       "v",
+		Operation: admissionv1.Create,
+		Object:    runtime.RawExtension{Raw: []byte(`{"metadata":{"name":"p"}}`)},
+	})
+	if !resp.Allowed {
+		t.Fatal("expected allowed=true")
+	}
+	if resp.Patch != nil || resp.PatchType != nil {
+		t.Fatalf("validating policy produced a patch: %s (%v)", resp.Patch, resp.PatchType)
 	}
 }
 

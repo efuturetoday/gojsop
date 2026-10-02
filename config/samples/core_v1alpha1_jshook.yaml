@@ -8,10 +8,8 @@ metadata:
 spec:
   source:
     inline: |
-      // Persistent state — the QuickJS instance lives across reconciles, so
-      // these globals stay populated until the hook source changes.
-      var seenEvents = 0;
-
+      // Every call starts from a fresh snapshot of this script, so globals
+      // set inside handle() are gone at the next call.
       function config() {
         return {
           configVersion: "v1",
@@ -29,7 +27,6 @@ spec:
 
       function handle(ctx) {
         for (const evt of ctx) {
-          seenEvents++;
           const obj = evt.object;
           if (!obj || !obj.metadata) continue;
           const ann = obj.metadata.annotations || {};
