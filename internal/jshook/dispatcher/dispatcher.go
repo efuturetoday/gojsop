@@ -1,5 +1,5 @@
 // Package dispatcher subscribes the controller to the Kubernetes events that
-// each JSHook's config() declared, and forwards them as BindingContext payloads
+// each JSHook's spec.bindings declared, and forwards them as BindingContext payloads
 // to a fresh instance of that hook's prepared script.
 //
 // One Dispatcher serves all JSHooks. Per JSHook it owns:
@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
@@ -69,18 +70,19 @@ type Dispatcher struct {
 	mu       sync.Mutex // guards subs and keyLocks only; never held across slow work
 	subs     map[types.NamespacedName]*subscription
 	keyLocks map[types.NamespacedName]*sync.Mutex
+
+	// nsStore caches namespaces for namespaceSelector, shared by every hook
+	// and started on first use.
+	nsMu    sync.Mutex
+	nsStore cache.Store
 }
 
-// RESTMapper is the slice of controller-runtime's mapper interface we need —
-// resolving apiVersion/kind into a GroupVersionResource for the dynamic client.
+// RESTMapper is the slice of controller-runtime's mapper interface we need.
+// A binding names a plural resource, so the dispatcher only has to confirm
+// that the resource exists and is served — the GroupVersionResource it needs
+// for the dynamic client is already spelled out in the binding.
 type RESTMapper interface {
-	RESTMapping(gk schema.GroupKind, versions ...string) (*RESTMapping, error)
-}
-
-// RESTMapping mirrors meta.RESTMapping minus the parts we don't use here,
-// avoiding a hard dep on apimachinery/meta in tests.
-type RESTMapping struct {
-	Resource schema.GroupVersionResource
+	KindFor(gvr schema.GroupVersionResource) (schema.GroupVersionKind, error)
 }
 
 // New creates an empty Dispatcher. Pass the cluster's dynamic client, a
@@ -99,8 +101,8 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg jsrun.Runner) *Dispatcher
 }
 
 // Subscribe (re)wires informers for hook `key`. The worker resolves the live
-// instance via the Runner on every dispatch. cfg drives which informers start.
-// emit (optional) publishes lifecycle events; pass nil in tests.
+// instance via the Runner on every dispatch. bindings drive which informers
+// start. emit (optional) publishes lifecycle events; pass nil in tests.
 //
 // If a subscription already exists for key, it is torn down first.
 //
@@ -110,9 +112,17 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg jsrun.Runner) *Dispatcher
 // same key cancels a Subscribe that is still waiting; that Subscribe then
 // returns an error.
 // jshook.R17
-func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, cfg *jshook.Config, emit EventEmitter) error {
+func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, bindings []corev1alpha1.HookBinding, emit EventEmitter) error {
 	if d.reg == nil {
 		return fmt.Errorf("dispatcher: Runner is nil — Subscribe needs the runner to resolve live instances")
+	}
+
+	// Resolve everything that can fail before touching the old subscription:
+	// a hook with a bad binding keeps the watches it already has.
+	// jshook.R20
+	watches, err := d.planWatches(bindings)
+	if err != nil {
+		return err
 	}
 
 	kl := d.keyLock(key)
@@ -155,17 +165,13 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 		return err
 	}
 
-	for _, b := range cfg.Kubernetes {
-		gv, err := schema.ParseGroupVersion(b.APIVersion)
+	for _, w := range watches {
+		inNamespace, err := d.namespaceMatcher(ctx, w.binding.NamespaceSelector)
 		if err != nil {
-			return fail(fmt.Errorf("binding %q: parse apiVersion %q: %w", b.Name, b.APIVersion, err))
+			return fail(fmt.Errorf("binding %q: namespaceSelector: %w", w.binding.Name, err))
 		}
-		mapping, err := d.mapper.RESTMapping(schema.GroupKind{Group: gv.Group, Kind: b.Kind}, gv.Version)
-		if err != nil {
-			return fail(fmt.Errorf("binding %q: REST mapping for %s/%s: %w", b.Name, b.APIVersion, b.Kind, err))
-		}
-		if err := sub.startWatcher(ctx, d.dyn, mapping.Resource, b); err != nil {
-			return fail(fmt.Errorf("binding %q: start watcher: %w", b.Name, err))
+		if err := sub.startWatcher(ctx, d.dyn, w, inNamespace); err != nil {
+			return fail(fmt.Errorf("binding %q: start watcher on %s: %w", w.binding.Name, w.gvr.Resource, err))
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -175,6 +181,117 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 	sub.wg.Add(1)
 	go sub.runWorker(ctx)
 	return nil
+}
+
+// watch is one informer to start: a binding narrowed to a single resource.
+type watch struct {
+	binding   corev1alpha1.HookBinding
+	gvr       schema.GroupVersionResource
+	objectSel labels.Selector
+}
+
+// planWatches expands every binding into one watch per resource and resolves
+// everything that can fail: a binding is the cross product of apiGroups x
+// apiVersions x resources, every combination must name a resource the cluster
+// serves, and "*" is not a thing an informer can watch.
+// jshook.R21
+func (d *Dispatcher) planWatches(bindings []corev1alpha1.HookBinding) ([]watch, error) {
+	var out []watch
+	seen := map[string]string{}
+	for _, b := range bindings {
+		sel, err := metav1.LabelSelectorAsSelector(b.ObjectSelector)
+		if err != nil {
+			return nil, fmt.Errorf("binding %q: objectSelector: %w", b.Name, err)
+		}
+		for _, group := range b.APIGroups {
+			for _, version := range b.APIVersions {
+				for _, resource := range b.Resources {
+					if group == "*" || version == "*" || resource == "*" {
+						return nil, fmt.Errorf("binding %q: %q is not allowed in a hook binding — a watch needs a concrete apiGroup, apiVersion and resource", b.Name, "*")
+					}
+					gvr := schema.GroupVersionResource{Group: group, Version: version, Resource: resource}
+					if _, err := d.mapper.KindFor(gvr); err != nil {
+						return nil, fmt.Errorf("binding %q: no resource %q in %q: %w", b.Name, resource, gvr.GroupVersion().String(), err)
+					}
+					if other, dup := seen[gvr.String()]; dup {
+						return nil, fmt.Errorf("binding %q watches %s, which binding %q already watches — one event would call handle() twice", b.Name, gvr.Resource, other)
+					}
+					seen[gvr.String()] = b.Name
+					out = append(out, watch{binding: b, gvr: gvr, objectSel: sel})
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// namespaceMatcher answers whether an object's namespace matches the
+// binding's namespaceSelector. A nil selector matches everything, including
+// cluster-scoped objects; any other selector needs namespace labels, so it
+// never matches an object that has no namespace.
+//
+// The namespace informer is shared by every hook and started once, because
+// namespace labels change rarely and a per-event GET would cost an API call
+// per event.
+// jshook.R22
+func (d *Dispatcher) namespaceMatcher(ctx context.Context, sel *metav1.LabelSelector) (func(namespace string) bool, error) {
+	if sel == nil {
+		return func(string) bool { return true }, nil
+	}
+	selector, err := metav1.LabelSelectorAsSelector(sel)
+	if err != nil {
+		return nil, err
+	}
+	store, err := d.namespaces(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return func(namespace string) bool {
+		if namespace == "" {
+			return false
+		}
+		obj, ok, err := store.GetByKey(namespace)
+		if err != nil || !ok {
+			// The namespace is not in the cache: it was deleted, or the
+			// cache has not caught up. Dropping is the safe answer — a hook
+			// must not see objects of a namespace it did not select.
+			return false
+		}
+		raw := toRaw(obj)
+		if raw == nil {
+			return false
+		}
+		md, _ := raw["metadata"].(map[string]any)
+		set := labels.Set{}
+		if l, ok := md["labels"].(map[string]any); ok {
+			for k, v := range l {
+				if vs, ok := v.(string); ok {
+					set[k] = vs
+				}
+			}
+		}
+		return selector.Matches(set)
+	}, nil
+}
+
+// namespaces returns the shared namespace cache, starting it on first use.
+func (d *Dispatcher) namespaces(ctx context.Context) (cache.Store, error) {
+	d.nsMu.Lock()
+	defer d.nsMu.Unlock()
+	if d.nsStore != nil {
+		return d.nsStore, nil
+	}
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(d.dyn, 0, metav1.NamespaceAll, nil)
+	informer := factory.ForResource(gvr).Informer()
+	// Detached from the subscribing hook's context: the cache is shared, so
+	// dropping the hook that happened to start it must not stop it.
+	factory.Start(context.WithoutCancel(ctx).Done())
+	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
+		return nil, fmt.Errorf("namespace cache sync canceled")
+	}
+	d.nsStore = informer.GetStore()
+	return d.nsStore, nil
 }
 
 // keyLock returns the lock that serializes Subscribe and Drop of one hook.
@@ -248,51 +365,26 @@ func (s *subscription) stop() {
 }
 
 // jshook.R3
-func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, b jshook.KubernetesBinding) error {
-	ns := metav1.NamespaceAll
-	if b.Namespace != nil && b.Namespace.NameSelector != nil && len(b.Namespace.NameSelector.MatchNames) == 1 {
-		// MVP: single-namespace fast path. Multi-namespace fan-out comes later.
-		ns = b.Namespace.NameSelector.MatchNames[0]
-	}
-	sel := labels.Everything()
-	if len(b.LabelSelector) > 0 {
-		// Best-effort: if labelSelector has matchLabels: {k:v}, encode it.
-		if ml, ok := b.LabelSelector["matchLabels"].(map[string]any); ok {
-			set := labels.Set{}
-			for k, v := range ml {
-				if vs, ok := v.(string); ok {
-					set[k] = vs
-				}
-			}
-			sel = set.AsSelector()
-		}
-	}
-
-	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dyn, 0, ns, func(o *metav1.ListOptions) {
-		o.LabelSelector = sel.String()
-	})
-	informer := factory.ForResource(gvr).Informer()
-
-	wantedEvents := map[string]bool{}
-	if len(b.ExecuteHookOnEvent) == 0 {
-		wantedEvents = map[string]bool{"Added": true, "Modified": true, "Deleted": true}
-	} else {
-		for _, e := range b.ExecuteHookOnEvent {
-			wantedEvents[e] = true
-		}
-	}
-
+func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, w watch, inNamespace func(string) bool) error {
+	b := w.binding
 	bindingName := b.Name
-	if bindingName == "" {
-		bindingName = b.Kind
-	}
+
+	// The object selector runs in the apiserver; the namespace selector
+	// cannot (it matches labels of a different object) and is applied here.
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dyn, 0, metav1.NamespaceAll, func(o *metav1.ListOptions) {
+		o.LabelSelector = w.objectSel.String()
+	})
+	informer := factory.ForResource(w.gvr).Informer()
 
 	enqueueEvent := func(eventName string, raw map[string]any) {
-		if !wantedEvents[eventName] {
+		if !b.WantsEvent(corev1alpha1.HookEvent(eventName)) {
 			return
 		}
 		md, _ := raw["metadata"].(map[string]any)
 		ns, _ := md["namespace"].(string)
+		if !inNamespace(ns) {
+			return
+		}
 		name, _ := md["name"].(string)
 		uid, _ := md["uid"].(string)
 		k := eventKey{binding: bindingName, event: eventName, namespace: ns, name: name, uid: uid}
@@ -353,7 +445,7 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 		return fmt.Errorf("binding %q: cache sync canceled", bindingName)
 	}
 
-	syncEnabled := b.ExecuteHookOnSynchronization == nil || *b.ExecuteHookOnSynchronization
+	syncEnabled := b.WantsSynchronization()
 
 	gateMu.Lock()
 	objs := informer.GetStore().List()
@@ -362,6 +454,10 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 	for _, o := range objs {
 		raw := toRaw(o)
 		if raw == nil {
+			continue
+		}
+		md, _ := raw["metadata"].(map[string]any)
+		if ns, _ := md["namespace"].(string); !inNamespace(ns) {
 			continue
 		}
 		if uid := uidOf(raw); uid != "" {

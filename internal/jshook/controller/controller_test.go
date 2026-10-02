@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 	"github.com/o-haase/gojsop/internal/jsrun"
@@ -26,32 +24,37 @@ import (
 )
 
 // jshook.R2
-func TestReadConfig_PostBuildRejectsMissingExports(t *testing.T) {
-	cases := []struct {
-		name    string
-		src     string
-		missing string
-	}{
-		{"no config", `function handle(c) {}`, "config"},
-		{"no handle", `function config() { return {}; }`, "handle"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			reg := jsregistry.NewRegistry()
-			key := types.NamespacedName{Name: "h"}
-			t.Cleanup(func() { reg.Drop(jsrun.HookKey(key)) })
+// api-design.R11
+func TestRequireHandle_PostBuildRejectsMissingHandle(t *testing.T) {
+	reg := jsregistry.NewRegistry()
+	key := types.NamespacedName{Name: "h"}
+	t.Cleanup(func() { reg.Drop(jsrun.HookKey(key)) })
 
-			_, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Spec{
-				Source: []byte(tc.src), SourceHash: "x", PostBuild: readConfig,
-			})
-			var miss *jsrun.MissingExportError
-			if !errors.As(err, &miss) || miss.Name != tc.missing {
-				t.Fatalf("GetOrLoad error = %v, want MissingExportError for %q", err, tc.missing)
-			}
-			if _, ok := reg.Get(jsrun.HookKey(key)); ok {
-				t.Fatal("a hook that failed to build must not be registered")
-			}
-		})
+	_, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Spec{
+		Source: []byte(`function config() { return {}; }`), SourceHash: "x", PostBuild: requireHandle,
+	})
+	var miss *jsrun.MissingExportError
+	if !errors.As(err, &miss) || miss.Name != "handle" {
+		t.Fatalf("GetOrLoad error = %v, want MissingExportError for %q", err, "handle")
+	}
+	if _, ok := reg.Get(jsrun.HookKey(key)); ok {
+		t.Fatal("a hook that failed to build must not be registered")
+	}
+}
+
+// A script that only exports handle() builds: what the hook reacts to comes
+// from spec.bindings, not from the script.
+// jshook.R2
+// api-design.R11
+func TestRequireHandle_AcceptsHandleOnly(t *testing.T) {
+	reg := jsregistry.NewRegistry()
+	key := types.NamespacedName{Name: "h"}
+	t.Cleanup(func() { reg.Drop(jsrun.HookKey(key)) })
+
+	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Spec{
+		Source: []byte(`function handle(c) {}`), SourceHash: "x", PostBuild: requireHandle,
+	}); err != nil {
+		t.Fatalf("GetOrLoad: %v", err)
 	}
 }
 
@@ -246,32 +249,34 @@ func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
 	}
 }
 
-// Schedule and onStartup bindings are echoed in status, but the dispatcher
-// never fires them, so they must not look active (DISP-1).
-//
+// jshook.R1
 // jshook.R16
-func TestSummarizeBindings_MarksUnhandledBindingsInactive(t *testing.T) {
-	got := summarizeBindings(&jshook.Config{
-		OnStartup: 5,
-		Schedule: []jshook.ScheduleBinding{
-			{Name: "nightly", Crontab: "0 3 * * *"},
+// jshook.R23
+func TestSummarizeBindings_ListsEveryWatchedResource(t *testing.T) {
+	got := summarizeBindings([]corev1alpha1.HookBinding{
+		{
+			Name: "watch-cm",
+			ResourceRule: corev1alpha1.ResourceRule{
+				APIGroups:   []string{""},
+				APIVersions: []string{"v1"},
+				Resources:   []string{"configmaps", "secrets"},
+			},
 		},
-		Kubernetes: []jshook.KubernetesBinding{
-			{Name: "watch-cm", APIVersion: "v1", Kind: "ConfigMap"},
+		{
+			Name: "watch-deploy",
+			ResourceRule: corev1alpha1.ResourceRule{
+				APIGroups:   []string{"apps"},
+				APIVersions: []string{"v1"},
+				Resources:   []string{"deployments"},
+			},
 		},
 	})
 	want := []string{
-		"kubernetes:v1/ConfigMap/watch-cm",
-		"schedule:0 3 * * */nightly (inactive)",
-		"onStartup:5 (inactive)",
+		"watch-cm:v1/configmaps",
+		"watch-cm:v1/secrets",
+		"watch-deploy:apps/v1/deployments",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("bindings:\n got %q\nwant %q", got, want)
-	}
-	for _, b := range got {
-		inactive := strings.HasSuffix(b, InactiveSuffix)
-		if strings.HasPrefix(b, "kubernetes:") == inactive {
-			t.Errorf("binding %q: only non-kubernetes bindings are inactive today", b)
-		}
 	}
 }

@@ -29,6 +29,20 @@ type JSHookSpec struct {
 	// Limits caps memory and per-call execution time of the JS instance.
 	// +optional
 	Limits *JSLimits `json:"limits,omitempty"`
+
+	// Bindings tell the operator which resources to watch and which events
+	// call handle(). At least one is required: a hook that watches nothing
+	// can never run.
+	//
+	// Declared here rather than returned by the script, so the apiserver
+	// validates them on apply, kubectl shows them without reading the
+	// source, and the operator knows the hook's scope before it runs any
+	// user code (api-design.R11).
+	// +required
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:MinItems=1
+	Bindings []HookBinding `json:"bindings"`
 }
 
 // JSHookStatus defines the observed state of JSHook.
@@ -38,13 +52,9 @@ type JSHookStatus struct {
 	// +kubebuilder:validation:Minimum=0
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// Bindings are the resolved bindings the hook declared in its config()
-	// call (kubernetes/schedule/onStartup), echoed here so users can see what
-	// the hook is subscribed to.
-	//
-	// A binding the operator does not act on carries the suffix
-	// " (inactive)". Today that is every schedule and onStartup binding:
-	// they are parsed and echoed here, but nothing ever fires them.
+	// Bindings echoes the watches the operator actually established, one
+	// entry per binding and resource, so a user sees the resolved scope
+	// without re-deriving it from spec.bindings.
 	// +listType=set
 	// +optional
 	Bindings []string `json:"bindings,omitempty"`

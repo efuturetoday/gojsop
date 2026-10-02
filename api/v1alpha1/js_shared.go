@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -175,4 +177,114 @@ type JSReconcileStatus struct {
 	// build, subscribe, webhook sync). Empty on a successful reconcile.
 	// +optional
 	Error string `json:"error,omitempty"`
+}
+
+// ResourceRule selects a set of API resources. Both kinds name resources the
+// same way: a JSAdmission rule and a JSHook binding differ in what triggers
+// them (an admission request vs. a watch event), not in what they point at.
+//
+// JSAdmission forwards these fields to the apiserver, which resolves "*"
+// itself. A JSHook turns them into informers, so it needs concrete values:
+// the cross product of apiGroups x apiVersions x resources must resolve, and
+// "*" is rejected (api-design.R10).
+type ResourceRule struct {
+	// APIGroups is the list of API groups, "" for the core group.
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	APIGroups []string `json:"apiGroups"`
+
+	// APIVersions is the list of versions, e.g. ["v1"].
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	APIVersions []string `json:"apiVersions"`
+
+	// Resources is the list of plural resource names, e.g. ["configmaps"].
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	Resources []string `json:"resources"`
+
+	// Scope is one of "*" (default), "Namespaced", "Cluster".
+	// +optional
+	// +kubebuilder:validation:Enum="*";Namespaced;Cluster
+	Scope string `json:"scope,omitempty"`
+}
+
+// ObjectMatch narrows which objects a rule or binding applies to. Identical
+// in meaning for both kinds: JSAdmission forwards it to the webhook
+// configuration, a JSHook applies it to its informers.
+//
+// To select a single namespace by name, match the label every namespace
+// carries since Kubernetes 1.21:
+//
+//	namespaceSelector:
+//	  matchLabels:
+//	    kubernetes.io/metadata.name: my-namespace
+type ObjectMatch struct {
+	// NamespaceSelector matches the labels of the object's namespace.
+	// A cluster-scoped object has no namespace and therefore matches only
+	// when the selector is empty.
+	// +optional
+	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
+
+	// ObjectSelector matches the labels of the object itself.
+	// +optional
+	ObjectSelector *metav1.LabelSelector `json:"objectSelector,omitempty"`
+}
+
+// HookEvent is a watch event that triggers a JSHook binding.
+// +kubebuilder:validation:Enum=Added;Modified;Deleted
+type HookEvent string
+
+const (
+	HookEventAdded    HookEvent = "Added"
+	HookEventModified HookEvent = "Modified"
+	HookEventDeleted  HookEvent = "Deleted"
+)
+
+// HookBinding is one slice of the cluster a JSHook reacts to. It is the
+// counterpart of AdmissionRule: same resource selection, same object
+// matching, a different trigger.
+type HookBinding struct {
+	// Name identifies this binding in the binding context handed to
+	// handle(), in status.bindings and in events. Must be unique within the
+	// hook.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Name string `json:"name"`
+
+	// ResourceRule selects which resources to watch.
+	ResourceRule `json:",inline"`
+
+	// ObjectMatch narrows which objects of those resources to react to.
+	ObjectMatch `json:",inline"`
+
+	// Events selects which watch events call handle(). Defaults to all three.
+	// +optional
+	// +listType=set
+	// +kubebuilder:default={Added,Modified,Deleted}
+	Events []HookEvent `json:"events,omitempty"`
+
+	// Synchronization asks for one initial call carrying every object that
+	// already exists, before any event is delivered. With it disabled those
+	// objects arrive as Added events instead.
+	// +optional
+	// +kubebuilder:default=true
+	Synchronization *bool `json:"synchronization,omitempty"`
+}
+
+// WantsEvent reports whether this binding asked for the given watch event.
+func (b *HookBinding) WantsEvent(e HookEvent) bool {
+	if len(b.Events) == 0 {
+		return true
+	}
+	return slices.Contains(b.Events, e)
+}
+
+// WantsSynchronization reports whether the initial snapshot call is enabled.
+func (b *HookBinding) WantsSynchronization() bool {
+	return b.Synchronization == nil || *b.Synchronization
 }

@@ -73,31 +73,26 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## DISP: Hook dispatch and bindings
 
-- **DISP-1** `gap` Schedule and onStartup bindings never fire. Decoded and
-  shown in `status.bindings` with the suffix ` (inactive)`, but the
-  dispatcher only watches Kubernetes resources
-  (`internal/jshook/dispatcher/dispatcher.go`).
-- **DISP-2** `gap` `jqFilter` declared, not enforced. The dispatcher enqueues
-  every event (`KubernetesBinding.JQFilter`).
-- **DISP-3** `gap` `allowFailure` and `queue` accepted on bindings, never read.
 - **DISP-4** `bug` No leader-election awareness. On failover the new leader
   rebuilds informers with a fresh Synchronization; events in the gap are lost.
 - **DISP-5** `decision` `BindingContext` shape depends on type: `Object` for
   events, `Objects` for Synchronization, `Snapshots` never set.
-- **DISP-6** `doc` Interaction of `executeHookOnEvent` and
-  `executeHookOnSynchronization` unspecified. Empty `executeHookOnEvent` means
-  "all events"; relation to snapshot delivery unclear.
-- **DISP-7** `doc` Precedence of `namespace.nameSelector` versus binding-level
-  `nameSelector` not written down.
+- **DISP-6** `doc` Interaction of `events` and `synchronization` unspecified.
+  An empty `events` means "all events"; the relation to snapshot delivery is
+  unclear.
 
 - **DISP-10** `debt` Failed events are requeued with `AddRateLimited` and no
   retry cap; a poison event retries forever (`dispatcher.go`, `requeue`). The
   same holds for events of a hook that has no VM (`noVM`): they wait, folded
   per object, until the VM is back or the hook is dropped. Not a cap, so not
   narrowed.
-- **DISP-11** `gap` Selectors only partly applied: top-level `nameSelector`,
-  `fieldSelector`, `namespace.labelSelector`, `matchExpressions` and
-  multi-namespace are ignored (`dispatcher.go:208-224`).
+- **DISP-12** `gap` `BindingContext` still carries `filterResult` and
+  `snapshots`; nothing fills them since the bindings moved into the CRD.
+  Remove them or implement them (`internal/jshook/bindingctx.go`).
+- **DISP-13** `gap` A JSHook has no way to run on a schedule or once at
+  startup. `spec.bindings` only watches resources; shell-operator's
+  `schedule` and `onStartup` have no CRD equivalent yet. Decide whether
+  gojsop needs them and, if so, how they look as CRD fields.
 ## ADM: Admission webhook
 
 - **ADM-3** `gap` `ReinvocationPolicy` is never set. The `PolicyMeta` field
@@ -138,10 +133,9 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **API-1** `decision` Project rule: no field without implementation or a
   status that shows it is inactive. Applies to CRD fields and to the schema
-  that JS `config()` returns. Today violated by SRC-1 (CRD field `oci`) and by
-  DISP-1, DISP-2, DISP-3 (`config()` fields `schedule`, `jqFilter`, `queue`,
-  `allowFailure`; the JSHook spec itself has only `source` and `limits`,
-  `api/v1alpha1/jshook_types.go:24-32`). Gate: GATE-10.
+  that the CRDs expose. Today violated by SRC-1 (CRD field `oci`) and by
+  DISP-12 (`BindingContext.filterResult` and `.snapshots` are never filled).
+  Gate: GATE-10.
 - **API-2** `doc` CRD field docs are thin. `kubectl explain jshook.spec.source`
   does not say which sources work.
 - **API-3** `doc` `gojsop.io/restart` annotation value semantics undocumented.

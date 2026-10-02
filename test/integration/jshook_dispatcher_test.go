@@ -14,8 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
+	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/jsengine"
-	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
@@ -24,8 +24,8 @@ import (
 
 type configMapMapper struct{}
 
-func (configMapMapper) RESTMapping(schema.GroupKind, ...string) (*dispatcher.RESTMapping, error) {
-	return &dispatcher.RESTMapping{Resource: schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}}, nil
+func (configMapMapper) KindFor(schema.GroupVersionResource) (schema.GroupVersionKind, error) {
+	return schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, nil
 }
 
 var _ = Describe("JSHook dispatcher against a real API server", func() {
@@ -80,12 +80,21 @@ function handle(c) { record(c[0]); }`
 			reg.Drop(jsrun.HookKey(key))
 		})
 
-		binding := jshook.KubernetesBinding{
-			Name: "cms", APIVersion: "v1", Kind: "ConfigMap",
-			Namespace:     &jshook.NamespaceSel{NameSelector: &jshook.NameSelector{MatchNames: []string{"sel-a"}}},
-			LabelSelector: map[string]any{"matchLabels": map[string]any{"app": "x"}},
+		// A namespace is selected by the label the apiserver sets on every
+		// namespace since 1.21 — there is no separate name field (jshook.R22).
+		binding := corev1alpha1.HookBinding{
+			Name: "cms",
+			ResourceRule: corev1alpha1.ResourceRule{
+				APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"configmaps"},
+			},
+			ObjectMatch: corev1alpha1.ObjectMatch{
+				NamespaceSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{corev1.LabelMetadataName: "sel-a"},
+				},
+				ObjectSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+			},
 		}
-		Expect(d.Subscribe(ctx, key, &jshook.Config{Kubernetes: []jshook.KubernetesBinding{binding}}, nil)).To(Succeed())
+		Expect(d.Subscribe(ctx, key, []corev1alpha1.HookBinding{binding}, nil)).To(Succeed())
 
 		// Created after the snapshot: one match, two misses, one match.
 		mkCM("sel-a", "match-2", match)

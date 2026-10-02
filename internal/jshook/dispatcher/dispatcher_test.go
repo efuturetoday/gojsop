@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,9 +21,9 @@ import (
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 
+	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsengine"
-	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jslog"
 	"github.com/o-haase/gojsop/internal/jsregistry"
@@ -32,13 +33,22 @@ import (
 
 var cmGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
 
+var cmRule = corev1alpha1.ResourceRule{
+	APIGroups:   []string{""},
+	APIVersions: []string{"v1"},
+	Resources:   []string{"configmaps"},
+}
+
 const ns = "default"
 
-// fixedMapper resolves every kind to ConfigMaps.
+// fixedMapper serves ConfigMaps and nothing else.
 type fixedMapper struct{}
 
-func (fixedMapper) RESTMapping(schema.GroupKind, ...string) (*dispatcher.RESTMapping, error) {
-	return &dispatcher.RESTMapping{Resource: cmGVR}, nil
+func (fixedMapper) KindFor(gvr schema.GroupVersionResource) (schema.GroupVersionKind, error) {
+	if gvr != cmGVR {
+		return schema.GroupVersionKind{}, fmt.Errorf("no match for %s", gvr)
+	}
+	return schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, nil
 }
 
 type emitted struct{ Type, Reason, Message string }
@@ -166,16 +176,15 @@ func (e *env) emitted() []emitted {
 }
 
 // subscribe starts the hook and waits until the informer watch is live.
-func (e *env) subscribe(b jshook.KubernetesBinding) {
+func (e *env) subscribe(b corev1alpha1.HookBinding) {
 	e.t.Helper()
 	if b.Name == "" {
 		b.Name = "cms"
 	}
-	if b.APIVersion == "" {
-		b.APIVersion, b.Kind = "v1", "ConfigMap"
+	if len(b.Resources) == 0 {
+		b.ResourceRule = cmRule
 	}
-	cfg := &jshook.Config{Kubernetes: []jshook.KubernetesBinding{b}}
-	if err := e.d.Subscribe(context.Background(), e.key, cfg, e.emit); err != nil {
+	if err := e.d.Subscribe(context.Background(), e.key, []corev1alpha1.HookBinding{b}, e.emit); err != nil {
 		e.t.Fatalf("Subscribe: %v", err)
 	}
 	select {
@@ -286,7 +295,10 @@ func (e *env) waitEmitted(reason string, n int) {
 	}
 }
 
-const bcSynchronization = "Synchronization"
+const (
+	bcSynchronization = "Synchronization"
+	bcEvent           = "Event"
+)
 
 func boolp(b bool) *bool { return &b }
 
@@ -298,7 +310,7 @@ function handle(c) { record(c[0]); }
 // jshook.R4
 func TestDispatcher_SynchronizationFirstThenDeltas(t *testing.T) {
 	e := newEnv(t, recordSrc, jsengine.Limits{}, newCM("a", "uid-a", "1"))
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 	e.create(newCM("b", "uid-b", "1"))
 
 	cs := e.waitCalls(2)
@@ -325,7 +337,7 @@ func TestDispatcher_SynchronizationFirstThenDeltas(t *testing.T) {
 // jshook.R5
 func TestDispatcher_SyncDisabled_ExistingObjectsArriveAsAdded(t *testing.T) {
 	e := newEnv(t, recordSrc, jsengine.Limits{}, newCM("a", "uid-a", "1"))
-	e.subscribe(jshook.KubernetesBinding{ExecuteHookOnSynchronization: boolp(false)})
+	e.subscribe(corev1alpha1.HookBinding{Synchronization: boolp(false)})
 	e.create(newCM("b", "uid-b", "1"))
 
 	e.waitCalls(2)
@@ -349,7 +361,7 @@ func TestDispatcher_SyncDisabled_ExistingObjectsArriveAsAdded(t *testing.T) {
 // jshook.R6
 func TestDispatcher_ExecuteHookOnEvent_ListedTypesOnly(t *testing.T) {
 	e := newEnv(t, recordSrc, jsengine.Limits{})
-	e.subscribe(jshook.KubernetesBinding{ExecuteHookOnEvent: []string{"Deleted"}})
+	e.subscribe(corev1alpha1.HookBinding{Events: []corev1alpha1.HookEvent{corev1alpha1.HookEventDeleted}})
 	e.waitCalls(1) // Synchronization (empty)
 
 	e.create(newCM("a", "uid-a", "1"))
@@ -367,7 +379,7 @@ func TestDispatcher_ExecuteHookOnEvent_ListedTypesOnly(t *testing.T) {
 // jshook.R6
 func TestDispatcher_ExecuteHookOnEvent_EmptyMeansAll(t *testing.T) {
 	e := newEnv(t, recordSrc, jsengine.Limits{})
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitCalls(1)
 
 	e.create(newCM("a", "uid-a", "1"))
@@ -390,7 +402,7 @@ func TestDispatcher_BurstOfChangesFoldsIntoNewestObject(t *testing.T) {
 	const src = `
 function handle(c) { waitGate(); record(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{}, newCM("a", "uid-a", "0"))
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitCalls(1)
 
 	// Close the gate so the worker blocks inside its next call; later changes
@@ -427,7 +439,7 @@ function handle(c) {
 	e := newEnv(t, src, jsengine.Limits{})
 	e.fails.Store(2)
 	before, _ := e.reg.Get(jsrun.HookKey(e.key))
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 
 	e.waitCalls(3) // two failures and the success
 	e.waitEmitted(conditions.EventHandleFailed, 2)
@@ -460,7 +472,7 @@ function handle(c) {
 	e := newEnv(t, src, jsengine.Limits{MemoryMB: 1})
 	e.ooms.Store(1)
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 
 	e.waitEmitted(conditions.EventHandleFailed, 1)
 	if ev := e.emitted()[0]; ev.Type != corev1.EventTypeWarning || ev.Message != "handle() exceeded its memory limit" {
@@ -494,7 +506,7 @@ function handle(c) {
 }`
 	e := newEnv(t, src, jsengine.Limits{}, newCM("a", "uid-a", "0"))
 	e.fails.Store(1)
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitCalls(1)
 	before := e.entered.Load()
 
@@ -518,7 +530,7 @@ func TestDispatcher_Drop_NoMoreEvents(t *testing.T) {
 	const src = `
 function handle(c) { enter(); record(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitCalls(1)
 
 	e.d.Drop(e.key)
@@ -538,7 +550,7 @@ func TestDispatcher_Timeout_CancelsWarnsAndKeepsVM(t *testing.T) {
 function handle(c) { enter(); while (true) {} }`
 	e := newEnv(t, src, jsengine.Limits{TimeoutSeconds: 1})
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 
 	e.waitEmitted(conditions.EventHandleTimeout, 1)
 	for _, ev := range e.emitted() {
@@ -562,12 +574,12 @@ func TestDispatcher_ResubscribeDuringCall_NoOverlapAndProcessAlive(t *testing.T)
 	const src = `
 function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {} record(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitEntered(0)
 
 	// Re-subscribe while the first call is running: the old worker is stopped
 	// and the new one must not start before the old call has ended.
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 
 	// The new subscription delivers its own Synchronization.
 	deadline := time.Now().Add(10 * time.Second)
@@ -592,7 +604,7 @@ function handle(c) { crashNow(); record(c[0]); }`
 	e := newEnv(t, src, jsengine.Limits{})
 	e.crashes.Store(1)
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 
 	cs := e.waitCalls(1)
 	if cs[0]["type"] != bcSynchronization {
@@ -617,10 +629,12 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{cmGVR: "ConfigMapList"})
 	listing := make(chan struct{}, 1024)
-	// A list in namespace "slow" always fails: the informer of hook A never
-	// syncs. (Blocking inside the reactor would stall the whole fake client.)
+	// A list carrying hook A's object selector always fails: the informer of
+	// hook A never syncs. (Blocking inside the reactor would stall the whole
+	// fake client.)
 	dyn.PrependReactor("list", "*", func(a clienttesting.Action) (bool, runtime.Object, error) {
-		if a.GetNamespace() != "slow" {
+		la, ok := a.(clienttesting.ListAction)
+		if !ok || !strings.Contains(la.GetListRestrictions().Labels.String(), "slow") {
 			return false, nil, nil
 		}
 		select {
@@ -633,17 +647,14 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 	keyA := types.NamespacedName{Name: "a"}
 	keyB := types.NamespacedName{Name: "b"}
 	off := false
-	cfgA := &jshook.Config{Kubernetes: []jshook.KubernetesBinding{{
-		Name: "cms", APIVersion: "v1", Kind: "ConfigMap",
-		Namespace: &jshook.NamespaceSel{NameSelector: &jshook.NameSelector{MatchNames: []string{"slow"}}},
+	bindingsA := []corev1alpha1.HookBinding{{Name: "cms", ResourceRule: cmRule, ObjectMatch: corev1alpha1.ObjectMatch{
+		ObjectSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"sync": "slow"}},
 	}}}
-	cfgB := &jshook.Config{Kubernetes: []jshook.KubernetesBinding{{
-		Name: "cms", APIVersion: "v1", Kind: "ConfigMap", ExecuteHookOnSynchronization: &off,
-	}}}
+	bindingsB := []corev1alpha1.HookBinding{{Name: "cms", ResourceRule: cmRule, Synchronization: &off}}
 	t.Cleanup(func() { d.Drop(keyA); d.Drop(keyB) })
 
 	errA := make(chan error, 1)
-	go func() { errA <- d.Subscribe(context.Background(), keyA, cfgA, nil) }()
+	go func() { errA <- d.Subscribe(context.Background(), keyA, bindingsA, nil) }()
 	select {
 	case <-listing:
 	case <-time.After(5 * time.Second):
@@ -652,7 +663,7 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		if err := d.Subscribe(context.Background(), keyB, cfgB, nil); err != nil {
+		if err := d.Subscribe(context.Background(), keyB, bindingsB, nil); err != nil {
 			done <- err
 			return
 		}
@@ -704,7 +715,7 @@ function handle(c) { enter(); record(c[0]); }`
 	if _, ok := e.reg.Get(jsrun.HookKey(e.key)); ok {
 		t.Fatal("a building hook must hold no script")
 	}
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 
 	time.Sleep(300 * time.Millisecond)
 	if n := e.entered.Load(); n != 0 {
@@ -731,7 +742,7 @@ function handle(c) {
   record(c[0]);
 }`
 	e := newEnv(t, src, jsengine.Limits{})
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 
 	e.waitEmitted(conditions.EventScriptMessage, 1)
 	events := e.emitted()
@@ -765,7 +776,7 @@ function handle(c) {
   record(c[0]);
 }`
 	e := newEnv(t, src, jsengine.Limits{})
-	e.subscribe(jshook.KubernetesBinding{})
+	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitCalls(1)
 	e.waitEmitted(conditions.EventScriptMessage, 1)
 
@@ -777,5 +788,92 @@ function handle(c) {
 	}
 	if n > jslog.MaxVisibleEvents {
 		t.Errorf("one call produced %d Events, cap is %d", n, jslog.MaxVisibleEvents)
+	}
+}
+
+// jshook.R21
+func TestPlanWatches_RejectsWildcardUnknownAndDuplicate(t *testing.T) {
+	cases := []struct {
+		name     string
+		bindings []corev1alpha1.HookBinding
+		want     string
+	}{
+		{
+			"wildcard resource",
+			[]corev1alpha1.HookBinding{{Name: "a", ResourceRule: corev1alpha1.ResourceRule{
+				APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"*"},
+			}}},
+			"is not allowed in a hook binding",
+		},
+		{
+			"wildcard group",
+			[]corev1alpha1.HookBinding{{Name: "a", ResourceRule: corev1alpha1.ResourceRule{
+				APIGroups: []string{"*"}, APIVersions: []string{"v1"}, Resources: []string{"configmaps"},
+			}}},
+			"is not allowed in a hook binding",
+		},
+		{
+			"unknown resource",
+			[]corev1alpha1.HookBinding{{Name: "a", ResourceRule: corev1alpha1.ResourceRule{
+				APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"widgets"},
+			}}},
+			`no resource "widgets"`,
+		},
+		{
+			"two bindings on the same resource",
+			[]corev1alpha1.HookBinding{
+				{Name: "a", ResourceRule: cmRule},
+				{Name: "b", ResourceRule: cmRule},
+			},
+			"already watches",
+		},
+		{
+			"bad object selector",
+			[]corev1alpha1.HookBinding{{Name: "a", ResourceRule: cmRule, ObjectMatch: corev1alpha1.ObjectMatch{
+				ObjectSelector: &metav1.LabelSelector{MatchExpressions: []metav1.LabelSelectorRequirement{
+					{Key: "x", Operator: "Bogus"},
+				}},
+			}}},
+			"objectSelector",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{cmGVR: "ConfigMapList"})
+			d := dispatcher.New(dyn, fixedMapper{}, jsregistry.NewRegistry())
+			key := types.NamespacedName{Name: "h"}
+			t.Cleanup(func() { d.Drop(key) })
+
+			err := d.Subscribe(context.Background(), key, tc.bindings, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Subscribe error = %v, want one containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// A rejected re-subscribe must not cost the hook the watches it already has:
+// everything that can fail is resolved before the old subscription is torn
+// down.
+//
+// jshook.R20
+func TestPlanWatches_BadBindingKeepsExistingWatches(t *testing.T) {
+	const src = `function handle(c) { record(c[0]); }`
+	e := newEnv(t, src, jsengine.Limits{})
+	e.subscribe(corev1alpha1.HookBinding{})
+	e.waitCalls(1) // the Synchronization context
+
+	bad := []corev1alpha1.HookBinding{{Name: "a", ResourceRule: corev1alpha1.ResourceRule{
+		APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"widgets"},
+	}}}
+	if err := e.d.Subscribe(context.Background(), e.key, bad, e.emit); err == nil {
+		t.Fatal("Subscribe with an unknown resource must fail")
+	}
+
+	e.create(newCM("still-watched", "uid-still", "1"))
+	cs := e.waitCalls(2)
+	if got := cs[1]["type"]; got != bcEvent {
+		t.Fatalf("after the rejected re-subscribe the old watch is gone: %v", cs[1])
 	}
 }

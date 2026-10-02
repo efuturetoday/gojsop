@@ -52,10 +52,12 @@ var _ = Describe("JSAdmission Controller", func() {
 					Spec: corev1alpha1.JSAdmissionSpec{
 						Type: "validating",
 						Rules: []corev1alpha1.AdmissionRule{{
-							APIGroups:   []string{""},
-							APIVersions: []string{"v1"},
-							Resources:   []string{"pods"},
-							Operations:  []string{"CREATE"},
+							ResourceRule: corev1alpha1.ResourceRule{
+								APIGroups:   []string{""},
+								APIVersions: []string{"v1"},
+								Resources:   []string{"pods"},
+							},
+							Operations: []string{"CREATE"},
 						}},
 						FailurePolicy: "Fail",
 						SideEffects:   "None",

@@ -14,10 +14,6 @@ func FromMetaMapper(m meta.RESTMapper) RESTMapper {
 
 type metaMapperAdapter struct{ m meta.RESTMapper }
 
-func (a metaMapperAdapter) RESTMapping(gk schema.GroupKind, versions ...string) (*RESTMapping, error) {
-	rm, err := a.m.RESTMapping(gk, versions...)
-	if err != nil {
-		return nil, err
-	}
-	return &RESTMapping{Resource: rm.Resource}, nil
+func (a metaMapperAdapter) KindFor(gvr schema.GroupVersionResource) (schema.GroupVersionKind, error) {
+	return a.m.KindFor(gvr)
 }

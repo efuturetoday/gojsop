@@ -37,6 +37,18 @@ import (
 	"github.com/o-haase/gojsop/internal/jssource"
 )
 
+// sampleBinding is the minimal binding every JSHook needs: spec.bindings is
+// required, so a fixture that only cares about the script still has to name
+// one resource.
+var sampleBinding = corev1alpha1.HookBinding{
+	Name: "watch-cm",
+	ResourceRule: corev1alpha1.ResourceRule{
+		APIGroups:   []string{""},
+		APIVersions: []string{"v1"},
+		Resources:   []string{"configmaps"},
+	},
+}
+
 var _ = Describe("JSHook Controller", func() {
 	Context("When reconciling an inline hook", func() {
 		const resourceName = "test-resource"
@@ -54,20 +66,17 @@ var _ = Describe("JSHook Controller", func() {
 				resource := &corev1alpha1.JSHook{
 					ObjectMeta: metav1.ObjectMeta{Name: resourceName},
 					Spec: corev1alpha1.JSHookSpec{
+						Bindings: []corev1alpha1.HookBinding{{
+							Name: "watch-cm",
+							ResourceRule: corev1alpha1.ResourceRule{
+								APIGroups:   []string{""},
+								APIVersions: []string{"v1"},
+								Resources:   []string{"configmaps"},
+							},
+							Events: []corev1alpha1.HookEvent{corev1alpha1.HookEventAdded},
+						}},
 						Source: corev1alpha1.JSSource{
-							Inline: `function config() {
-								return {
-									configVersion: "v1",
-									onStartup: 5,
-									kubernetes: [{
-										name: "watch-cm",
-										apiVersion: "v1",
-										kind: "ConfigMap",
-										executeHookOnEvent: ["Added"],
-									}],
-								};
-							}
-							function handle() {}`,
+							Inline: `function handle() {}`,
 						},
 					},
 				}
@@ -106,8 +115,7 @@ var _ = Describe("JSHook Controller", func() {
 				g.Expect(cond).NotTo(BeNil())
 				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			}, "10s", "20ms").Should(Succeed())
-			Expect(updated.Status.Bindings).To(ContainElement("kubernetes:v1/ConfigMap/watch-cm"))
-			Expect(updated.Status.Bindings).To(ContainElement("onStartup:5 (inactive)"))
+			Expect(updated.Status.Bindings).To(ContainElement("watch-cm:v1/configmaps"))
 			Expect(updated.Status.Instance).NotTo(BeNil())
 			Expect(updated.Status.Instance.SourceHash).NotTo(BeEmpty())
 		})
@@ -120,7 +128,10 @@ var _ = Describe("JSHook Controller", func() {
 			nn := types.NamespacedName{Name: name}
 			Expect(k8sClient.Create(ctx, &corev1alpha1.JSHook{
 				ObjectMeta: metav1.ObjectMeta{Name: name},
-				Spec:       corev1alpha1.JSHookSpec{Source: corev1alpha1.JSSource{Inline: inline}},
+				Spec: corev1alpha1.JSHookSpec{
+					Bindings: []corev1alpha1.HookBinding{sampleBinding},
+					Source:   corev1alpha1.JSSource{Inline: inline},
+				},
 			})).To(Succeed())
 			DeferCleanup(func() {
 				hook := &corev1alpha1.JSHook{}
@@ -163,8 +174,7 @@ var _ = Describe("JSHook Controller", func() {
 			Expect(recorder.Events).To(Receive(ContainSubstring(conditions.EventEntrypointMissing)))
 			Expect(reg.Len()).To(BeZero())
 		},
-		Entry("no handle", "no-handle-hook", `function config() { return {}; }`, "handle"),
-		Entry("no config", "no-config-hook", `function handle() {}`, "config"),
+		Entry("no handle", "no-handle-hook", `function notHandle() {}`, "handle"),
 	)
 
 	It("clears lastReconcile.error after fail-then-fix and keeps a steady status", func() {
@@ -174,7 +184,10 @@ var _ = Describe("JSHook Controller", func() {
 		nn := types.NamespacedName{Name: "fail-then-fix"}
 		Expect(k8sClient.Create(ctx, &corev1alpha1.JSHook{
 			ObjectMeta: metav1.ObjectMeta{Name: nn.Name},
-			Spec:       corev1alpha1.JSHookSpec{Source: corev1alpha1.JSSource{Inline: `throw new Error("boom")`}},
+			Spec: corev1alpha1.JSHookSpec{
+				Bindings: []corev1alpha1.HookBinding{sampleBinding},
+				Source:   corev1alpha1.JSSource{Inline: `throw new Error("boom")`},
+			},
 		})).To(Succeed())
 		DeferCleanup(func() {
 			hook := &corev1alpha1.JSHook{}
@@ -207,7 +220,7 @@ var _ = Describe("JSHook Controller", func() {
 		Expect(failed.Status.LastReconcile).NotTo(BeNil())
 		Expect(failed.Status.LastReconcile.Error).NotTo(BeEmpty())
 
-		failed.Spec.Source.Inline = `function config() { return {}; } function handle() {}`
+		failed.Spec.Source.Inline = `function handle() {}`
 		Expect(k8sClient.Update(ctx, failed)).To(Succeed())
 		fixed := reconcileUntil(conditions.ReasonReconciled)
 		Expect(fixed.Status.ObservedGeneration).To(Equal(fixed.Generation))

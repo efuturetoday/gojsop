@@ -109,8 +109,9 @@ spec:
                 type: string
               namespaceSelector:
                 description: |-
-                  NamespaceSelector restricts which namespaces are subject to this
-                  policy. Forwarded to webhooks[].namespaceSelector.
+                  NamespaceSelector matches the labels of the object's namespace.
+                  A cluster-scoped object has no namespace and therefore matches only
+                  when the selector is empty.
                 properties:
                   matchExpressions:
                     description: matchExpressions is a list of label selector requirements.
@@ -156,8 +157,7 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               objectSelector:
-                description: ObjectSelector restricts which objects are subject to
-                  this policy.
+                description: ObjectSelector matches the labels of the object itself.
                 properties:
                   matchExpressions:
                     description: matchExpressions is a list of label selector requirements.
@@ -211,14 +211,20 @@ spec:
                     AdmissionRule mirrors a single rule entry inside a *WebhookConfiguration's
                     webhooks[].rules[]. The reconciler pastes these straight through into the
                     aggregated central VWC/MWC.
+
+                    Resource selection is the shared ResourceRule, so a rule here and a binding
+                    on a JSHook name resources the same way (api-design.R10).
                   properties:
                     apiGroups:
+                      description: APIGroups is the list of API groups, "" for the
+                        core group.
                       items:
                         type: string
                       minItems: 1
                       type: array
                       x-kubernetes-list-type: set
                     apiVersions:
+                      description: APIVersions is the list of versions, e.g. ["v1"].
                       items:
                         type: string
                       minItems: 1
@@ -238,6 +244,8 @@ spec:
                       type: array
                       x-kubernetes-list-type: set
                     resources:
+                      description: Resources is the list of plural resource names,
+                        e.g. ["configmaps"].
                       items:
                         type: string
                       minItems: 1

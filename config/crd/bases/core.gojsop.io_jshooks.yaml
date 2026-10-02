@@ -65,6 +65,191 @@ spec:
           spec:
             description: spec defines the desired state of JSHook
             properties:
+              bindings:
+                description: |-
+                  Bindings tell the operator which resources to watch and which events
+                  call handle(). At least one is required: a hook that watches nothing
+                  can never run.
+
+                  Declared here rather than returned by the script, so the apiserver
+                  validates them on apply, kubectl shows them without reading the
+                  source, and the operator knows the hook's scope before it runs any
+                  user code (api-design.R11).
+                items:
+                  description: |-
+                    HookBinding is one slice of the cluster a JSHook reacts to. It is the
+                    counterpart of AdmissionRule: same resource selection, same object
+                    matching, a different trigger.
+                  properties:
+                    apiGroups:
+                      description: APIGroups is the list of API groups, "" for the
+                        core group.
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    apiVersions:
+                      description: APIVersions is the list of versions, e.g. ["v1"].
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    events:
+                      default:
+                      - Added
+                      - Modified
+                      - Deleted
+                      description: Events selects which watch events call handle().
+                        Defaults to all three.
+                      items:
+                        description: HookEvent is a watch event that triggers a JSHook
+                          binding.
+                        enum:
+                        - Added
+                        - Modified
+                        - Deleted
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                    name:
+                      description: |-
+                        Name identifies this binding in the binding context handed to
+                        handle(), in status.bindings and in events. Must be unique within the
+                        hook.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    namespaceSelector:
+                      description: |-
+                        NamespaceSelector matches the labels of the object's namespace.
+                        A cluster-scoped object has no namespace and therefore matches only
+                        when the selector is empty.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    objectSelector:
+                      description: ObjectSelector matches the labels of the object
+                        itself.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    resources:
+                      description: Resources is the list of plural resource names,
+                        e.g. ["configmaps"].
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    scope:
+                      description: Scope is one of "*" (default), "Namespaced", "Cluster".
+                      enum:
+                      - '*'
+                      - Namespaced
+                      - Cluster
+                      type: string
+                    synchronization:
+                      default: true
+                      description: |-
+                        Synchronization asks for one initial call carrying every object that
+                        already exists, before any event is delivered. With it disabled those
+                        objects arrive as Added events instead.
+                      type: boolean
+                  required:
+                  - apiGroups
+                  - apiVersions
+                  - name
+                  - resources
+                  type: object
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               limits:
                 description: Limits caps memory and per-call execution time of the
                   JS instance.
@@ -155,6 +340,7 @@ spec:
                   rule: (has(self.inline)?1:0) + (has(self.configMapRef)?1:0) + (has(self.oci)?1:0)
                     == 1
             required:
+            - bindings
             - source
             type: object
           status:
@@ -162,13 +348,9 @@ spec:
             properties:
               bindings:
                 description: |-
-                  Bindings are the resolved bindings the hook declared in its config()
-                  call (kubernetes/schedule/onStartup), echoed here so users can see what
-                  the hook is subscribed to.
-
-                  A binding the operator does not act on carries the suffix
-                  " (inactive)". Today that is every schedule and onStartup binding:
-                  they are parsed and echoed here, but nothing ever fires them.
+                  Bindings echoes the watches the operator actually established, one
+                  entry per binding and resource, so a user sees the resolved scope
+                  without re-deriving it from spec.bindings.
                 items:
                   type: string
                 type: array

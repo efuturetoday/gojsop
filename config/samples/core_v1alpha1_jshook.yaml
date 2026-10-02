@@ -6,25 +6,21 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: configmap-sync
 spec:
+  bindings:
+    - name: watch-source-configmaps
+      apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["configmaps"]
+      events: ["Added", "Modified", "Deleted"]
+      # Only ConfigMaps that opt in reach the script. Filtering here instead
+      # of in JS keeps the watch cheap and the hook's scope readable.
+      objectSelector:
+        matchLabels:
+          gojsop.io/sync: "true"
   source:
     inline: |
       // Every call starts from a fresh snapshot of this script, so globals
       // set inside handle() are gone at the next call.
-      function config() {
-        return {
-          configVersion: "v1",
-          kubernetes: [{
-            name: "watch-source-configmaps",
-            apiVersion: "v1",
-            kind: "ConfigMap",
-            executeHookOnEvent: ["Added", "Modified", "Deleted"],
-            // Only react to ConfigMaps that opt in via this annotation.
-            // (selector evaluation lives in JS — the dispatcher hands us
-            //  every ConfigMap event and we filter here.)
-          }],
-        };
-      }
-
       function handle(ctx) {
         for (const evt of ctx) {
           const obj = evt.object;

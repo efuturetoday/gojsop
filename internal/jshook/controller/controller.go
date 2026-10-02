@@ -27,6 +27,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,7 +40,6 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
-	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
 	"github.com/o-haase/gojsop/internal/jsrun"
@@ -109,39 +109,25 @@ func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message 
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=core.gojsop.io,resources=jshooks/finalizers,verbs=update
+
+// The dispatcher resolves a binding's namespaceSelector against namespace
+// labels, so the operator itself has to read namespaces (jshook.R22).
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // MVP: hooks can watch and mutate any resource. Phase 2 will narrow this
 // based on the bindings each hook actually declares (per-hook ServiceAccount).
 // +kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch;create;update;patch;delete
 
-// readConfig is the registry PostBuildHook that runs jshook.ReadConfig on a
-// freshly built VM and stashes the *jshook.Config in State.Meta. The
-// reconciler reads it back via configFromMeta. This keeps the config off the
-// engine and inside the feature package.
+// requireHandle is the registry PostBuildHook. A hook's script has to export
+// handle(); what it reacts to is spec.bindings, not something the script
+// returns, so nothing else has to run at build time.
 // jshook.R2
-func readConfig(ctx context.Context, s jsrun.Script) (any, error) {
-	if !s.HasExport("config") {
-		return nil, &jsrun.MissingExportError{Name: "config"}
-	}
+func requireHandle(_ context.Context, s jsrun.Script) (any, error) {
 	if !s.HasExport("handle") {
 		return nil, &jsrun.MissingExportError{Name: "handle"}
 	}
-	cfg, err := jshook.ReadConfig(ctx, s)
-	if err != nil {
-		return nil, err
-	}
-	return cfg, nil
-}
-
-func configFromMeta(meta any) *jshook.Config {
-	if meta == nil {
-		return nil
-	}
-	if cfg, ok := meta.(*jshook.Config); ok {
-		return cfg
-	}
-	return nil
+	return nil, nil
 }
 
 // jshook.R14
@@ -198,7 +184,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		SourceHash: srcHash,
 		Limits:     lim,
 		Host:       host,
-		PostBuild:  readConfig,
+		PostBuild:  requireHandle,
 		ResetToken: resetToken,
 		Backoff:    r.Backoff,
 	})
@@ -229,13 +215,6 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	cfg := configFromMeta(st.Meta)
-	if cfg == nil {
-		return r.fail(ctx, &hook, conditions.EventConfigInvalid,
-			"config() returned non-object",
-			"hook does not export a config() function")
-	}
-
 	if r.Dispatcher != nil && (restarted || hook.Status.ObservedGeneration != hook.Generation) {
 		// Bind a copy of the hook into the emitter closure so the recorder
 		// has a target with stable UID/ObjectMeta for the lifetime of the
@@ -244,7 +223,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		emit := func(eventType, reason, message string) {
 			r.event(hookForEvents, eventType, reason, message)
 		}
-		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, cfg, emit); err != nil {
+		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, hook.Spec.Bindings, emit); err != nil {
 			log.Error(err, "subscribing bindings")
 			return r.fail(ctx, &hook, conditions.EventSubscribeFailed,
 				"subscribe failed",
@@ -252,7 +231,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	bindings := summarizeBindings(cfg)
+	bindings := summarizeBindings(hook.Spec.Bindings)
 	startedAt := metav1.NewTime(st.PreparedAt)
 	apimeta.SetStatusCondition(&hook.Status.Conditions, metav1.Condition{
 		Type:               conditions.Ready,
@@ -376,25 +355,22 @@ func limitsFromSpec(r *corev1alpha1.JSLimits) jsrun.Limits {
 	}
 }
 
-// InactiveSuffix marks a binding in status.bindings that the operator parses
-// and echoes but never acts on (api-design.R6).
-const InactiveSuffix = " (inactive)"
-
-// summarizeBindings renders the hook's bindings for status.bindings. Schedule
-// and onStartup bindings are marked inactive: the dispatcher only watches
-// Kubernetes resources, so nothing ever fires them (DISP-1).
-//
-// jshook.R16
-func summarizeBindings(cfg *jshook.Config) []string {
-	out := make([]string, 0, len(cfg.Kubernetes)+len(cfg.Schedule)+1)
-	for _, b := range cfg.Kubernetes {
-		out = append(out, fmt.Sprintf("kubernetes:%s/%s/%s", b.APIVersion, b.Kind, b.Name))
-	}
-	for _, s := range cfg.Schedule {
-		out = append(out, fmt.Sprintf("schedule:%s/%s%s", s.Crontab, s.Name, InactiveSuffix))
-	}
-	if cfg.OnStartup > 0 {
-		out = append(out, fmt.Sprintf("onStartup:%d%s", cfg.OnStartup, InactiveSuffix))
+// summarizeBindings renders status.bindings: one line per binding and
+// resource, in the form "name:group/version/resource". Every line is a watch
+// the operator actually established — there is no inactive entry, because a
+// binding the dispatcher cannot start fails the reconcile instead.
+// jshook.R23
+func summarizeBindings(bindings []corev1alpha1.HookBinding) []string {
+	out := make([]string, 0, len(bindings))
+	for _, b := range bindings {
+		for _, group := range b.APIGroups {
+			for _, version := range b.APIVersions {
+				gv := schema.GroupVersion{Group: group, Version: version}.String()
+				for _, resource := range b.Resources {
+					out = append(out, fmt.Sprintf("%s:%s/%s", b.Name, gv, resource))
+				}
+			}
+		}
 	}
 	return out
 }

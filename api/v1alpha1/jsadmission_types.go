@@ -23,21 +23,12 @@ import (
 // AdmissionRule mirrors a single rule entry inside a *WebhookConfiguration's
 // webhooks[].rules[]. The reconciler pastes these straight through into the
 // aggregated central VWC/MWC.
+//
+// Resource selection is the shared ResourceRule, so a rule here and a binding
+// on a JSHook name resources the same way (api-design.R10).
 type AdmissionRule struct {
-	// +required
-	// +listType=set
-	// +kubebuilder:validation:MinItems=1
-	APIGroups []string `json:"apiGroups"`
-
-	// +required
-	// +listType=set
-	// +kubebuilder:validation:MinItems=1
-	APIVersions []string `json:"apiVersions"`
-
-	// +required
-	// +listType=set
-	// +kubebuilder:validation:MinItems=1
-	Resources []string `json:"resources"`
+	// ResourceRule selects which resources the apiserver forwards.
+	ResourceRule `json:",inline"`
 
 	// Operations the apiserver should send.
 	// +required
@@ -45,11 +36,6 @@ type AdmissionRule struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:items:Enum=CREATE;UPDATE;DELETE;CONNECT;*
 	Operations []string `json:"operations"`
-
-	// Scope is one of "*" (default), "Namespaced", "Cluster".
-	// +optional
-	// +kubebuilder:validation:Enum="*";Namespaced;Cluster
-	Scope string `json:"scope,omitempty"`
 }
 
 // JSAdmissionSpec defines the desired state of a JSAdmission policy.
@@ -89,14 +75,11 @@ type JSAdmissionSpec struct {
 	// +optional
 	MatchPolicy string `json:"matchPolicy,omitempty"`
 
-	// NamespaceSelector restricts which namespaces are subject to this
-	// policy. Forwarded to webhooks[].namespaceSelector.
-	// +optional
-	NamespaceSelector *metav1.LabelSelector `json:"namespaceSelector,omitempty"`
-
-	// ObjectSelector restricts which objects are subject to this policy.
-	// +optional
-	ObjectSelector *metav1.LabelSelector `json:"objectSelector,omitempty"`
+	// ObjectMatch restricts which namespaces and objects are subject to this
+	// policy. Forwarded to webhooks[].namespaceSelector and
+	// webhooks[].objectSelector. Same fields a JSHook binding uses
+	// (api-design.R10).
+	ObjectMatch `json:",inline"`
 
 	// TimeoutSeconds bounds a single admission review call. The apiserver
 	// receives this as webhooks[].timeoutSeconds; our HTTP handler wraps the
