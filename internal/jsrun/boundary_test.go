@@ -23,6 +23,7 @@ const (
 	registry   = modPath + "internal/jsregistry"
 	sourcePkg  = modPath + "internal/jssource"
 	kubehost   = modPath + "internal/jsengine/kubehost"
+	jslogPkg   = modPath + "internal/jslog"
 	runnerPort = modPath + "internal/jsrun"
 )
 
@@ -105,8 +106,10 @@ func TestImportBoundary_EngineStaysBehindRegistry(t *testing.T) {
 		if importsPkg(imps, oldQJSPkg) {
 			t.Errorf("%s imports fastschema/qjs: the engine is our own QuickJS-ng build", pkg)
 		}
-		if slices.Contains(imps, enginePkg) && pkg != registry && pkg != kubehost {
-			t.Errorf("%s imports internal/jsengine: only jsregistry and kubehost may", pkg)
+		// Host binders (kubehost, jslog) define the surface a script sees and
+		// are part of the engine side; everyone else goes through jsrun.
+		if slices.Contains(imps, enginePkg) && pkg != registry && pkg != kubehost && pkg != jslogPkg {
+			t.Errorf("%s imports internal/jsengine: only jsregistry and the host binders may", pkg)
 		}
 		if pkg == registry && slices.Contains(imps, sourcePkg) {
 			t.Errorf("jsregistry imports jssource: sources are loaded by controllers (js-registry.R3)")

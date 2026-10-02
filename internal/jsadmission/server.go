@@ -22,6 +22,7 @@ import (
 
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
+	"github.com/o-haase/gojsop/internal/jslog"
 	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
@@ -211,6 +212,21 @@ func publishWarning(entry PolicyEntry, reason, message string) {
 	}
 }
 
+// routeConsole gives the policy's own words a destination. Everything goes to
+// the operator log; console.warn and console.error also become an Event on the
+// policy, the only surface its author can read (EXEC-10).
+//
+// The Event message is author-controlled and therefore the one exception to
+// the low-cardinality rule above. jslog caps the text, Collector.Route caps
+// how many lines of one review become Events.
+// js-execution.R17
+func routeConsole(log logr.Logger, entry PolicyEntry, c *jslog.Collector) {
+	c.Route(
+		func(l jslog.Line) { log.V(1).Info("console."+string(l.Level), "message", l.Text) },
+		func(l jslog.Line) { publishWarning(entry, conditions.EventScriptMessage, l.Text) },
+	)
+}
+
 // review runs the policy and produces an AdmissionResponse. UID is always
 // echoed from the request. failurePolicy decides Allowed on JS errors.
 //
@@ -240,7 +256,11 @@ func (s *Server) review(r *http.Request, entry PolicyEntry, req *admissionv1.Adm
 	callCtx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
+	console := &jslog.Collector{}
+	callCtx = jslog.WithSink(callCtx, console)
+
 	result, res, callErr := Handle(callCtx, s.Runner, jsrun.AdmissionKey(entry.Key), jsReq, entry.Mutating)
+	routeConsole(log, entry, console)
 	if callErr != nil {
 		// ErrVMUnavailable: not prepared yet, or the policy's prepared script
 		// is being built again (source/limits changed, manual reset).

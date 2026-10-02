@@ -36,6 +36,7 @@ import (
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
+	"github.com/o-haase/gojsop/internal/jslog"
 	"github.com/o-haase/gojsop/internal/jsrun"
 )
 
@@ -480,7 +481,9 @@ func (s *subscription) runWorker(ctx context.Context) {
 // jshook.R11
 // jshook.R12
 func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
-	out, res, err := jshook.Handle(parent, s.reg, jsrun.HookKey(s.key), []jshook.BindingContext{bc})
+	console := &jslog.Collector{}
+	out, res, err := jshook.Handle(jslog.WithSink(parent, console), s.reg, jsrun.HookKey(s.key), []jshook.BindingContext{bc})
+	s.routeConsole(logger, console, bc)
 	if err != nil {
 		// ErrVMUnavailable: no script now (prepared again meanwhile), retry.
 		// ErrUnknownKey: the hook was dropped (race with reconciler delete).
@@ -503,7 +506,7 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 	case jsrun.OutcomeMemoryLimit:
 		logger.Error(res.Err, "handle() hit memory limit",
 			"binding", bc.Binding, "event", bc.WatchEvent)
-		s.publish(corev1.EventTypeWarning, conditions.EventHandleFailed,
+		s.publishWarning(conditions.EventHandleFailed,
 			"handle() exceeded its memory limit")
 		s.requeue(qkey, bc)
 
@@ -512,7 +515,7 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		// of the hook and earns a Warning; a cancelled parent means
 		// Subscribe or Drop is stopping this worker.
 		if parent.Err() == nil {
-			s.publish(corev1.EventTypeWarning, conditions.EventHandleTimeout,
+			s.publishWarning(conditions.EventHandleTimeout,
 				"handle() exceeded its timeout")
 		}
 		logger.Info("handle() cancelled",
@@ -525,7 +528,7 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		// cardinality at admission/event-loop volume. The verbose error
 		// reaches the operator log only; the hook's own CR shows nothing
 		// (STAT-4, EXEC-10).
-		s.publish(corev1.EventTypeWarning, conditions.EventHandleFailed,
+		s.publishWarning(conditions.EventHandleFailed,
 			"handle() returned an error")
 		s.requeue(qkey, bc)
 
@@ -535,6 +538,27 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		}
 		s.queue.Forget(qkey)
 	}
+}
+
+// routeConsole gives the script's own words a destination. Everything goes
+// to the operator log; console.warn and console.error also become an Event on
+// the hook, because that is the only surface the person who wrote the hook
+// can read (EXEC-10).
+//
+// The Event message is author-controlled and therefore the one exception to
+// the low-cardinality rule for Event messages. jslog caps the text and
+// Collector.Route caps how many lines of one call become Events.
+// js-execution.R17
+func (s *subscription) routeConsole(logger logr.Logger, c *jslog.Collector, bc jshook.BindingContext) {
+	c.Route(
+		func(l jslog.Line) {
+			logger.V(1).Info("console."+string(l.Level),
+				"binding", bc.Binding, "event", bc.WatchEvent, "message", l.Text)
+		},
+		func(l jslog.Line) {
+			s.publishWarning(conditions.EventScriptMessage, l.Text)
+		},
+	)
 }
 
 // noVM handles an event for a hook that has no VM now. A hook that is
@@ -548,11 +572,12 @@ func (s *subscription) noVM(logger logr.Logger, qkey eventKey, bc jshook.Binding
 	s.requeue(qkey, bc)
 }
 
-// publish forwards to the EventEmitter the reconciler installed at
-// Subscribe time. Nil-safe.
-func (s *subscription) publish(eventType, reason, message string) {
+// publishWarning forwards to the EventEmitter the reconciler installed at
+// Subscribe time. Everything the dispatcher has to say about a call is a
+// Warning; the quiet path is the log. Nil-safe.
+func (s *subscription) publishWarning(reason, message string) {
 	if s.emit != nil {
-		s.emit(eventType, reason, message)
+		s.emit(corev1.EventTypeWarning, reason, message)
 	}
 }
 

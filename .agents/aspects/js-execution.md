@@ -77,7 +77,7 @@ status: 0 ok, 1 script exception (output: `message\nstack`), 2 interrupted,
 
 | Part | Question | Answer |
 |---|---|---|
-| block | What code does the work, once? | `jsengine.Engine` (one wazero runtime, compiled `engine.wasm`, compilation cache), `jsengine.New` and `jsengine.VM` (the only wrapper of wazero and the ABI), `jsengine.Host` for host functions; run through the port `jsrun.Runner.Invoke` (data path) and prepared through `jsrun.Scripts.Ensure` (lifecycle path), implemented by `jsregistry.Registry.Call`. No second way: `jsadmission` decodes the result from JSON (`jsengine.VM.Invoke`). |
+| block | What code does the work, once? | `jsengine.Engine` (one wazero runtime, compiled `engine.wasm`, compilation cache), `jsengine.New` and `jsengine.VM` (the only wrapper of wazero and the ABI), `jsengine.Host` for host functions (`Func` for a one-argument host call, `Shim` for JS that wraps it, as `jslog` does for the variadic `console`); run through the port `jsrun.Runner.Invoke` (data path) and prepared through `jsrun.Scripts.Ensure` (lifecycle path), implemented by `jsregistry.Registry.Call`. No second way: `jsadmission` decodes the result from JSON (`jsengine.VM.Invoke`). |
 | example | Which real use should others copy? | `jshook.Handle` and `jsadmission.Handle`, typed wrappers over `jsrun.Runner.Invoke`. |
 | test helper | How does a test use the aspect without effort? | `jsengine.New` with `jsengine.Limits{}` builds a real VM in a test (the process-wide engine starts on first use); `kubehost` tests use the helper `newKubeHost`. No shared harness package (searched `_test.go` for helpers and fakes). |
 | sides | Which sides does it touch? | The operator process (Go) and the C glue compiled into `engine.wasm`, which the operator embeds. |
@@ -152,6 +152,9 @@ stays at tens of microseconds, a timeout costs its deadline).
 - **R16** Restore a VM only through `jsengine.Snapshot.NewVM` from a snapshot that `jsengine.VM.Snapshot` took: a new instance without its start function, memory grown to the size of the snapshot, only the pages that differ from a fresh instance written back, the host binder and the limits of the snapshot set again, then `gj_update_stack_top` and `gj_reseed` with a new random seed. `Math.random` is our own xorshift64* in `glue.c`, seeded per VM.
   Why: a restore must cost a fraction of a millisecond and the same memory must not repeat in every snapshot (a sparse snapshot of a small policy is tens of KB, not the whole heap); without a reseed every call of a script would see the same random numbers. The QuickJS atom hash seed stays the one of the snapshot, which only shapes hash tables.
   Gate: `TestSnapshot_EveryVMStartsFromTheSameState`, `TestSnapshot_KeepsLimitsAndHost`, `TestSnapshot_ReseedsMathRandom`, `TestSnapshot_ConcurrentRestores`, `TestSnapshot_IsSparse`; the cost guard is `BenchmarkSnapshot_Shot`.
+- **R17** Every VM gets `globalThis.console` (`log`, `info`, `debug`, `warn`, `error`), bound by `jslog.Binder` next to the `kube` surface. The lines go to the `jslog.Sink` in the context of the running call, so one prepared script serves calls of different callers. A call whose caller installed no sink drops the lines and runs on. Callers send every line to the operator log at `V(1)`; `warn` and `error` also become an Event with reason `ScriptMessage` on the hook or policy that wrote them, capped at `jslog.MaxTextBytes` per line and `jslog.MaxVisibleEvents` per call. That Message is the one exception to the low-cardinality rule for Event messages (status-conditions): it is written by the author of the script, for the person who deployed it.
+  Why: without it a script has no voice at all — the only other globals are `kube.*`, so an author can neither trace their own code nor explain a failure to the person who deployed the hook, who usually cannot read the operator log.
+  Gate: `TestConsole_EveryLevelReachesTheSink`, `TestConsole_JoinsEveryArgument`, `TestConsole_LogsAnErrorReadably`, `TestConsole_CapsOneLine`, `TestConsole_WithoutSink_DoesNotFailTheScript`, `TestConsole_RawHostFunctionIsHidden`, `TestSharedFactory_BothSurfaces_BindTheConsole`; the routing to log and Event: `TestDispatcher_ConsoleWarning_BecomesAnEvent`.
 
 ## Decisions
 
@@ -179,6 +182,5 @@ stays at tens of microseconds, a timeout costs its deadline).
 
 ## Open
 
-EXEC-10
 GATE-7
 GATE-27

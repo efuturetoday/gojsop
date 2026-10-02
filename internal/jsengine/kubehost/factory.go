@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/o-haase/gojsop/internal/jslog"
 )
 
 // Factory mints a per-resource HostBinder. One Factory exists per process;
@@ -41,18 +42,26 @@ func NewSharedFactory(ctx context.Context, dyn dynamic.Interface, mapper meta.RE
 	return &SharedFactory{Ctx: ctx, Dyn: dyn, Mapper: mapper}
 }
 
-// ForHook returns a *KubeHost over the shared client. key and sa are
-// accepted for the Factory contract but ignored: SharedFactory has no
-// per-hook scoping to apply.
+// ForHook returns a *KubeHost over the shared client, plus the script
+// console. key and sa are accepted for the Factory contract but ignored:
+// SharedFactory has no per-hook scoping to apply.
 func (f *SharedFactory) ForHook(_ context.Context, _ types.NamespacedName, _ string) (jsengine.HostBinder, error) {
-	return &KubeHost{Ctx: f.Ctx, Dyn: f.Dyn, Mapper: f.Mapper}, nil
+	return jsengine.Binders(
+		&KubeHost{Ctx: f.Ctx, Dyn: f.Dyn, Mapper: f.Mapper},
+		jslog.Binder{},
+	), nil
 }
 
 // ForAdmission returns a *ReadOnlyKubeHost wrapping a fresh *KubeHost over
-// the shared client. The wrapping is what restricts the bound surface; the
-// underlying client and mapper are identical to ForHook's.
+// the shared client, plus the script console. The wrapping is what restricts
+// the bound surface; the underlying client and mapper are identical to
+// ForHook's. The console is bound on both surfaces: it writes nowhere but
+// into the sink of the call, so it is no side effect on the cluster.
 // kube-access.R2
 // jsadmission.R13
 func (f *SharedFactory) ForAdmission(_ context.Context, _ types.NamespacedName, _ string) (jsengine.HostBinder, error) {
-	return &ReadOnlyKubeHost{KubeHost: &KubeHost{Ctx: f.Ctx, Dyn: f.Dyn, Mapper: f.Mapper}}, nil
+	return jsengine.Binders(
+		&ReadOnlyKubeHost{KubeHost: &KubeHost{Ctx: f.Ctx, Dyn: f.Dyn, Mapper: f.Mapper}},
+		jslog.Binder{},
+	), nil
 }

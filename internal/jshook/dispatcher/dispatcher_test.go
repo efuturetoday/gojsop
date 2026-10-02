@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/o-haase/gojsop/internal/jsengine"
 	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
+	"github.com/o-haase/gojsop/internal/jslog"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 	"github.com/o-haase/gojsop/internal/jsrun"
@@ -87,7 +89,7 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 		e.watches <- struct{}{}
 		return true, w, err
 	})
-	binder := jsengine.HostBinderFunc(func(h *jsengine.Host) error {
+	hooks := jsengine.HostBinderFunc(func(h *jsengine.Host) error {
 		h.Func("enter", func(context.Context, json.RawMessage) (any, error) {
 			e.entered.Add(1)
 			return nil, nil
@@ -125,6 +127,8 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 		})
 		return nil
 	})
+	// The dispatcher's own surface plus the console every script gets.
+	binder := jsengine.Binders(hooks, jslog.Binder{})
 	e.spec = jsrun.Spec{
 		Source: []byte(src), SourceHash: "h", Limits: lim, Host: binder,
 		PostBuild: func(ctx context.Context, _ jsrun.Script) (any, error) {
@@ -710,5 +714,68 @@ function handle(c) { enter(); record(c[0]); }`
 	cs := e.waitCalls(1)
 	if cs[0]["type"] != bcSynchronization {
 		t.Fatalf("event kept across the rebuild: %v", cs[0])
+	}
+}
+
+// A script explains itself. console.warn and console.error reach the person
+// who deployed the hook as a Warning event on the hook's own CR; quieter
+// levels stay in the operator log.
+//
+// js-execution.R17
+func TestDispatcher_ConsoleWarning_BecomesAnEvent(t *testing.T) {
+	const src = `
+function handle(c) {
+  console.debug("quiet");
+  console.log("also quiet");
+  console.error("image tag 'latest' is not allowed");
+  record(c[0]);
+}`
+	e := newEnv(t, src, jsengine.Limits{})
+	e.subscribe(jshook.KubernetesBinding{})
+
+	e.waitEmitted(conditions.EventScriptMessage, 1)
+	events := e.emitted()
+	seen := make([]string, 0, len(events))
+	for _, ev := range events {
+		if ev.Reason != conditions.EventScriptMessage {
+			continue
+		}
+		if ev.Type != corev1.EventTypeWarning {
+			t.Errorf("a console.error must be a Warning, got %q", ev.Type)
+		}
+		seen = append(seen, ev.Message)
+	}
+	if len(seen) == 0 || seen[0] != "image tag 'latest' is not allowed" {
+		t.Errorf("the script's own words did not reach the CR: %v", seen)
+	}
+	for _, m := range seen {
+		if strings.Contains(m, "quiet") {
+			t.Errorf("console.log/debug must not become an Event: %q", m)
+		}
+	}
+}
+
+// A script in a hot loop must not fill etcd with its own Events.
+//
+// js-execution.R17
+func TestDispatcher_ConsoleEventsAreCappedPerCall(t *testing.T) {
+	const src = `
+function handle(c) {
+  for (var i = 0; i < 20; i++) console.warn("noisy " + i);
+  record(c[0]);
+}`
+	e := newEnv(t, src, jsengine.Limits{})
+	e.subscribe(jshook.KubernetesBinding{})
+	e.waitCalls(1)
+	e.waitEmitted(conditions.EventScriptMessage, 1)
+
+	n := 0
+	for _, ev := range e.emitted() {
+		if ev.Reason == conditions.EventScriptMessage {
+			n++
+		}
+	}
+	if n > jslog.MaxVisibleEvents {
+		t.Errorf("one call produced %d Events, cap is %d", n, jslog.MaxVisibleEvents)
 	}
 }

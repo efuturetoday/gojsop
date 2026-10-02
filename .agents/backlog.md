@@ -27,15 +27,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 | Documentation | DOC | none |
 | Operator UI | UI | none (area not decided, UI-1) |
 
-## EXEC: JS execution
-
-- **EXEC-10** `gap` No way for a script to say anything. The only globals are
-  `kube.get/list/apply/delete` (`KubeHost.Bind`); there is no `console.log`,
-  so a hook author cannot trace their own code. Combined with STAT-4 the
-  only evidence of a failing script is the operator pod log, which a hook
-  author usually cannot read. Done when a script can emit a line that
-  reaches the hook's own Events or status.
-
 ## REG: JS registry and restarts
 
 - **REG-3** `gap` No finalizer on JSHook / JSAdmission. Deletion is seen via

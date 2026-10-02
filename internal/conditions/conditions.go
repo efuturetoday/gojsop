@@ -65,6 +65,13 @@ const (
 	EventHandleFailed  = "HandleFailed"
 	EventHandleTimeout = "HandleTimeout"
 
+	// A line the script itself wrote with console.warn / console.error.
+	// The one Reason whose Message is author-controlled rather than drawn
+	// from a finite set: it exists so a hook or policy author can explain a
+	// failure to the person who deployed it. jslog caps the text and the
+	// number of such Events per call (js-execution.R17).
+	EventScriptMessage = "ScriptMessage"
+
 	// Admission review
 	EventReviewPanicked = "ReviewPanicked"
 	EventReviewFailed   = "ReviewFailed"

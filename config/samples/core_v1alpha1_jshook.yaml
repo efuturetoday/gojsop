@@ -35,6 +35,10 @@ spec:
           const namespaces = targets.split(",").map(s => s.trim()).filter(Boolean);
           for (const ns of namespaces) {
             if (ns === obj.metadata.namespace) continue; // never copy onto self
+            // console.log and console.debug go to the operator log;
+            // console.warn and console.error also show up as Warning events
+            // on this JSHook (kubectl describe jshook configmap-sync).
+            console.debug("syncing", obj.metadata.name, "to", ns);
             kube.apply({
               apiVersion: "v1",
               kind: "ConfigMap",

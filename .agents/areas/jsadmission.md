@@ -119,4 +119,4 @@ A policy decides on a request and must not change the cluster, so it can read ot
 
 ## Open
 
-ADM-3, ADM-4, ADM-6, ADM-7, ADM-8, ADM-12, EXEC-2, EXEC-4, EXEC-10, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23
+ADM-3, ADM-4, ADM-6, ADM-7, ADM-8, ADM-12, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23

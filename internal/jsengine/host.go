@@ -19,6 +19,26 @@ type HostFunc func(ctx context.Context, arg json.RawMessage) (any, error)
 // Host collects the functions a HostBinder offers to one VM.
 type Host struct {
 	funcs map[string]HostFunc
+	shims []string
+}
+
+// Shim adds JavaScript that runs right after the host functions are defined
+// and before the user module loads. A binder uses it to wrap its raw host
+// functions in a friendlier API — Func alone can only define a function of
+// exactly one argument.
+func (h *Host) Shim(js string) {
+	h.shims = append(h.shims, js)
+}
+
+// Names returns the registered function names, sorted. It is what a gate
+// checks to see which surface a binder offers a script (kube-access.R2).
+func (h *Host) Names() []string {
+	names := make([]string, 0, len(h.funcs))
+	for n := range h.funcs {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return names
 }
 
 // Func registers fn under name. A dotted name ("kube.get") becomes a
@@ -43,6 +63,30 @@ type HostBinderFunc func(*Host) error
 
 func (f HostBinderFunc) Bind(h *Host) error { return f(h) }
 
+// Binders composes binders into one that binds them in order. A later binder
+// may replace a name an earlier one registered. A nil binder is skipped.
+//
+// The result is a pointer, so each call yields a distinct, comparable value
+// (callers rely on one binder per resource, kube-access.R1).
+func Binders(bs ...HostBinder) HostBinder {
+	return &multiBinder{bs: bs}
+}
+
+type multiBinder struct{ bs []HostBinder }
+
+// Bind implements HostBinder.
+func (m *multiBinder) Bind(h *Host) error {
+	for _, b := range m.bs {
+		if b == nil {
+			continue
+		}
+		if err := b.Bind(h); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // BindHost registers the functions of b on this VM and defines them for the
 // script. Call it once, before LoadModule, so user code sees them. A name that
 // is not registered is not defined: the script sees it as undefined (the
@@ -58,7 +102,7 @@ func (vm *VM) BindHost(b HostBinder) error {
 	if err := b.Bind(h); err != nil {
 		return err
 	}
-	prelude, err := hostPrelude(h.funcs)
+	prelude, err := hostPrelude(h.funcs, h.shims)
 	if err != nil {
 		return err
 	}
@@ -71,8 +115,9 @@ func (vm *VM) BindHost(b HostBinder) error {
 
 // hostPrelude is the script that turns the registered names into JavaScript
 // functions over the import __gj_host, and then removes the import from the
-// global object, so only these closures can reach the host.
-func hostPrelude(funcs map[string]HostFunc) (string, error) {
+// global object, so only these closures can reach the host. The shims run
+// last, so they can wrap the functions just defined.
+func hostPrelude(funcs map[string]HostFunc, funcsShims []string) (string, error) {
 	names := make([]string, 0, len(funcs))
 	for n := range funcs {
 		names = append(names, n)
@@ -100,5 +145,9 @@ func hostPrelude(funcs map[string]HostFunc) (string, error) {
 		}
 	}
 	b.WriteString("})(globalThis.__gj_host);\ndelete globalThis.__gj_host;\n")
+	for _, s := range funcsShims {
+		b.WriteString(s)
+		b.WriteString("\n")
+	}
 	return b.String(), nil
 }
