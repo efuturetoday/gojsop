@@ -90,7 +90,7 @@ Adding a CRD field:
 - **R8** Update `config/samples` and the JS `config()` examples when a field
   changes.
   Why: samples are the first thing users copy.
-  Gate: missing → GATE-15. Violated today → API-4.
+  Gate: `TestControllers`.
 - **R9** Add no second API version and no conversion webhook without a
   recorded decision.
   Why: not recorded.
@@ -110,4 +110,4 @@ Adding a CRD field:
 
 ## Open
 
-API-1, API-2, API-4, API-6, API-7, API-8, GATE-10, GATE-14, GATE-15
+API-1, API-2, API-6, API-7, API-8, GATE-10, GATE-14, GATE-15

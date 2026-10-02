@@ -141,10 +141,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   does not say which sources work.
 - **API-3** `doc` `gojsop.io/restart` annotation value semantics undocumented.
   Any new value restarts; no convention (timestamp, hash, UUID).
-- **API-4** `debt` `config/samples/core_v1alpha1_jshook.yaml` uses fields without
-  effect (schedule, jqFilter, queue, allowFailure). Samples should match what
-  works.
-
 - **API-6** `debt` Scope mismatch: markers and CRDs say `scope=Cluster`
   (`api/v1alpha1/jshook_types.go:67`, `jsadmission_types.go:156`), `PROJECT`
   says `namespaced: true` for both kinds. Fix `PROJECT`.
@@ -207,7 +203,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   RBAC markers.
 
 - **GATE-15** envtest cases for CEL and enum rejection (two sources, tag plus
-  digest, bad enum) and a check that `config/samples` apply.
+  digest, bad enum).
 - **GATE-16** envtest for SourceLoadFailed (event, condition, recovery), for an
   `oci` source (must yield SourceLoadFailed) and for a ConfigMap edit that
   rebuilds the VM.

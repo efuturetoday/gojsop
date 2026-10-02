@@ -53,6 +53,7 @@ var (
 // functions; each spec repeats its ID in its own body.
 // jshook.R2
 // jshook.R15
+// api-design.R8
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 

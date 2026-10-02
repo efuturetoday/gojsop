@@ -1,7 +1,6 @@
 ## Append samples of your project ##
 resources:
 - core_v1alpha1_jshook.yaml
-- core_v1alpha1_jsadmission.yaml
 - core_v1alpha1_jsadmission_validating.yaml
 - core_v1alpha1_jsadmission_mutating.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
