@@ -29,6 +29,13 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## EXEC: JS execution
 
+- **EXEC-10** `gap` No way for a script to say anything. The only globals are
+  `kube.get/list/apply/delete` (`KubeHost.Bind`); there is no `console.log`,
+  so a hook author cannot trace their own code. Combined with STAT-4 the
+  only evidence of a failing script is the operator pod log, which a hook
+  author usually cannot read. Done when a script can emit a line that
+  reaches the hook's own Events or status.
+
 ## REG: JS registry and restarts
 
 - **REG-3** `gap` No finalizer on JSHook / JSAdmission. Deletion is seen via
@@ -116,6 +123,14 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **ADM-8** `decision` When the patch diff fails, `fillResponse` allows the
   request. The reason is not recorded; confirm or deny instead.
+- **ADM-12** `bug` The webhook server only answers on the leader.
+  `Server.Register` runs in the reconcile, and controllers run leader-only,
+  so with `replicas > 1` the Service also routes to replicas that know no
+  policy and answer 404. With `failurePolicy: Fail` that denies matching
+  requests cluster-wide. Harmless today only because
+  `config/manager/manager.yaml` says `replicas: 1`. Blocks OPS-4.
+  Done when either every replica serves every policy, or the deployment
+  cannot scale past one.
 
 ## KUBE: Kubernetes access from JS
 

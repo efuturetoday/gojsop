@@ -523,7 +523,8 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 		logger.Error(res.Err, "handle() failed", "binding", bc.Binding, "event", bc.WatchEvent)
 		// Static message — the JS error string would explode dedup
 		// cardinality at admission/event-loop volume. The verbose error
-		// goes to logs and to status.lastExecution.error.
+		// reaches the operator log only; the hook's own CR shows nothing
+		// (STAT-4, EXEC-10).
 		s.publish(corev1.EventTypeWarning, conditions.EventHandleFailed,
 			"handle() returned an error")
 		s.requeue(qkey, bc)
