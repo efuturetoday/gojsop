@@ -45,8 +45,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `lastReview` were removed in c7d58ac; users cannot see whether `handle()` or
   `validate()` runs or how long it takes. Replaces the stale TODO.md item
   "JSAdmission lastReview only populated on failure". See also OPS-1.
-- **STAT-5** `bug` `status.bindings` lists schedule and onStartup bindings as
-  if active. Fix with DISP-1 or mark them inactive.
 
 ## SRC: JS sources
 
@@ -78,8 +76,9 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 ## DISP: Hook dispatch and bindings
 
 - **DISP-1** `gap` Schedule and onStartup bindings never fire. Decoded and
-  shown in `status.bindings`, but the dispatcher only watches Kubernetes
-  resources (`internal/jshook/dispatcher/dispatcher.go`).
+  shown in `status.bindings` with the suffix ` (inactive)`, but the
+  dispatcher only watches Kubernetes resources
+  (`internal/jshook/dispatcher/dispatcher.go`).
 - **DISP-2** `gap` `jqFilter` declared, not enforced. The dispatcher enqueues
   every event (`KubernetesBinding.JQFilter`).
 - **DISP-3** `gap` `allowFailure` and `queue` accepted on bindings, never read.

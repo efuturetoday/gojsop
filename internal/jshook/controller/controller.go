@@ -376,16 +376,25 @@ func limitsFromSpec(r *corev1alpha1.JSLimits) jsrun.Limits {
 	}
 }
 
+// InactiveSuffix marks a binding in status.bindings that the operator parses
+// and echoes but never acts on (api-design.R6).
+const InactiveSuffix = " (inactive)"
+
+// summarizeBindings renders the hook's bindings for status.bindings. Schedule
+// and onStartup bindings are marked inactive: the dispatcher only watches
+// Kubernetes resources, so nothing ever fires them (DISP-1).
+//
+// jshook.R16
 func summarizeBindings(cfg *jshook.Config) []string {
-	out := make([]string, 0, len(cfg.Kubernetes)+len(cfg.Schedule))
+	out := make([]string, 0, len(cfg.Kubernetes)+len(cfg.Schedule)+1)
 	for _, b := range cfg.Kubernetes {
 		out = append(out, fmt.Sprintf("kubernetes:%s/%s/%s", b.APIVersion, b.Kind, b.Name))
 	}
 	for _, s := range cfg.Schedule {
-		out = append(out, fmt.Sprintf("schedule:%s/%s", s.Crontab, s.Name))
+		out = append(out, fmt.Sprintf("schedule:%s/%s%s", s.Crontab, s.Name, InactiveSuffix))
 	}
 	if cfg.OnStartup > 0 {
-		out = append(out, fmt.Sprintf("onStartup:%d", cfg.OnStartup))
+		out = append(out, fmt.Sprintf("onStartup:%d%s", cfg.OnStartup, InactiveSuffix))
 	}
 	return out
 }

@@ -3,6 +3,8 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
+	"github.com/o-haase/gojsop/internal/jshook"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
 	"github.com/o-haase/gojsop/internal/jsrun"
@@ -240,5 +243,35 @@ func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
 	}
 	if cond := readyCondition(t, c, "manual"); cond.Reason != conditions.ReasonReconciled {
 		t.Fatalf("after the restart: %+v", cond)
+	}
+}
+
+// Schedule and onStartup bindings are echoed in status, but the dispatcher
+// never fires them, so they must not look active (DISP-1).
+//
+// jshook.R16
+func TestSummarizeBindings_MarksUnhandledBindingsInactive(t *testing.T) {
+	got := summarizeBindings(&jshook.Config{
+		OnStartup: 5,
+		Schedule: []jshook.ScheduleBinding{
+			{Name: "nightly", Crontab: "0 3 * * *"},
+		},
+		Kubernetes: []jshook.KubernetesBinding{
+			{Name: "watch-cm", APIVersion: "v1", Kind: "ConfigMap"},
+		},
+	})
+	want := []string{
+		"kubernetes:v1/ConfigMap/watch-cm",
+		"schedule:0 3 * * */nightly (inactive)",
+		"onStartup:5 (inactive)",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("bindings:\n got %q\nwant %q", got, want)
+	}
+	for _, b := range got {
+		inactive := strings.HasSuffix(b, InactiveSuffix)
+		if strings.HasPrefix(b, "kubernetes:") == inactive {
+			t.Errorf("binding %q: only non-kubernetes bindings are inactive today", b)
+		}
 	}
 }

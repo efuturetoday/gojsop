@@ -112,5 +112,5 @@ Add a new failure cause to status:
 
 ## Open
 
-Tracked in [backlog](../backlog.md): STAT-2, STAT-4, STAT-5, API-1, API-10; gates
+Tracked in [backlog](../backlog.md): STAT-2, STAT-4, API-1, API-10; gates
 GATE-8, GATE-10, GATE-13.

@@ -41,6 +41,10 @@ type JSHookStatus struct {
 	// Bindings are the resolved bindings the hook declared in its config()
 	// call (kubernetes/schedule/onStartup), echoed here so users can see what
 	// the hook is subscribed to.
+	//
+	// A binding the operator does not act on carries the suffix
+	// " (inactive)". Today that is every schedule and onStartup binding:
+	// they are parsed and echoed here, but nothing ever fires them.
 	// +listType=set
 	// +optional
 	Bindings []string `json:"bindings,omitempty"`

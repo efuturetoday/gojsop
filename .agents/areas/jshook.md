@@ -121,7 +121,7 @@ instead of events.
 | jshook.R13 | A retried event never overwrites a fresher state of the same object; success ends the retries. | `dispatcher.subscription.requeue` | `TestDispatcher_RetryKeepsFresherStateOfSameObject`, `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
 | jshook.R14 | After the hook is deleted it receives no more events. | `dispatcher.Dispatcher.Drop` | `TestDispatcher_Drop_NoMoreEvents` |
 | jshook.R15 | A namespace (one name) and `labelSelector.matchLabels` restrict the objects delivered. | `jshook.KubernetesBinding` | `TestControllers` |
-| jshook.R16 | A binding field that gojsop does not act on is not presented as working (project rule API-1). Violated today: `schedule`, `onStartup`, `jqFilter`, `allowFailure`, `queue`, other selector forms. | decision API-1 | missing → DISP-1 |
+| jshook.R16 | A binding field that gojsop does not act on is not presented as working (project rule API-1). `schedule` and `onStartup` carry the suffix ` (inactive)` in `status.bindings`. Still silent today: `jqFilter`, `allowFailure`, `queue`, other selector forms. | decision API-1 | `TestSummarizeBindings_MarksUnhandledBindingsInactive`; the silent fields: missing → DISP-11 |
 | jshook.R17 | A hook whose informer does not sync does not block Subscribe or Drop of other hooks; Drop of that hook cancels its pending Subscribe. | `dispatcher.Dispatcher.Subscribe`, `dispatcher.Dispatcher.Drop` | `TestDispatcher_SlowSync_DoesNotBlockOtherHooks` |
 | jshook.R18 | While the VM is not ready the hook is `Ready=False` with reason `Building` (the build runs; the reconcile does not wait for it) or `BuildFailed` (the last build failed; retried with backoff, a source change rebuilds at once). | [js-registry](../aspects/js-registry.md), status-conditions.R7 | `TestReconcile_HangingBuildDoesNotBlockOtherHook`, `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce` |
 | jshook.R19 | While the hook has no prepared script (its build runs, or the build failed) its events are kept and retried with the rate limiter, and reach the script once it is prepared; none is dropped. | [js-registry](../aspects/js-registry.md), js-registry.R19, `dispatcher.subscription.noVM` | `TestDispatcher_NoVM_KeepsEventsAndDeliversAfterBuild` |
@@ -148,4 +148,4 @@ Every rule is held by a test or is `missing → <KEY>`.
 
 ## Open
 
-DISP-1, DISP-2, DISP-3, DISP-4, DISP-5, DISP-6, DISP-7, DISP-10, DISP-11, STAT-5, API-1, EXEC-2
+DISP-1, DISP-2, DISP-3, DISP-4, DISP-5, DISP-6, DISP-7, DISP-10, DISP-11, API-1, EXEC-2
