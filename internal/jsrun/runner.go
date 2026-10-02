@@ -249,6 +249,10 @@ type Scripts interface {
 	Ensure(key Key, spec Spec) State
 	// Drop forgets key, cancels its preparation and releases its script.
 	Drop(key Key)
+	// State reports the state of key without starting a preparation, and
+	// false when the key is unknown. A caller that only reports state — the
+	// leader-only admission controller, which does not Ensure — reads it.
+	State(key Key) (State, bool)
 	// Watch delivers the keys of one kind whose preparation ended, until ctx
 	// ends. Every call gets a stream of its own and every stream sees every
 	// preparation, so a kind may have more than one reader.

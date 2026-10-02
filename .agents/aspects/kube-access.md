@@ -104,8 +104,10 @@ sees CRDs installed after start is not verified.
   Why: calls arrive on the per-hook worker goroutine, and the registry
   serialises calls per VM (held by js-registry.R8), so the type has no locking.
   Gate: review only — no machine can tell which goroutine reads a field.
-- **R8** Wire a `kubehost.Factory` into both reconcilers; `SetupWithManager`
-  fails without one.
+- **R8** Wire a `kubehost.Factory` into every reconciler that builds a VM —
+  `JSHookReconciler` and `JSAdmissionServerReconciler`; `SetupWithManager`
+  fails without one. The leader-only `JSAdmissionReconciler` builds nothing
+  (jsadmission.R20) and needs no factory.
   Why: without a factory every script runs without the `kube` global and no
   error says why. Only a reconciler built bare in a unit test runs without it.
   Gate: `TestSetupWithManager_RequiresKubeHost` (jshook and jsadmission controllers).

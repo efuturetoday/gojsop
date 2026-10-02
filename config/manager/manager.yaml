@@ -21,6 +21,13 @@ spec:
     matchLabels:
       control-plane: controller-manager
       app.kubernetes.io/name: gojsop
+  # Scaling up replicates the admission path and not the hook path: every
+  # replica answers admission requests for every JSAdmission (so a rollout
+  # never leaves a non-leader denying under failurePolicy: Fail), while hook
+  # dispatch, status writes and the central WebhookConfigurations stay with
+  # the leader. The price is that every replica builds every JSAdmission VM,
+  # so the admission memory scales with the replica count.
+  # jsadmission.R20
   replicas: 1
   template:
     metadata:

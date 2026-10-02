@@ -126,14 +126,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **ADM-8** `decision` When the patch diff fails, `fillResponse` allows the
   request. The reason is not recorded; confirm or deny instead.
-- **ADM-12** `bug` The webhook server only answers on the leader.
-  `Server.Register` runs in the reconcile, and controllers run leader-only,
-  so with `replicas > 1` the Service also routes to replicas that know no
-  policy and answer 404. With `failurePolicy: Fail` that denies matching
-  requests cluster-wide. Harmless today only because
-  `config/manager/manager.yaml` says `replicas: 1`. Blocks OPS-4.
-  Done when either every replica serves every policy, or the deployment
-  cannot scale past one.
 
 ## KUBE: Kubernetes access from JS
 
@@ -248,6 +240,12 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   0.17.0, binaryen 129) and a check that the output is identical across macOS and
   Linux (the same build gave identical bytes twice on macOS arm64; Linux is
   untried). Rule: js-execution.R14.
+- **GATE-28** e2e case with `replicas: 2` that shows a request is answered by
+  the replica that is not the leader. The unit tests hold the shape of
+  jsadmission.R20 (every replica registers, no status write, the option is
+  set); only a real Service in front of two pods shows that the apiserver
+  reaches both. Needs a Kind cluster with two ready manager pods and a way to
+  address one pod directly. Rule: jsadmission.R20.
 
 ## DOC: Documentation
 

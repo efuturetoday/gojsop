@@ -507,8 +507,9 @@ func (r *Registry) Invoke(ctx context.Context, key jsrun.Key, export string, in,
 }
 
 // State returns the state of key without starting anything, and false if the
-// key is unknown. It is not part of the port (no caller needs it): tests read
-// the state of a key with it.
+// key is unknown.
+//
+// js-registry.R22
 func (r *Registry) State(key jsrun.Key) (jsrun.State, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

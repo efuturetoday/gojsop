@@ -37,6 +37,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -338,18 +339,42 @@ func main() {
 	// admission policy cannot prevent the manager pod from being re-created.
 	// Other infra namespaces are the user's call.
 	registrar.ExcludeNamespaces = []string{admissionServiceFromEnv().Namespace}
-	registrar.Start(managerCtx)
+	// The Registrar writes the two central WebhookConfigurations, so it needs
+	// exactly one writer. manager.RunnableFunc does not implement
+	// LeaderElectionRunnable, which puts it in the leader-elected group — here
+	// that default is what we want. jsadmission.R20
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		registrar.Start(ctx)
+		<-ctx.Done()
+		return nil
+	})); err != nil {
+		setupLog.Error(err, "unable to add registrar")
+		os.Exit(1)
+	}
+
+	// The serving half of JSAdmission runs on every replica: a non-leader
+	// that answers 404 would deny cluster-wide under failurePolicy: Fail.
+	// jsadmission.R20
+	if err := (&jsadmissionctrl.JSAdmissionServerReconciler{
+		Client:   mgr.GetClient(),
+		Loader:   loaderChain,
+		Scripts:  registry,
+		KubeHost: kubeFactory,
+		Server:   admissionServer,
+		Recorder: mgr.GetEventRecorder("jsadmission-server"),
+		Backoff:  f.backoff(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "JSAdmissionServer")
+		os.Exit(1)
+	}
 
 	if err := (&jsadmissionctrl.JSAdmissionReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Loader:    loaderChain,
 		Scripts:   registry,
-		KubeHost:  kubeFactory,
-		Server:    admissionServer,
 		Registrar: registrar,
 		Recorder:  mgr.GetEventRecorder("jsadmission-controller"),
-		Backoff:   f.backoff(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSAdmission")
 		os.Exit(1)

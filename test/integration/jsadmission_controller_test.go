@@ -22,12 +22,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	"github.com/o-haase/gojsop/internal/conditions"
+	jsadmissionsrv "github.com/o-haase/gojsop/internal/jsadmission"
 	jsadmissionctrl "github.com/o-haase/gojsop/internal/jsadmission/controller"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsrun"
@@ -78,23 +82,52 @@ var _ = Describe("JSAdmission Controller", func() {
 			By("Cleanup the specific resource instance JSAdmission")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &jsadmissionctrl.JSAdmissionReconciler{
+		// Two replicas against one apiserver: each one prepares the script
+		// and publishes the policy for itself, and the status is written
+		// once, by the leader-only reconciler.
+		//
+		// jsadmission.R20
+		It("serves the policy on every replica and reports it once", func() {
+			By("Reconciling the created resource on two replicas")
+			replica := func() *jsadmissionctrl.JSAdmissionServerReconciler {
+				registry := jsregistry.NewRegistry()
+				DeferCleanup(func() { registry.Drop(jsrun.AdmissionKey(typeNamespacedName)) })
+				return &jsadmissionctrl.JSAdmissionServerReconciler{
+					Client:   k8sClient,
+					Loader:   jssource.NewChain(jssource.InlineLoader{}),
+					Scripts:  registry,
+					Server:   jsadmissionsrv.NewServer(registry, logf.Log),
+					KubeHost: nil,
+				}
+			}
+			replicas := []*jsadmissionctrl.JSAdmissionServerReconciler{replica(), replica()}
+			leader := &jsadmissionctrl.JSAdmissionReconciler{
 				Client:  k8sClient,
 				Scheme:  k8sClient.Scheme(),
 				Loader:  jssource.NewChain(jssource.InlineLoader{}),
-				Scripts: jsregistry.NewRegistry(),
+				Scripts: replicas[0].Scripts,
 			}
 
 			// The first reconcile only starts the build; reconcile again until Ready.
 			Eventually(func(g Gomega) {
-				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-					NamespacedName: typeNamespacedName,
-				})
+				for _, r := range replicas {
+					_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+					g.Expect(err).NotTo(HaveOccurred())
+					st, known := r.Scripts.State(jsrun.AdmissionKey(typeNamespacedName))
+					g.Expect(known).To(BeTrue())
+					g.Expect(st.Phase).To(Equal(jsrun.PhaseReady))
+				}
+			}, "20s", "20ms").Should(Succeed())
+
+			By("Reporting the policy Ready from the leader-only reconciler")
+			Eventually(func(g Gomega) {
+				_, err := leader.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 				g.Expect(err).NotTo(HaveOccurred())
-				st, _ := controllerReconciler.Scripts.(*jsregistry.Registry).State(jsrun.AdmissionKey(typeNamespacedName))
-				g.Expect(st.Phase).To(Equal(jsrun.PhaseReady))
+				var got corev1alpha1.JSAdmission
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, &got)).To(Succeed())
+				cond := apimeta.FindStatusCondition(got.Status.Conditions, conditions.Ready)
+				g.Expect(cond).NotTo(BeNil())
+				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			}, "10s", "20ms").Should(Succeed())
 		})
 	})

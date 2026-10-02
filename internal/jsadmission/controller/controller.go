@@ -40,34 +40,30 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsadmission"
-	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
 	"github.com/o-haase/gojsop/internal/jsrun"
 	"github.com/o-haase/gojsop/internal/jssource"
 )
 
-// JSAdmissionReconciler reconciles a JSAdmission object.
+// JSAdmissionReconciler reports a JSAdmission in its status and publishes it
+// to the two central WebhookConfigurations gojsop owns.
 //
-// Each JSAdmission is backed by exactly one persistent QuickJS instance held
-// in the same Registry the JSHookReconciler uses, plus a webhooks[] entry in
-// one of the two central WebhookConfigurations gojsop owns.
+// It is leader-elected, because both of those have exactly one writer: N
+// replicas writing the same status or the same WebhookConfiguration would
+// fight over it. Preparing the script and answering requests is the job of
+// JSAdmissionServerReconciler, which runs on every replica
+// (jsadmission.R20).
 type JSAdmissionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	// Loader resolves spec.source to JS bytes (defaults to inline-only).
+	// Loader resolves spec.source to JS bytes (defaults to inline-only). It
+	// is used only to report a loader failure; the script is prepared by the
+	// server reconciler.
 	Loader *jssource.Chain
-	// Registry owns the per-policy prepared scripts.
+	// Scripts is read, never driven: State tells what the runner holds for a
+	// policy so the status describes what actually serves requests.
 	Scripts jsrun.Scripts
-	// KubeHost mints the host-function surface installed on every JSAdmission VM.
-	// ForAdmission returns a read-only binder — admission policies must not
-	// write to the cluster from the apiserver request path (sideEffects:
-	// None contract), so apply/delete are intentionally not bound.
-	// SetupWithManager requires it; a reconciler built bare in a unit test
-	// gives scripts no kube global.
-	KubeHost kubehost.Factory
-	// Server holds the live policy table the HTTP webhook handler consults.
-	Server *jsadmission.Server
 	// Registrar maintains the central VWC/MWC.
 	Registrar *jsadmission.Registrar
 
@@ -75,10 +71,6 @@ type JSAdmissionReconciler struct {
 	// (build/restart/admission review crashes). Optional — nil-safe so unit
 	// tests that build the reconciler bare keep working.
 	Recorder events.EventRecorder
-
-	// Backoff spaces the retries of a policy whose build failed. Zero fields
-	// use the jsrun defaults. cmd/main.go sets it from the operator flags.
-	Backoff jsrun.Backoff
 }
 
 // eventAction is the action field every event carries; the events.k8s.io API
@@ -99,25 +91,6 @@ func (r *JSAdmissionReconciler) event(obj runtime.Object, eventType, reason, mes
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
-// admissionPostBuild returns a PostBuild closure that asserts the loaded
-// module exposes the entrypoint required by the policy's spec.type
-// (validate for validating, mutate for mutating). A missing entrypoint is
-// surfaced as a typed MissingExportError so the reconciler can map it to
-// the EntrypointMissing event reason without sniffing message strings.
-func admissionPostBuild(mutating bool) jsrun.PostBuildHook {
-	entry := "validate"
-	if mutating {
-		entry = "mutate"
-	}
-	return func(ctx context.Context, s jsrun.Script) (any, error) {
-		_ = ctx
-		if !s.HasExport(entry) {
-			return nil, &jsrun.MissingExportError{Name: entry}
-		}
-		return nil, nil
-	}
-}
-
 // status-conditions.R1
 // status-conditions.R2
 // status-conditions.R5
@@ -128,13 +101,13 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if err := r.Get(ctx, req.NamespacedName, &pol); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.V(1).Info("cleanup started", "phase", "delete")
-			if r.Server != nil {
-				r.Server.Unregister(req.NamespacedName)
-			}
+			// The HTTP table and the prepared script belong to the server
+			// controller, which runs on every replica and drops them there
+			// (jsadmission.R20). The leader owns the central
+			// WebhookConfigurations alone.
 			if r.Registrar != nil {
 				r.Registrar.Remove(req.NamespacedName)
 			}
-			r.Scripts.Drop(jsrun.AdmissionKey(req.NamespacedName))
 			log.V(1).Info("cleanup done", "phase", "delete")
 			return ctrl.Result{}, nil
 		}
@@ -143,6 +116,10 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	priorObservedGen := pol.Status.ObservedGeneration
 	priorWebhookConfig := pol.Status.WebhookConfigName
 
+	// The source is loaded here only to report a loader failure: the status
+	// has exactly one writer, so the moment "your source cannot be read" has
+	// to be seen by that writer. Preparing the script is the server
+	// controller's job (jsadmission.R20).
 	source, err := r.Loader.Load(ctx, pol.Spec.Source)
 	if err != nil {
 		log.Error(err, "loading admission source")
@@ -151,35 +128,21 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			fmt.Sprintf("source: %v", err))
 	}
 	srcHash := jssource.Hash(source)
-	lim := admissionLimitsFromSpec(pol.Spec.Limits)
-	mutating := pol.Spec.Type == "mutating"
-
-	var host jsrun.Host
-	if r.KubeHost != nil {
-		host, err = r.KubeHost.ForAdmission(ctx, req.NamespacedName, "")
-		if err != nil {
-			log.Error(err, "minting kube host")
-			return r.failAdmission(ctx, &pol, conditions.EventBuildFailed,
-				"build failed: kube host",
-				fmt.Sprintf("kube host: %v", err))
-		}
-	}
+	mutating := isMutating(&pol)
 
 	resetToken := pol.GetAnnotations()[conditions.ManualRestartAnnotation]
 
-	// The build runs in the background; the registry notifies this controller
-	// when it ends (SetupWithManager), so a reconcile never waits for it.
-	// js-registry.R15
+	// What runs is what the runner holds, not what was just loaded. A key the
+	// server controller has not reached yet, or one that still holds an older
+	// source, counts as building — reporting Ready for a source no instance
+	// serves would be a lie.
+	// js-registry.R22
 	// jsadmission.R18
-	st := r.Scripts.Ensure(jsrun.AdmissionKey(req.NamespacedName), jsrun.Spec{
-		Source:     source,
-		SourceHash: srcHash,
-		Limits:     lim,
-		Host:       host,
-		PostBuild:  admissionPostBuild(mutating),
-		ResetToken: resetToken,
-		Backoff:    r.Backoff,
-	})
+	st, known := r.Scripts.State(jsrun.AdmissionKey(req.NamespacedName))
+	if !known || st.SourceHash != srcHash {
+		log.V(1).Info("instance not prepared for this source yet")
+		return r.building(ctx, &pol)
+	}
 	switch st.Phase {
 	case jsrun.PhasePreparing:
 		log.V(1).Info("instance building")
@@ -208,26 +171,6 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 
 	path := jsadmission.PathFor(req.NamespacedName, mutating)
-	timeout := callTimeout(pol.Spec.TimeoutSeconds, lim)
-
-	// Publish to the HTTP server first — once the central VWC/MWC points at us,
-	// requests start arriving and a missing entry would 404 under FailurePolicy.
-	if r.Server != nil {
-		// Snapshot the policy meta into the closure so the recorder has a
-		// stable target for the lifetime of this server registration. The
-		// closure is replaced on every reconcile that re-Registers.
-		polForEvents := pol.DeepCopy()
-		emit := func(eventType, reason, message string) {
-			r.event(polForEvents, eventType, reason, message)
-		}
-		r.Server.Register(jsadmission.PolicyEntry{
-			Key:           req.NamespacedName,
-			Mutating:      mutating,
-			Timeout:       timeout,
-			FailurePolicy: admissionregv1.FailurePolicyType(pol.Spec.FailurePolicy),
-			Emit:          emit,
-		})
-	}
 
 	if r.Registrar != nil {
 		apiRules := make([]jsadmission.APIRule, 0, len(pol.Spec.Rules))
@@ -387,31 +330,6 @@ func (r *JSAdmissionReconciler) failAdmissionAfter(ctx context.Context, pol *cor
 	return ctrl.Result{RequeueAfter: requeue}, nil
 }
 
-// admissionLimitsFromSpec maps the CRD's optional Limits to jsrun.Limits.
-func admissionLimitsFromSpec(r *corev1alpha1.JSLimits) jsrun.Limits {
-	if r == nil {
-		return jsrun.Limits{}
-	}
-	return jsrun.Limits{MemoryMB: r.MemoryMB, TimeoutSeconds: r.TimeoutSeconds}
-}
-
-// callTimeout is the deadline of one review: the smaller of the webhook
-// timeout (spec.timeoutSeconds, default 5) and the call limit
-// (spec.limits.timeoutSeconds, default 30). The runner applies the limit on
-// its own; the server needs the smaller value to report a timeout correctly.
-// jsadmission.R11
-func callTimeout(webhookSeconds int32, lim jsrun.Limits) time.Duration {
-	s := min(orInt32(webhookSeconds, 5), lim.WithDefaults().TimeoutSeconds)
-	return time.Duration(s) * time.Second
-}
-
-func orInt32(v, def int32) int32 {
-	if v <= 0 {
-		return def
-	}
-	return v
-}
-
 // SetupWithManager sets up the controller with the Manager.
 //
 // Watches ConfigMaps so spec.source.configMapRef edits trigger a reconcile;
@@ -422,10 +340,6 @@ func (r *JSAdmissionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if r.Scripts == nil {
 		return errors.New("jsrun.Scripts is required")
-	}
-	// kube-access.R8
-	if r.KubeHost == nil {
-		return errors.New("kubehost.Factory is required: without it policies get no kube global")
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&corev1alpha1.JSAdmission{}).
