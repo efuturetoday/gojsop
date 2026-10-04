@@ -53,12 +53,12 @@ func admissionPostBuild(mutating bool) jsrun.PostBuildHook {
 	if mutating {
 		entry = "mutate"
 	}
-	return func(ctx context.Context, s jsrun.Script) (any, error) {
+	return func(ctx context.Context, s jsrun.Script) error {
 		_ = ctx
 		if !s.HasExport(entry) {
-			return nil, &jsrun.MissingExportError{Name: entry}
+			return &jsrun.MissingExportError{Name: entry}
 		}
-		return nil, nil
+		return nil
 	}
 }
 

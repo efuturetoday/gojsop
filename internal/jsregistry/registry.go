@@ -37,8 +37,6 @@ type Prepared struct {
 	PreparedAt time.Time
 	// Limits are the effective limits (defaults applied).
 	Limits jsrun.Limits
-	// Meta is the value the PostBuildHook returned.
-	Meta any
 	// Recoveries is the recovery log as of the install of this script.
 	Recoveries jsrun.Recoveries
 
@@ -138,7 +136,6 @@ func (s *slot) state() jsrun.State {
 			Phase:      jsrun.PhaseReady,
 			PreparedAt: s.prep.PreparedAt,
 			SourceHash: s.prep.Opts.SourceHash,
-			Meta:       s.prep.Meta,
 			Recoveries: s.prep.Recoveries,
 		}
 	default:
@@ -191,10 +188,8 @@ func (r *Registry) build(ctx context.Context, key jsrun.Key, opts jsrun.Spec) (*
 	if err != nil {
 		return nil, fmt.Errorf("%w: snapshot: %v", jsrun.ErrLoadModule, err)
 	}
-	var extra any
 	if opts.PostBuild != nil {
-		extra, err = opts.PostBuild(ctx, vm)
-		if err != nil {
+		if err := opts.PostBuild(ctx, vm); err != nil {
 			// Pass MissingExportError through unchanged so errors.As works at
 			// the reconciler. Other PostBuild errors get tagged with ErrPostBuild for classification.
 			var miss *jsrun.MissingExportError
@@ -207,7 +202,6 @@ func (r *Registry) build(ctx context.Context, key jsrun.Key, opts jsrun.Spec) (*
 	return &Prepared{
 		PreparedAt: time.Now(),
 		Limits:     opts.Limits.WithDefaults(),
-		Meta:       extra,
 		Snapshot:   snap,
 		Opts:       opts,
 	}, nil

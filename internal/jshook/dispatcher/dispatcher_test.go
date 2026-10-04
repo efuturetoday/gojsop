@@ -141,14 +141,14 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 	binder := jsengine.Binders(hooks, jslog.Binder{})
 	e.spec = jsrun.Spec{
 		Source: []byte(src), SourceHash: "h", Limits: lim, Host: binder,
-		PostBuild: func(ctx context.Context, _ jsrun.Script) (any, error) {
+		PostBuild: func(ctx context.Context, _ jsrun.Script) error {
 			if gate := e.hold.Load(); gate != nil {
 				select {
 				case <-*gate:
 				case <-ctx.Done():
 				}
 			}
-			return nil, nil
+			return nil
 		},
 	}
 	_, _, err := registrytest.GetOrLoad(e.reg, context.Background(), jsrun.HookKey(e.key), e.spec)

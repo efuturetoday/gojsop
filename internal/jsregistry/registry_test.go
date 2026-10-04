@@ -316,12 +316,12 @@ func TestRegistry_Ensure_RebuildHasDeadlineAndFailureHoldsNoScript(t *testing.T)
 		SourceHash: "h",
 		Limits:     jsengine.Limits{TimeoutSeconds: 1},
 		// The first build passes; every later build hangs until its ctx ends.
-		PostBuild: func(ctx context.Context, vm jsrun.Script) (any, error) {
+		PostBuild: func(ctx context.Context, vm jsrun.Script) error {
 			if builds.Add(1) == 1 {
-				return nil, nil
+				return nil
 			}
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return ctx.Err()
 		},
 		ResetToken: "a",
 	}
@@ -384,7 +384,7 @@ func TestRegistry_Concurrent_CallsBuildsAndDrop(t *testing.T) {
 			SourceHash: "conc",
 			Limits:     jsengine.Limits{MemoryMB: mem, TimeoutSeconds: 30},
 			ResetToken: reset,
-			PostBuild: func(ctx context.Context, vm jsrun.Script) (any, error) {
+			PostBuild: func(ctx context.Context, vm jsrun.Script) error {
 				n := builds.Add(1)
 				for {
 					m := maxBuilds.Load()
@@ -394,7 +394,7 @@ func TestRegistry_Concurrent_CallsBuildsAndDrop(t *testing.T) {
 				}
 				time.Sleep(5 * time.Millisecond)
 				builds.Add(-1)
-				return nil, nil
+				return nil
 			},
 		}
 	}

@@ -32,7 +32,7 @@ call by the timeout limit, recovers panics, classifies the outcome as ok,
 panic, cancelled, memory limit or error (a wasm trap counts as a panic) and
 closes the VM. Calls of one key run in parallel, each on its own VM; nothing
 of a call survives into the next. `Ensure` is the prepare, `Invoke` the run. The port names no VM, restart or instance: `State`
-(Phase Preparing, Ready or Failed, Err, Attempts, NextAttempt, PreparedAt, Meta,
+(Phase Preparing, Ready or Failed, Err, Attempts, NextAttempt, PreparedAt,
 Recoveries) is all a controller learns about a script. The [js-execution](js-execution.md) aspect covers the
 engine below it.
 
@@ -54,8 +54,7 @@ in `State.Recoveries`) comes only from `Ensure`, with one of three reasons:
 source changed, limits changed or manual. The CRD enum of the reason lists
 exactly these three. The manual restart annotation reaches the port as
 `Spec.ResetToken`: a new value prepares again like a changed source, with
-reason manual. No `Restart` exists on the port. A controller checks required exports in a `PostBuildHook`; per-script data
-it returns lands in `State.Meta` (no caller uses it today, REG-10). The hook sees the new script only as a `jsrun.Script`, never as a VM;
+reason manual. No `Restart` exists on the port. A controller checks required exports in a `PostBuildHook`. The hook sees the new script only as a `jsrun.Script`, never as a VM;
 it runs on the VM the snapshot was taken from, after the snapshot, so what it
 changes does not reach the calls.
 
@@ -77,7 +76,7 @@ bounds the memory all running calls take together.
 ## How to use it
 
 1. In a controller, load the source and compute its hash, then call `Scripts.Ensure` with `jsrun.Spec` (source, hash, limits, host, `PostBuildHook`, `ResetToken`, backoff). Preparing: write `Ready=False`/`Building` and return; the runner notifies the controller through `Scripts.Watch` when the build ends. Failed: write `Ready=False`/`BuildFailed` and requeue after the backoff. Ready: continue.
-2. Compute per-script data in the `PostBuildHook` and read it from `State.Meta`.
+2. Check the entry point of the kind in the `PostBuildHook`.
 3. Run JavaScript only through `Runner.Invoke` (typed wrappers: `jshook.Handle`, `jsadmission.Handle`); dispatch on `Result.Outcome` (nothing to recover: the next call gets a fresh VM); handle `ErrVMUnavailable` from `Runner.Invoke` by retrying later (events) or by your failure policy (admission), and `ErrUnknownKey` as "dropped". Keep no state in the script between calls: every call starts from the snapshot.
 4. Drop the script with `Scripts.Drop` when the resource goes away.
 5. Add a test with `jsregistry.NewRegistry()` (or a `jsrun.Runner` of your own) and carry the rule ID in a comment above it.
@@ -111,9 +110,9 @@ bounds the memory all running calls take together.
 - **R9** Touch `Prepared.Snapshot` only inside `internal/jsregistry`; callers see only `jsrun.State`.
   Why: the field is exported for tests, but restoring VMs is the registry's job. Callers cannot reach it, because they may not import the registry (js-execution.R10). Tests and `cmd` may.
   Gate: `TestImportBoundary_CallersUseOnlyRunnerPort`.
-- **R10** Cache per-script data in `State.Meta` through `PostBuildHook`, never by calling the script from a reconcile.
+- **R10** Check a script in its `PostBuildHook`, never by calling it from a reconcile.
   Why: reconciles must not run user JavaScript outside the build.
-  Gate: review only — a convention about where state lives.
+  Gate: review only — no tool can tell a check from a call.
 - **R11** Record every preparation after the first with its reason in `State.Recoveries` (the per-reason counters and the history ring).
   Why: operators need to see why a script was prepared again; the controllers map `Recoveries` onto the CRD status fields.
   Gate: `TestRegistry_RecoveryHistory_RingAndCounters`.
@@ -183,4 +182,4 @@ bounds the memory all running calls take together.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-3, REG-10.
+Tracked in [backlog](../backlog.md): REG-3.

@@ -123,11 +123,11 @@ func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message 
 // handle(); what it reacts to is spec.bindings, not something the script
 // returns, so nothing else has to run at build time.
 // jshook.R2
-func requireHandle(_ context.Context, s jsrun.Script) (any, error) {
+func requireHandle(_ context.Context, s jsrun.Script) error {
 	if !s.HasExport("handle") {
-		return nil, &jsrun.MissingExportError{Name: "handle"}
+		return &jsrun.MissingExportError{Name: "handle"}
 	}
-	return nil, nil
+	return nil
 }
 
 // jshook.R14

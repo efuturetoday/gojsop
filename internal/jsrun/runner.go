@@ -66,13 +66,13 @@ type Script interface {
 }
 
 // PostBuildHook is invoked once per fresh script after the source has
-// loaded. It returns the value to stash on State.Meta. JSHook uses it to
-// check that handle() exists. Returning a non-nil error aborts the build.
+// loaded. The controllers use it to check that the entry point exists.
+// Returning a non-nil error aborts the build.
 //
 // ctx is the build context, so the build deadline applies.
 //
 // js-registry.R10
-type PostBuildHook func(ctx context.Context, s Script) (meta any, err error)
+type PostBuildHook func(ctx context.Context, s Script) error
 
 // Spec bundles every input a runner needs to prepare (or prepare again) a
 // script. The runner caches the whole struct, so it can recover a script
@@ -173,7 +173,7 @@ type State struct {
 	Err         error
 	Attempts    int
 	NextAttempt time.Time
-	// PreparedAt, Meta and Recoveries are set when Phase == PhaseReady.
+	// PreparedAt and Recoveries are set when Phase == PhaseReady.
 	PreparedAt time.Time
 	// SourceHash is the hash of the source the runner currently holds for the
 	// key: the prepared script when Ready, the attempt in flight when
@@ -181,8 +181,6 @@ type State struct {
 	// state (and does not Ensure) reads it instead of loading the source
 	// again.
 	SourceHash string
-	// Meta is the value the PostBuildHook returned.
-	Meta       any
 	Recoveries Recoveries
 }
 

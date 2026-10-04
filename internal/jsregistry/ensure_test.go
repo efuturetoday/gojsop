@@ -49,10 +49,10 @@ func TestRegistry_Ensure_BuildsAsyncAndNotifies(t *testing.T) {
 	opts := okOpts("h1")
 	started := make(chan struct{})
 	release := make(chan struct{})
-	opts.PostBuild = func(context.Context, jsrun.Script) (any, error) {
+	opts.PostBuild = func(context.Context, jsrun.Script) error {
 		close(started)
 		<-release
-		return nil, nil
+		return nil
 	}
 	if st := reg.Ensure(key, opts); st.Phase != jsrun.PhasePreparing {
 		t.Fatalf("first Ensure: %v, want Building", st.Phase)

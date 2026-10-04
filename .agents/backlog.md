@@ -50,10 +50,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
   already declares `jshooks/finalizers`.
-- **REG-10** `debt` `jsrun.State.Meta` and the return value of a
-  `PostBuildHook` have no reader: `requireHandle` returns nil, nothing reads
-  `Meta` (`internal/jsrun/runner.go:188`). Done when: removed, or a caller
-  needs it.
 
 ## STAT: Status and conditions
 
