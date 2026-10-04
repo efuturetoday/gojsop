@@ -204,7 +204,8 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-19** CI checks for `go mod tidy` drift (`test.yml` runs it, never diffs)
   and `make lint-config`.
 - **GATE-20** e2e hygiene: `make test-e2e` leaves the Kind cluster on failure
-  (`Makefile:89-92`, unverified); `test-e2e.yml:20` installs kind unpinned.
+  (seen 2026-10-04: the cleanup runs only after a passing run). kind is pinned
+  in CI since 2026-10-05.
 - **GATE-22** Edge tests for `jsadmission.Server`: a timeout, a panic and the
   memory limit in `review` each apply `failurePolicy` and the next request
   runs on a fresh instance (jsadmission.R11, R12); bad requests in `serve`
