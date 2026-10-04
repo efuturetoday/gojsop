@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/efuturetoday/gojsop/internal/conditions"
 	"github.com/efuturetoday/gojsop/internal/jsregistry"
 	"github.com/efuturetoday/gojsop/internal/jsregistry/registrytest"
 	"github.com/efuturetoday/gojsop/internal/jsrun"
@@ -395,5 +396,91 @@ func TestServer_NoVM_AppliesFailurePolicyAtOnce(t *testing.T) {
 				t.Fatalf("allowed = %v, want %v (failurePolicy %s)", resp.Allowed, tc.allowed, tc.policy)
 			}
 		})
+	}
+}
+
+// denyLatest denies every request with a fixed reason.
+const denyLatest = `function validate(req) { return { allowed: false, message: "image uses :latest" }; }`
+
+// reviewWith runs one CREATE of pod default/web through a policy with the
+// given enforcement and returns the response and the events it emitted.
+func reviewWith(t *testing.T, src, enforcement string) (*admissionv1.AdmissionResponse, [][2]string) {
+	t.Helper()
+	key := types.NamespacedName{Name: "policy-" + strings.ToLower(enforcement)}
+	srv := NewServer(loadPolicy(t, src, key), logr.Log)
+	events, emit := captureEvents(8)
+	fp := admissionregv1.Fail
+	if enforcement != "Deny" {
+		fp = admissionregv1.Ignore // what the controller hands in (failurePolicyOf)
+	}
+	srv.Register(PolicyEntry{Key: key, FailurePolicy: fp, Enforcement: enforcement, Timeout: 2 * time.Second, Emit: emit})
+	resp := postReview(t, srv.ValidateHandler(), PathFor(key, false), &admissionv1.AdmissionRequest{
+		UID: "u", Operation: admissionv1.Create, Name: "web", Namespace: "default",
+		Kind: metav1.GroupVersionKind{Version: "v1", Kind: "Pod"},
+	})
+	var got [][2]string
+	for {
+		select {
+		case ev := <-events:
+			got = append(got, ev)
+		default:
+			return resp, got
+		}
+	}
+}
+
+func violation(events [][2]string) string {
+	for _, ev := range events {
+		if ev[0] == conditions.EventPolicyViolation {
+			return ev[1]
+		}
+	}
+	return ""
+}
+
+// jsadmission.R27
+func TestServer_EveryDenialIsRecordedAsAViolation(t *testing.T) {
+	resp, events := reviewWith(t, denyLatest, "Deny")
+	if resp.Allowed {
+		t.Fatal("enforcement Deny must deny")
+	}
+	if v := violation(events); v != "denied CREATE Pod default/web: image uses :latest" {
+		t.Fatalf("violation event %q", v)
+	}
+}
+
+// jsadmission.R28
+func TestServer_WarnAdmitsAndTellsTheUser(t *testing.T) {
+	resp, events := reviewWith(t, denyLatest, "Warn")
+	if !resp.Allowed || resp.Result != nil || resp.Patch != nil {
+		t.Fatalf("Warn must admit without status or patch: %+v", resp)
+	}
+	if len(resp.Warnings) != 1 || !strings.Contains(resp.Warnings[0], "would deny: image uses :latest") {
+		t.Fatalf("warnings %v", resp.Warnings)
+	}
+	if v := violation(events); !strings.HasPrefix(v, "would deny (Warn) CREATE Pod default/web") {
+		t.Fatalf("violation event %q", v)
+	}
+}
+
+// jsadmission.R28
+func TestServer_AuditAdmitsSilently(t *testing.T) {
+	resp, events := reviewWith(t, denyLatest, "Audit")
+	if !resp.Allowed || len(resp.Warnings) != 0 {
+		t.Fatalf("Audit must admit without a warning: %+v", resp)
+	}
+	if v := violation(events); !strings.HasPrefix(v, "would deny (Audit)") {
+		t.Fatalf("violation event %q", v)
+	}
+}
+
+// A failing script never denies under Warn or Audit.
+// jsadmission.R28
+func TestServer_WarnAndAuditDoNotDenyWhenTheScriptFails(t *testing.T) {
+	for _, mode := range []string{"Warn", "Audit"} {
+		resp, _ := reviewWith(t, `function validate() { throw new Error("bug"); }`, mode)
+		if !resp.Allowed {
+			t.Fatalf("%s: a failing script must not deny: %+v", mode, resp)
+		}
 	}
 }

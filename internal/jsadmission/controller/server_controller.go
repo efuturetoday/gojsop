@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	admissionregv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -180,7 +179,8 @@ func (r *JSAdmissionServerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		Key:           req.NamespacedName,
 		Mutating:      mutating,
 		Timeout:       callTimeout(pol.Spec.TimeoutSeconds, lim),
-		FailurePolicy: admissionregv1.FailurePolicyType(pol.Spec.FailurePolicy),
+		FailurePolicy: failurePolicyOf(&pol),
+		Enforcement:   pol.Spec.Enforcement,
 		Emit: func(eventType, reason, message string) {
 			r.event(polForEvents, eventType, reason, message)
 		},

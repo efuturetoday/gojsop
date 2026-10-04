@@ -20,6 +20,8 @@ import (
 	"context"
 	"time"
 
+	admissionregv1 "k8s.io/api/admissionregistration/v1"
+
 	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
@@ -33,6 +35,17 @@ import (
 // isMutating reports whether pol is a mutating policy.
 func isMutating(pol *corev1alpha1.JSAdmission) bool {
 	return pol.Spec.Type == "mutating"
+}
+
+// failurePolicyOf is the failurePolicy gojsop applies: Ignore under
+// enforcement Warn or Audit, which never deny, else the spec's.
+// jsadmission.R28
+func failurePolicyOf(pol *corev1alpha1.JSAdmission) admissionregv1.FailurePolicyType {
+	switch pol.Spec.Enforcement {
+	case corev1alpha1.EnforcementWarn, corev1alpha1.EnforcementAudit:
+		return admissionregv1.Ignore
+	}
+	return admissionregv1.FailurePolicyType(pol.Spec.FailurePolicy)
 }
 
 // admissionLimitsFromSpec maps the CRD's optional Limits to jsrun.Limits.

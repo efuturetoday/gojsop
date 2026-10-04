@@ -71,7 +71,9 @@ Add a new failure cause to status:
   not recorded.
   Gate: missing → GATE-8.
 - **R3** Keep Event messages from a finite set. Map build errors with
-  `conditions.ClassifyBuildError`.
+  `conditions.ClassifyBuildError`. Two reasons are the exception, because a
+  person needs their text: `ScriptMessage` (js-execution.R17) and
+  `PolicyViolation` (jsadmission.R27); both are capped in length.
   Why: the recorder dedupes on reason and message, so unbounded messages flood
   the event stream.
   Gate: `TestClassifyBuildError`.

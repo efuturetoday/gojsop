@@ -207,7 +207,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Path:          path,
 			Mutating:      mutating,
 			Rules:         jsadmission.RulesFromAPI(apiRules),
-			FailurePolicy: admissionregv1.FailurePolicyType(pol.Spec.FailurePolicy),
+			FailurePolicy: failurePolicyOf(&pol),
 			MatchPolicy:   admissionregv1.MatchPolicyType(pol.Spec.MatchPolicy),
 			// A policy only reads (jsadmission.R13), so it never has side effects.
 			SideEffects:    admissionregv1.SideEffectClassNone,

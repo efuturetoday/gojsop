@@ -76,6 +76,18 @@ Words used here:
 - **Exceptions**: while a new script is prepared, `failurePolicy` decides every request at once (jsadmission.R19), and the policy shows `Ready=False` (jsadmission.R18, jsadmission.R22).
 - **Result**: the author gets the availability or the enforcement they chose.
 
+### jsadmission.UC6 Try a policy before enforcing it
+
+- **Actor**: policy author
+- **Trigger**: sets `enforcement: Audit` or `Warn` on a new or changed policy
+- **Before**: UC1 or UC2
+- **Steps**:
+  1. With `Audit`, matching requests are admitted; each one the script would deny shows up as a `PolicyViolation` event on the policy (jsadmission.R27).
+  2. With `Warn`, they are admitted too, and the user who sent the request sees the reason as a warning (jsadmission.R28).
+  3. Once the violations look right, the author switches to `Deny`.
+- **Exceptions**: a failing script never denies under `Audit` or `Warn` (jsadmission.R28).
+- **Result**: a policy is enforced only after its effect is known.
+
 ### jsadmission.UC5 Change or remove a policy
 
 - **Actor**: policy author
@@ -115,6 +127,8 @@ Words used here:
 | jsadmission.R24 | Server-managed fields and `/status` are never in the patch. | admission.k8s.io/v1 | `TestCreatePatch_FiltersImmutable` |
 | jsadmission.R25 | gojsop retries writing the webhook configurations until it succeeds. | `jsadmission.Registrar` | `TestRegistrar_SyncFailure_IsRetriedAndReported` |
 | jsadmission.R26 | A renewed webhook certificate reaches the webhook configurations within a minute, without a policy change. | decision "TLS with cert-manager" | `TestRegistrar_CAChange_RewritesConfigsWithoutPolicyChange` |
+| jsadmission.R27 | Every denial of the script is recorded as a Warning event `PolicyViolation` on the policy: whether it was enforced, the operation, kind, object and reason. | decision "enforcement modes" | `TestServer_EveryDenialIsRecordedAsAViolation` |
+| jsadmission.R28 | With `enforcement: Warn` a denial is admitted and the user sees the reason as a warning; with `Audit` it is admitted silently. Neither ever denies, not even when the script fails. | decision "enforcement modes" | `TestServer_WarnAdmitsAndTellsTheUser`, `TestServer_AuditAdmitsSilently`, `TestServer_WarnAndAuditDoNotDenyWhenTheScriptFails`, `TestFailurePolicyOf_WarnAndAuditIgnore` |
 
 ## Aspects
 
@@ -134,6 +148,7 @@ Words used here:
 - **TLS with a cert-manager certificate; the registrar reads the CA bundle on every sync and polls it every minute.** Status: accepted (2026-05; polling 2026-10, ADM-4). Why: the apiserver rejects controller-runtime's self-signed certificate, and cert-manager renews the certificate without telling anyone (R26). Not taken: cert-manager's CA injector, because it only patches configurations it was told about by annotation, and the registrar rewrites them.
 - **Admission scripts are prepared only by `SharedFactory.ForAdmission`, with a read-only `kube`.** Status: accepted (2026-05). Why: admission runs with `sideEffects: None`.
 - **`kube-system` and `cert-manager` are excluded from every policy by default; `--admission-exclude-namespaces` changes the list, the operator's namespace is always out.** Status: accepted (2026-10, ADM-6). Why: under `failurePolicy: Fail` a broken policy or a down operator would otherwise block the cluster's own components and the issuer of the webhook certificate (R15). Not taken: no default exclusion, because one careless rule on `pods` could then stop `kube-system`.
+- **`spec.enforcement: Deny | Warn | Audit` decides what a denial does; every denial is an event.** Status: accepted (2026-10). Why: nobody dares to switch on a new policy under `Fail` without seeing what it would deny; Kyverno and ValidatingAdmissionPolicy offer the same three steps. Warn and Audit also force `failurePolicy: Ignore`, so trying a policy can never block the cluster. Violations are Events on the policy because they need no new API and every replica can write them. Not taken: a violations CRD as in jsPolicy, because it needs storage and cleanup; status fields, because only the leader writes status.
 - **The admission path is replicated, the hook path is not.** Status: accepted (2026-10, ADM-12). Why: the Service routes requests to every ready pod; a replica that knows no policy answers 404, and under `failurePolicy: Fail` that denies requests cluster-wide. Hooks stay leader-only because `handle()` has side effects and must run once. Cost: every replica prepares every policy. Gain: the webhook answers from process start. Not taken: routing through the leader, which needs a second Service and an endpoint rewrite on every failover.
 - **The scaffolded Kubebuilder webhook for the `JSAdmission` CRD validates nothing.** Status: proposed. Open: ADM-7.
 

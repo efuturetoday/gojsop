@@ -219,3 +219,24 @@ func TestSetupWithManager_RequiresKubeHost(t *testing.T) {
 		t.Fatal("SetupWithManager without a kubehost.Factory must fail")
 	}
 }
+
+// Warn and Audit never deny, so a failing script or an unreachable operator
+// must not deny either.
+// jsadmission.R28
+func TestFailurePolicyOf_WarnAndAuditIgnore(t *testing.T) {
+	for _, tc := range []struct {
+		enforcement, failurePolicy string
+		want                       admissionregv1.FailurePolicyType
+	}{
+		{"", "Fail", admissionregv1.Fail},
+		{"Deny", "Fail", admissionregv1.Fail},
+		{"Deny", "Ignore", admissionregv1.Ignore},
+		{"Warn", "Fail", admissionregv1.Ignore},
+		{"Audit", "Fail", admissionregv1.Ignore},
+	} {
+		pol := &corev1alpha1.JSAdmission{Spec: corev1alpha1.JSAdmissionSpec{Enforcement: tc.enforcement, FailurePolicy: tc.failurePolicy}}
+		if got := failurePolicyOf(pol); got != tc.want {
+			t.Errorf("enforcement %q, failurePolicy %q: got %s, want %s", tc.enforcement, tc.failurePolicy, got, tc.want)
+		}
+	}
+}

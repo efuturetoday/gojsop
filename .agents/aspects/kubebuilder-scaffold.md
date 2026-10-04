@@ -129,4 +129,4 @@ Adding a kind:
 
 ## Open
 
-Tracked in [backlog](../backlog.md): GATE-14, OPS-4.
+Tracked in [backlog](../backlog.md): GATE-14, GATE-30, OPS-4.

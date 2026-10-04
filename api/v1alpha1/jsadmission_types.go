@@ -75,8 +75,20 @@ type JSAdmissionSpec struct {
 	// +kubebuilder:validation:MaxItems=32
 	Rules []AdmissionRule `json:"rules"`
 
+	// Enforcement says what a denial of the script does. Deny rejects the
+	// request. Warn admits it and shows the user the reason as a warning.
+	// Audit admits it silently. Every denial, enforced or not, is recorded
+	// as a PolicyViolation event on the policy. Warn and Audit never deny,
+	// not even when the script fails, so a new policy can be tried safely.
+	// +kubebuilder:validation:Enum=Deny;Warn;Audit
+	// +kubebuilder:default=Deny
+	// +optional
+	Enforcement string `json:"enforcement,omitempty"`
+
 	// FailurePolicy controls what happens if the JS handler errors, panics,
 	// or times out. Fail rejects the request; Ignore lets it through.
+	// With enforcement Warn or Audit gojsop never denies, so it acts as
+	// Ignore whatever is set here.
 	// +kubebuilder:validation:Enum=Fail;Ignore
 	// +kubebuilder:default=Fail
 	// +optional
@@ -188,3 +200,10 @@ type JSAdmissionList struct {
 func init() {
 	SchemeBuilder.Register(&JSAdmission{}, &JSAdmissionList{})
 }
+
+// Values of JSAdmissionSpec.Enforcement.
+const (
+	EnforcementDeny  = "Deny"
+	EnforcementWarn  = "Warn"
+	EnforcementAudit = "Audit"
+)

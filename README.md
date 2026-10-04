@@ -170,7 +170,8 @@ spec:
   namespaceSelector: {}              # optional LabelSelector on the request's namespace
   objectSelector: {}                 # optional LabelSelector on the object
   matchPolicy: Equivalent            # Exact | Equivalent; default Equivalent
-  failurePolicy: Fail                # Fail | Ignore; default Fail: what a failed call means
+  enforcement: Deny                  # Deny | Warn | Audit; default Deny: what a denial does, see below
+  failurePolicy: Fail                # Fail | Ignore; default Fail: what a failed call means (Warn and Audit: always Ignore)
   timeoutSeconds: 5                  # 1 to 30, default 5: how long the apiserver waits
   permissions:                       # optional: what kube.get and kube.list may read
     - apiGroups: [""]
@@ -200,6 +201,20 @@ spec:
 policy changes `req.object` and returns it as `modifiedObject`; gojsop sends
 the difference as a JSON patch. Server-managed fields and `/status` are never
 patched. A result without `allowed` denies.
+
+**Try a policy before you enforce it.** `enforcement` decides what a denial
+of the script does:
+
+| `enforcement` | The request | The person who sent it sees | The policy shows |
+|---|---|---|---|
+| `Deny` (default) | is rejected | the reason, as the error | a `PolicyViolation` event |
+| `Warn` | is admitted | the reason, as a warning | a `PolicyViolation` event |
+| `Audit` | is admitted | nothing | a `PolicyViolation` event |
+
+Start a new policy with `Audit`, read what it would deny with
+`kubectl describe jsadmission <name>`, move to `Warn` to tell the teams, then
+to `Deny`. Under `Warn` and `Audit` gojsop never denies, not even when the
+script fails.
 
 **When the script fails** — it throws, times out, hits the memory limit, or
 no script is ready yet — `failurePolicy` decides: `Ignore` admits the request
@@ -310,6 +325,26 @@ A ConfigMap edit reaches the script without a restart.
 
 Set the annotation `gojsop.io/restart` to a new value to prepare the script
 again.
+
+## How gojsop compares
+
+| | gojsop | [jsPolicy](https://github.com/loft-sh/jspolicy) | [Kyverno](https://kyverno.io) |
+|---|---|---|---|
+| Policies are written in | JavaScript | JavaScript or TypeScript, npm packages | YAML with JMESPath or CEL |
+| Engine | QuickJS as WebAssembly, pure Go | V8 through cgo | Go |
+| Validate and mutate requests | yes | yes | yes |
+| React to changes with code | yes (`JSHook`) | yes (controller policies) | declarative `generate` and `mutate-existing` |
+| Audit and warn before enforcing | yes (`enforcement`) | yes (`violationPolicy`) | yes |
+| Rights of a script | its own ServiceAccount with the rights it declares; nobody grants more than they hold | the operator is `cluster-admin` | per controller, extended by aggregated roles |
+| Policies per namespace | no, cluster-wide only | no | yes |
+| Image signature checks | no | no | yes |
+| Policy reports and background scans | no, violations are events | violations CRD | yes |
+| TypeScript, local test CLI | not yet | TypeScript yes | test CLI yes |
+| Status | alpha | last release 2023 | stable, CNCF |
+
+gojsop is for teams that want the freedom of real code, with each script
+limited to exactly what it may touch. When a declarative policy language and
+a large ecosystem matter more, use Kyverno.
 
 ## Known limitations
 

@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 	"github.com/efuturetoday/gojsop/internal/conditions"
 	"github.com/efuturetoday/gojsop/internal/jslifecycle"
 	"github.com/efuturetoday/gojsop/internal/jslog"
@@ -53,6 +54,9 @@ type PolicyEntry struct {
 	Mutating      bool
 	Timeout       time.Duration
 	FailurePolicy admissionregv1.FailurePolicyType
+	// Enforcement is what a denial of the script does: Deny, Warn or
+	// Audit (corev1alpha1.Enforcement*). Empty means Deny.
+	Enforcement string
 
 	// Emit publishes lifecycle events about this policy (panic/timeout/JS
 	// error during a review). Nil-safe; Register accepts entries without
@@ -336,6 +340,9 @@ func fillResponse(resp *admissionv1.AdmissionResponse, result *AdmissionResult, 
 	if len(result.Warnings) > 0 {
 		resp.Warnings = result.Warnings
 	}
+	if !result.Allowed && enforceDenial(resp, result, entry, req) {
+		return
+	}
 	if !entry.Mutating {
 		if result.ModifiedObject != nil {
 			log.Info("validating policy returned modifiedObject — ignored")
@@ -368,6 +375,48 @@ func fillResponse(resp *admissionv1.AdmissionResponse, result *AdmissionResult, 
 	resp.Patch = patchBytes
 	pt := admissionv1.PatchTypeJSONPatch
 	resp.PatchType = &pt
+}
+
+// maxViolationText caps the reason a PolicyViolation event carries.
+const maxViolationText = 1024
+
+// enforceDenial records a denial of the script as a PolicyViolation event
+// and, under enforcement Warn or Audit, turns it into an admission: Warn
+// tells the user why, Audit says nothing. It reports whether the response
+// is final (the request is admitted without a patch).
+// jsadmission.R27
+// jsadmission.R28
+func enforceDenial(resp *admissionv1.AdmissionResponse, result *AdmissionResult, entry PolicyEntry, req *admissionv1.AdmissionRequest) bool {
+	reason := result.Message
+	if reason == "" {
+		reason = "denied without a message"
+	}
+	if len(reason) > maxViolationText {
+		reason = reason[:maxViolationText] + "…"
+	}
+	target := req.Name
+	if req.Namespace != "" {
+		target = req.Namespace + "/" + req.Name
+	}
+	mode := "denied"
+	if entry.Enforcement == corev1alpha1.EnforcementWarn || entry.Enforcement == corev1alpha1.EnforcementAudit {
+		mode = "would deny (" + entry.Enforcement + ")"
+	}
+	publishWarning(entry, conditions.EventPolicyViolation,
+		fmt.Sprintf("%s %s %s %s: %s", mode, req.Operation, req.Kind.Kind, target, reason))
+
+	switch entry.Enforcement {
+	case corev1alpha1.EnforcementWarn:
+		resp.Allowed = true
+		resp.Result = nil
+		resp.Warnings = append(resp.Warnings, fmt.Sprintf("gojsop policy %s would deny: %s", entry.Key.Name, reason))
+		return true
+	case corev1alpha1.EnforcementAudit:
+		resp.Allowed = true
+		resp.Result = nil
+		return true
+	}
+	return false
 }
 
 // applyFailurePolicy sets resp.Allowed and a Status.Message based on the

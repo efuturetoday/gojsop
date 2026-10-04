@@ -77,6 +77,13 @@ const (
 	EventReviewPanicked = "ReviewPanicked"
 	EventReviewFailed   = "ReviewFailed"
 	EventReviewTimeout  = "ReviewTimeout"
+
+	// A policy denied a request, or would have under enforcement Warn or
+	// Audit. Like ScriptMessage its Message is not from a finite set: it
+	// names the object and the script's reason, because that is what a
+	// person deciding whether to enforce the policy needs to see. The
+	// recorder's spam filter bounds the volume.
+	EventPolicyViolation = "PolicyViolation"
 )
 
 // WasBuilding reports whether the Ready condition in conds says the last
