@@ -60,7 +60,7 @@ Words used here:
 - **Trigger**: a call runs
 - **Steps**:
   1. The script reads `req`: operation, kind, resource, name, namespace, user, `object`, `oldObject`, `dryRun` (jsadmission.R3).
-  2. The script reads related objects with `kube.get` or `kube.list`.
+  2. The script reads related objects with `kube.get` or `kube.list`, as far as `spec.permissions` allows ([kube-access](../aspects/kube-access.md)).
   3. The script returns its decision.
 - **Exceptions**: `kube.apply` and `kube.delete` do not exist (jsadmission.R13).
 - **Result**: the decision may depend on the request and on other objects, and never changes the cluster.

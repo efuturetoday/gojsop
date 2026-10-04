@@ -56,6 +56,7 @@ var (
 // jshook.R15
 // jshook.R22
 // api-design.R8
+// kube-access.R14
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 

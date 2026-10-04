@@ -102,7 +102,9 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg jsrun.Runner) *Dispatcher
 
 // Subscribe (re)wires informers for hook `key`. The worker resolves the live
 // instance via the Runner on every dispatch. bindings drive which informers
-// start. emit (optional) publishes lifecycle events; pass nil in tests.
+// start; they list and watch through as, the client of the hook's
+// ServiceAccount (nil: the dispatcher's own client). emit (optional)
+// publishes lifecycle events; pass nil in tests.
 //
 // If a subscription already exists for key, it is torn down first.
 //
@@ -112,7 +114,8 @@ func New(dyn dynamic.Interface, mapper RESTMapper, reg jsrun.Runner) *Dispatcher
 // same key cancels a Subscribe that is still waiting; that Subscribe then
 // returns an error.
 // jshook.R17
-func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, bindings []corev1alpha1.HookBinding, emit EventEmitter) error {
+// kube-access.R12
+func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName, bindings []corev1alpha1.HookBinding, as dynamic.Interface, emit EventEmitter) error {
 	if d.reg == nil {
 		return fmt.Errorf("dispatcher: Runner is nil — Subscribe needs the runner to resolve live instances")
 	}
@@ -165,12 +168,15 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 		return err
 	}
 
+	if as == nil {
+		as = d.dyn
+	}
 	for _, w := range watches {
 		inNamespace, err := d.namespaceMatcher(ctx, w.binding.NamespaceSelector)
 		if err != nil {
 			return fail(fmt.Errorf("binding %q: namespaceSelector: %w", w.binding.Name, err))
 		}
-		if err := sub.startWatcher(ctx, d.dyn, w, inNamespace); err != nil {
+		if err := sub.startWatcher(ctx, as, w, inNamespace); err != nil {
 			return fail(fmt.Errorf("binding %q: start watcher on %s: %w", w.binding.Name, w.gvr.Resource, err))
 		}
 	}

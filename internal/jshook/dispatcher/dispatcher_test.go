@@ -184,7 +184,7 @@ func (e *env) subscribe(b corev1alpha1.HookBinding) {
 	if len(b.Resources) == 0 {
 		b.ResourceRule = cmRule
 	}
-	if err := e.d.Subscribe(context.Background(), e.key, []corev1alpha1.HookBinding{b}, e.emit); err != nil {
+	if err := e.d.Subscribe(context.Background(), e.key, []corev1alpha1.HookBinding{b}, nil, e.emit); err != nil {
 		e.t.Fatalf("Subscribe: %v", err)
 	}
 	select {
@@ -654,7 +654,7 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 	t.Cleanup(func() { d.Drop(keyA); d.Drop(keyB) })
 
 	errA := make(chan error, 1)
-	go func() { errA <- d.Subscribe(context.Background(), keyA, bindingsA, nil) }()
+	go func() { errA <- d.Subscribe(context.Background(), keyA, bindingsA, nil, nil) }()
 	select {
 	case <-listing:
 	case <-time.After(5 * time.Second):
@@ -663,7 +663,7 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		if err := d.Subscribe(context.Background(), keyB, bindingsB, nil); err != nil {
+		if err := d.Subscribe(context.Background(), keyB, bindingsB, nil, nil); err != nil {
 			done <- err
 			return
 		}
@@ -847,7 +847,7 @@ func TestPlanWatches_RejectsWildcardUnknownAndDuplicate(t *testing.T) {
 			key := types.NamespacedName{Name: "h"}
 			t.Cleanup(func() { d.Drop(key) })
 
-			err := d.Subscribe(context.Background(), key, tc.bindings, nil)
+			err := d.Subscribe(context.Background(), key, tc.bindings, nil, nil)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("Subscribe error = %v, want one containing %q", err, tc.want)
 			}
@@ -869,7 +869,7 @@ func TestPlanWatches_BadBindingKeepsExistingWatches(t *testing.T) {
 	bad := []corev1alpha1.HookBinding{{Name: "a", ResourceRule: corev1alpha1.ResourceRule{
 		APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"widgets"},
 	}}}
-	if err := e.d.Subscribe(context.Background(), e.key, bad, e.emit); err == nil {
+	if err := e.d.Subscribe(context.Background(), e.key, bad, nil, e.emit); err == nil {
 		t.Fatal("Subscribe with an unknown resource must fail")
 	}
 
@@ -877,5 +877,26 @@ func TestPlanWatches_BadBindingKeepsExistingWatches(t *testing.T) {
 	cs := e.waitCalls(2)
 	if got := cs[1]["type"]; got != bcEvent {
 		t.Fatalf("after the rejected re-subscribe the old watch is gone: %v", cs[1])
+	}
+}
+
+// The informers of a hook list and watch through the client handed to
+// Subscribe, the client of the hook's ServiceAccount, not through the
+// dispatcher's own.
+// kube-access.R12
+func TestDispatcher_WatchesRunAsTheHooksClient(t *testing.T) {
+	e := newEnv(t, recordSrc, jsengine.Limits{}, newCM("a", "uid-a", "1"))
+	own := fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{cmGVR: "ConfigMapList"})
+	e.d = dispatcher.New(own, fixedMapper{}, e.reg)
+
+	b := corev1alpha1.HookBinding{Name: "cms", ResourceRule: cmRule}
+	if err := e.d.Subscribe(context.Background(), e.key, []corev1alpha1.HookBinding{b}, e.dyn, e.emit); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	cs := e.waitCalls(1)
+	objs, _ := cs[0]["objects"].([]any)
+	if len(objs) != 1 {
+		t.Fatalf("synchronization has %d objects, want the one only the hook's client sees: %v", len(objs), cs[0])
 	}
 }

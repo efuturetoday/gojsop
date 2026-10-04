@@ -94,7 +94,7 @@ function handle(c) { record(c[0]); }`
 				ObjectSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
 			},
 		}
-		Expect(d.Subscribe(ctx, key, []corev1alpha1.HookBinding{binding}, nil)).To(Succeed())
+		Expect(d.Subscribe(ctx, key, []corev1alpha1.HookBinding{binding}, nil, nil)).To(Succeed())
 
 		// Created after the snapshot: one match, two misses, one match.
 		mkCM("sel-a", "match-2", match)

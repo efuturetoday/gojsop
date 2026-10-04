@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,6 +40,7 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
+	"github.com/o-haase/gojsop/internal/jsaccess"
 	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
@@ -75,6 +77,11 @@ type JSHookReconciler struct {
 	// SetupWithManager requires it; a reconciler built bare in a unit test
 	// gives scripts no kube global.
 	KubeHost kubehost.Factory
+
+	// Access gives every hook a ServiceAccount of its own with the rights it
+	// declares; its watches and kube.* calls run as that ServiceAccount.
+	// Optional in tests: without it the hook uses the operator's client.
+	Access *jsaccess.Manager
 
 	// Dispatcher subscribes hooks to Kubernetes events. Optional in tests.
 	Dispatcher *dispatcher.Dispatcher
@@ -115,9 +122,6 @@ func (r *JSHookReconciler) event(obj runtime.Object, eventType, reason, message 
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
-// MVP: hooks can watch and mutate any resource. Phase 2 will narrow this
-// based on the bindings each hook actually declares (per-hook ServiceAccount).
-// +kubebuilder:rbac:groups="*",resources="*",verbs=get;list;watch;create;update;patch;delete
 
 // requireHandle is the registry PostBuildHook. A hook's script has to export
 // handle(); what it reacts to is spec.bindings, not something the script
@@ -162,9 +166,28 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	srcHash := jssource.Hash(source)
 	lim := limitsFromSpec(hook.Spec.Limits)
 
+	// The hook's own ServiceAccount, with exactly its rights, exists before
+	// anything runs as it.
+	// kube-access.R10
+	var sa string
+	var as dynamic.Interface
+	if r.Access != nil {
+		sa, err = r.Access.Ensure(ctx, &hook, jsrun.KindJSHook, jsaccess.HookRules(hook.Spec))
+		if err == nil {
+			as, err = r.Access.ClientFor(sa)
+		}
+		if err != nil {
+			log.Error(err, "setting up the hook's service account")
+			return r.fail(ctx, &hook, conditions.EventAccessFailed,
+				"service account setup failed",
+				fmt.Sprintf("service account: %v", err))
+		}
+		hook.Status.ServiceAccount = sa
+	}
+
 	var host jsrun.Host
 	if r.KubeHost != nil {
-		host, err = r.KubeHost.ForHook(ctx, req.NamespacedName, "")
+		host, err = r.KubeHost.ForHook(ctx, req.NamespacedName, sa)
 		if err != nil {
 			log.Error(err, "minting kube host")
 			return r.fail(ctx, &hook, conditions.EventBuildFailed,
@@ -223,7 +246,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		emit := func(eventType, reason, message string) {
 			r.event(hookForEvents, eventType, reason, message)
 		}
-		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, hook.Spec.Bindings, emit); err != nil {
+		if err := r.Dispatcher.Subscribe(r.subscribeCtx(), req.NamespacedName, hook.Spec.Bindings, as, emit); err != nil {
 			log.Error(err, "subscribing bindings")
 			return r.fail(ctx, &hook, conditions.EventSubscribeFailed,
 				"subscribe failed",

@@ -48,6 +48,17 @@ type JSAdmissionSpec struct {
 	// +optional
 	Limits *JSLimits `json:"limits,omitempty"`
 
+	// Permissions are the rights the script has on the cluster through
+	// kube.get and kube.list. A policy only reads: the verbs are get, list
+	// and watch. gojsop gives the policy a ServiceAccount of its own with
+	// exactly these rights and runs its kube.* calls as that ServiceAccount.
+	// Whoever creates or changes the policy must hold all of these rights.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="self.all(p, p.verbs.all(v, v in ['get', 'list', 'watch']))",message="a policy can only read: verbs must be get, list or watch"
+	Permissions []Permission `json:"permissions,omitempty"`
+
 	// Type selects the webhook flavour. validating policies must export
 	// validate(req); mutating policies must export mutate(req) and may
 	// return a modifiedObject from which the controller computes a JSONPatch.
@@ -115,6 +126,11 @@ type JSAdmissionStatus struct {
 	// webhooks[] entry. Observable, not configurable.
 	// +optional
 	WebhookConfigName string `json:"webhookConfigName,omitempty"`
+
+	// ServiceAccount is the ServiceAccount, in the operator's namespace,
+	// that the policy's kube.* calls run as.
+	// +optional
+	ServiceAccount string `json:"serviceAccount,omitempty"`
 
 	// Instance reports the prepared script every call starts from.
 	// +optional

@@ -2,11 +2,13 @@ package kubehost_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 
@@ -128,5 +130,36 @@ func TestSharedFactory_PerCallInstances(t *testing.T) {
 	b, _ := f.ForHook(context.Background(), types.NamespacedName{Name: "b"}, "")
 	if a == b {
 		t.Error("ForHook must return a fresh binder per call so per-call state can't bleed across resources")
+	}
+}
+
+// A binder for a ServiceAccount reaches the cluster through the client of
+// that ServiceAccount; an empty one keeps the factory's own client.
+// kube-access.R12
+func TestSharedFactory_As_UsesTheServiceAccountsClient(t *testing.T) {
+	dyn := fake.NewSimpleDynamicClient(scheme.Scheme)
+	f := kubehost.NewSharedFactory(context.Background(), dyn, meta.NewDefaultRESTMapper(nil))
+	var asked []string
+	f.As = func(sa string) (dynamic.Interface, error) {
+		asked = append(asked, sa)
+		return dyn, nil
+	}
+	key := types.NamespacedName{Name: "x"}
+	if _, err := f.ForHook(context.Background(), key, "jshook-x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ForAdmission(context.Background(), key, "jsadmission-x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.ForHook(context.Background(), key, ""); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(asked, []string{"jshook-x", "jsadmission-x"}) {
+		t.Fatalf("asked for %v", asked)
+	}
+
+	f.As = func(string) (dynamic.Interface, error) { return nil, errors.New("no client") }
+	if _, err := f.ForHook(context.Background(), key, "jshook-x"); err == nil {
+		t.Fatal("a failing client must fail the binder, not fall back to the operator's client")
 	}
 }

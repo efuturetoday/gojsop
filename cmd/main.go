@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -45,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	"github.com/o-haase/gojsop/internal/jsaccess"
 	"github.com/o-haase/gojsop/internal/jsadmission"
 	jsadmissionctrl "github.com/o-haase/gojsop/internal/jsadmission/controller"
 	webhookv1alpha1 "github.com/o-haase/gojsop/internal/jsadmission/webhook/v1alpha1"
@@ -84,6 +86,15 @@ func admissionServiceFromEnv() admissionregv1.ServiceReference {
 	}
 	port := int32(443)
 	return admissionregv1.ServiceReference{Namespace: ns, Name: name, Port: &port}
+}
+
+// operatorNamespace is the namespace the operator runs in, home of the
+// ServiceAccounts of hooks and policies.
+func operatorNamespace() string {
+	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return admissionServiceFromEnv().Namespace
 }
 
 // fileCABundleProvider reads the PEM CA bundle off disk every time it's
@@ -324,7 +335,27 @@ func main() {
 	// read+write kube.* surface, ForAdmission returns a read-only view (the
 	// central VWC/MWC declare sideEffects: None and the apiserver is allowed
 	// to retry/replay admission requests).
+	// Every hook and policy runs as a ServiceAccount of its own with exactly
+	// the rights it declares (kube-access.R10). The access manager reads and
+	// writes without the cache: a cached client would watch every
+	// ServiceAccount of the cluster, and the operator may only see its own
+	// namespace.
+	directClient, err := client.New(mgr.GetConfig(), client.Options{Scheme: mgr.GetScheme()})
+	if err != nil {
+		setupLog.Error(err, "unable to build direct client")
+		os.Exit(1)
+	}
+	access := &jsaccess.Manager{
+		Client:    directClient,
+		Scheme:    mgr.GetScheme(),
+		Namespace: operatorNamespace(),
+		Config:    mgr.GetConfig(),
+	}
+	mgr.GetWebhookServer().Register(jsaccess.CheckPath, &webhook.Admission{
+		Handler: &jsaccess.Checker{Review: jsaccess.ClientReviewer(directClient)},
+	})
 	kubeFactory := kubehost.NewSharedFactory(managerCtx, dyn, mgr.GetRESTMapper())
+	kubeFactory.As = access.ClientFor
 	disp := dispatcher.New(dyn, dispatcher.FromMetaMapper(mgr.GetRESTMapper()), registry)
 	// Loader chain is shared between JSHook and JSAdmission so configMapRef
 	// resolves the same way on both surfaces. The cache-backed manager
@@ -339,6 +370,7 @@ func main() {
 		Loader:       loaderChain,
 		Scripts:      registry,
 		KubeHost:     kubeFactory,
+		Access:       access,
 		Dispatcher:   disp,
 		SubscribeCtx: managerCtx,
 		Recorder:     mgr.GetEventRecorder("jshook-controller"),
@@ -375,13 +407,14 @@ func main() {
 	// that answers 404 would deny cluster-wide under failurePolicy: Fail.
 	// jsadmission.R20
 	if err := (&jsadmissionctrl.JSAdmissionServerReconciler{
-		Client:   mgr.GetClient(),
-		Loader:   loaderChain,
-		Scripts:  registry,
-		KubeHost: kubeFactory,
-		Server:   admissionServer,
-		Recorder: mgr.GetEventRecorder("jsadmission-server"),
-		Backoff:  f.backoff(),
+		Client:          mgr.GetClient(),
+		Loader:          loaderChain,
+		Scripts:         registry,
+		KubeHost:        kubeFactory,
+		ServiceAccounts: true,
+		Server:          admissionServer,
+		Recorder:        mgr.GetEventRecorder("jsadmission-server"),
+		Backoff:         f.backoff(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSAdmissionServer")
 		os.Exit(1)
@@ -393,6 +426,7 @@ func main() {
 		Loader:    loaderChain,
 		Scripts:   registry,
 		Registrar: registrar,
+		Access:    access,
 		Recorder:  mgr.GetEventRecorder("jsadmission-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JSAdmission")

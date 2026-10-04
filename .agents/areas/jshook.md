@@ -42,9 +42,11 @@ Words used here:
 - **Before**: the source loads ([js-sources](../aspects/js-sources.md))
 - **Steps**:
   1. The author lists bindings: `name`, `apiGroups`, `apiVersions`, `resources`, optional selectors.
-  2. gojsop checks every binding against the cluster, then starts one watch per resource.
-  3. `status.bindings` lists what is watched.
-- **Exceptions**: `*`, a resource the cluster does not serve, or two bindings on one resource fail the reconcile; the hook keeps the watches it had (jshook.R20, jshook.R21). A script without `handle()` fails (jshook.R2).
+  2. The author lists in `spec.permissions` what the script may do through `kube.*`.
+  3. gojsop gives the hook a ServiceAccount of its own with exactly these rights plus read access to what the bindings watch ([kube-access](../aspects/kube-access.md)).
+  4. gojsop checks every binding against the cluster, then starts one watch per resource.
+  5. `status.bindings` lists what is watched, `status.serviceAccount` who the hook acts as.
+- **Exceptions**: an author who lacks a right the hook would get cannot apply it (kube-access.R13). `*`, a resource the cluster does not serve, or two bindings on one resource fail the reconcile; the hook keeps the watches it had (jshook.R20, jshook.R21). A script without `handle()` fails (jshook.R2). A `kube.*` call without the right throws `Forbidden`.
 - **Result**: the hook watches exactly what it declared.
 
 ### jshook.UC2 Receive the current state, then changes

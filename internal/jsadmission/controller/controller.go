@@ -39,6 +39,7 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
+	"github.com/o-haase/gojsop/internal/jsaccess"
 	"github.com/o-haase/gojsop/internal/jsadmission"
 	"github.com/o-haase/gojsop/internal/jslifecycle"
 	"github.com/o-haase/gojsop/internal/jsrun"
@@ -66,6 +67,10 @@ type JSAdmissionReconciler struct {
 	Scripts jsrun.Scripts
 	// Registrar maintains the central VWC/MWC.
 	Registrar *jsadmission.Registrar
+
+	// Access gives every policy a ServiceAccount of its own with the rights
+	// it declares. Optional in tests.
+	Access *jsaccess.Manager
 
 	// Recorder publishes corev1.Event entries describing lifecycle moments
 	// (build/restart/admission review crashes). Optional — nil-safe so unit
@@ -129,6 +134,20 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	srcHash := jssource.Hash(source)
 	mutating := isMutating(&pol)
+
+	// The policy's own ServiceAccount, which its kube.* calls run as on every
+	// replica. Only the leader writes it.
+	// kube-access.R10
+	if r.Access != nil {
+		sa, err := r.Access.Ensure(ctx, &pol, jsrun.KindJSAdmission, jsaccess.AdmissionRules(pol.Spec))
+		if err != nil {
+			log.Error(err, "setting up the policy's service account")
+			return r.failAdmission(ctx, &pol, conditions.EventAccessFailed,
+				"service account setup failed",
+				fmt.Sprintf("service account: %v", err))
+		}
+		pol.Status.ServiceAccount = sa
+	}
 
 	resetToken := pol.GetAnnotations()[conditions.ManualRestartAnnotation]
 

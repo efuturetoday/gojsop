@@ -2,6 +2,8 @@
 id: kube-access
 status: accepted
 entrypoints:
+  - jsaccess.Manager.Ensure
+  - jsaccess.Checker.Handle
   - kubehost.Factory
   - kubehost.SharedFactory.ForHook
   - kubehost.KubeHost.Bind
@@ -21,17 +23,35 @@ A `kubehost.Factory` mints the binder that registers `kube` for a VM. The
 functions cross into wasm through the one import `env.host_call`; the engine
 defines `kube.get` and the others as JavaScript functions over it, and only
 registered names exist.
-`ForHook` returns the full surface, `ForAdmission` the read-only one. Today's
-only implementation, `kubehost.SharedFactory`, hands out binders over one
-process-wide dynamic client and RESTMapper. It ignores its context, key and
-ServiceAccount arguments. The factory replaced a process-wide singleton field
-so that a per-ServiceAccount implementation (TokenRequest) can be swapped in
-later. The dynamic client with a RESTMapper fits the free-form `apiVersion` and
-`kind` that scripts pass. Why it won over typed clients is not recorded.
+`ForHook` returns the full surface, `ForAdmission` the read-only one. The only
+implementation, `kubehost.SharedFactory`, shares one RESTMapper and hands each
+binder a dynamic client that acts as the ServiceAccount it was minted for. The
+dynamic client with a RESTMapper fits the free-form `apiVersion` and `kind`
+that scripts pass. Why it won over typed clients is not recorded.
 
-There is no per-hook identity. The operator's own ServiceAccount performs every
-call, and its ClusterRole is a wildcard. The code calls this an MVP; a per-hook
-ServiceAccount and narrower RBAC are planned as "Phase 2" (OPS-2).
+**Every hook and policy has its own identity.** `spec.permissions` lists what
+the script may do. `jsaccess.Manager` gives each JSHook and JSAdmission a
+ServiceAccount of its own in the operator's namespace, a ClusterRole with
+exactly those rights (for a hook plus `get`, `list`, `watch` on what its
+bindings watch) and a ClusterRoleBinding; all three are owned by the resource
+and go with it. A hook's watches and every `kube.*` call run as that
+ServiceAccount, through impersonation. A script without a right gets
+`Forbidden`, as a catchable exception.
+
+**Nobody hands out a right they do not hold.** The validating webhook
+`jsaccess.Checker` admits a JSHook or JSAdmission only when the user who
+creates or changes it holds every right its ServiceAccount would get; it asks
+the apiserver with a SubjectAccessReview per verb and resource. A change of
+metadata alone (labels, the restart annotation) is not checked. The one gap is
+a source in a ConfigMap: whoever may edit that ConfigMap changes the script and
+uses the hook's rights without passing the check. That is documented, not
+closed.
+
+The operator itself keeps what it needs for that: its own CRDs, webhook
+configurations, ConfigMaps and Namespaces to read, ClusterRoles and
+ClusterRoleBindings with `escalate` and `bind`, and ServiceAccounts with
+`impersonate` in its own namespace only. Whoever controls the operator can
+still grant any right; the scripts cannot.
 
 Semantics of the four functions, each taking one JS object:
 
@@ -74,7 +94,7 @@ sees CRDs installed after start is not verified.
 - **R1** Reach the cluster from JavaScript only through `kube`, and obtain its
   binder only from a `kubehost.Factory`. Build the dynamic client once, in
   `cmd/main.go`.
-  Why: one seam for swapping in per-ServiceAccount clients later.
+  Why: one seam where every binder gets the client of its ServiceAccount (R12).
   Gate: `TestSharedFactory_ForHook_FullSurface`, `TestSharedFactory_PerCallInstances`, `TestSharedFactory_BothSurfaces_ShareClientAndMapper`.
 - **R2** Bind only `get` and `list` for admission VMs.
   Why: the admission webhook declares `sideEffects: None`, and the API server
@@ -118,6 +138,36 @@ sees CRDs installed after start is not verified.
   on these semantics.
   Gate: `TestKubeHost_GetReturnsNullForMissing`, `TestKubeHost_ListReturnsItems`, `TestKubeHost_DeleteRemovesResource`.
 
+- **R10** Give every JSHook and JSAdmission a ServiceAccount, ClusterRole and
+  ClusterRoleBinding of its own, named `jshook-<name>` or `jsadmission-<name>`
+  (cut and hashed when too long), owned by the resource, created before
+  anything runs as it.
+  Why: one identity per script is what lets its rights be narrow; the owner
+  reference removes them with the resource.
+  Gate: `TestName_PrefixesKindAndCutsLongNames`, `TestEnsure_CreatesServiceAccountRoleAndBindingOwnedByTheResource`.
+- **R11** Give a hook exactly its `spec.permissions` plus `get`, `list` and
+  `watch` on every resource its bindings watch; give a policy exactly its
+  `spec.permissions`.
+  Why: the watches run as the hook, so they need read rights; nothing else is
+  granted that the resource does not say.
+  Gate: `TestHookRules_AddReadOnEveryWatchedResource`.
+- **R12** Run a hook's watches and every `kube.*` call as the resource's
+  ServiceAccount, through a client that impersonates it; never through the
+  operator's own client.
+  Why: otherwise the narrow rights of R10 protect nothing.
+  Gate: `TestImpersonatingConfig_ActsAsTheServiceAccount`, `TestSharedFactory_As_UsesTheServiceAccountsClient`, `TestDispatcher_WatchesRunAsTheHooksClient`.
+- **R13** Admit a JSHook or JSAdmission only when the user who creates it, or
+  changes its spec, holds every right of R11 cluster-wide. A change of
+  metadata alone is not checked.
+  Why: Kubernetes' own rule for Roles; without it writing a hook would be a
+  way to any right the operator can grant.
+  Gate: `TestChecker_DeniesRightsTheUserDoesNotHold`, `TestChecker_AllowsWhenTheUserHoldsEveryRight`, `TestChecker_UpdateOfTheScriptChecksEveryRight`.
+- **R14** Name every API group and resource in `spec.permissions` explicitly:
+  no `*`. A policy's permissions only read: `get`, `list`, `watch`.
+  Why: a permission must say exactly what the script touches; admission runs
+  with `sideEffects: None`.
+  Gate: `TestControllers` (spec.permissions).
+
 ## Decisions
 
 - **Scripts reach the cluster through a dynamic client with a RESTMapper.**
@@ -125,13 +175,26 @@ sees CRDs installed after start is not verified.
   Why: it fits the free-form `apiVersion` and `kind` that scripts pass. Not
   taken: typed clients; the reason is not recorded.
 - **Binders come from a `kubehost.Factory`, not a process-wide singleton.**
-  Status: accepted (date and approver not recorded; migrated from block).
-  Why: a per-ServiceAccount implementation (TokenRequest) can be swapped in
-  later. Not taken: the singleton field, because it blocks that swap.
-- **The operator's own ServiceAccount performs every call (MVP).**
-  Status: accepted (date and approver not recorded; migrated from block).
-  Why: per-hook identity and narrower RBAC are planned as "Phase 2" (OPS-2).
-  Not taken: per-hook ServiceAccounts now, because they need TokenRequest work.
+  Status: accepted. Why: one place hands every binder the client of its
+  ServiceAccount (R12). Not taken: the singleton field.
+- **Every hook and policy runs as a ServiceAccount of its own, with the rights
+  it declares in `spec.permissions`, checked against the user who writes it.**
+  Status: accepted (2026-10, OPS-2, KUBE-2; replaces "the operator's own
+  ServiceAccount performs every call").
+  Why: with one wildcard identity, anyone who may write a JSHook could read
+  every Secret of the cluster. Declaring the rights in the resource keeps
+  everything in one place, and the check is Kubernetes' own rule for Roles.
+  Not taken: the jsPolicy way (operator is `cluster-admin`, only admins write
+  policies), because one careless script reaches everything. The Kyverno way
+  (admins extend the operator's role by aggregation), because the rights are
+  then shared by every hook and live apart from it. TokenRequest instead of
+  impersonation, because it needs token refresh and gives nothing more.
+- **A source in a ConfigMap is not checked against the hook's rights.**
+  Status: accepted (2026-10). Why: the check runs when the hook is written; a
+  ConfigMap edit never passes it, and watching every ConfigMap write costs
+  more than it protects. The README says to protect the ConfigMap like the
+  hook. Not taken: allowing ConfigMaps only from the operator's namespace,
+  because teams could then not keep scripts in their own namespaces.
 - **`kube.apply` is Get plus Create or JSON merge patch.**
   Status: accepted (date and approver not recorded; migrated from block).
   Why: server-side apply was deferred; Phase 2 may switch once only modern API
@@ -140,4 +203,4 @@ sees CRDs installed after start is not verified.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): KUBE-1 to KUBE-3, OPS-2; gates GATE-7, GATE-14.
+Tracked in [backlog](../backlog.md): KUBE-1, KUBE-3; gates GATE-7, GATE-14.

@@ -147,6 +147,38 @@ No policy ever sees requests in the operator's namespace, `kube-system` or
 `cert-manager`, so a broken policy cannot lock up the cluster itself. Change
 the list with the operator flag `--admission-exclude-namespaces`.
 
+## Permissions
+
+Every hook and policy acts as a ServiceAccount of its own, which gojsop
+creates in its namespace (`jshook-<name>`, `jsadmission-<name>`) and removes
+with the resource. It gets exactly what `spec.permissions` lists, and a hook
+also gets `get`, `list` and `watch` on what its bindings watch:
+
+```yaml
+permissions:
+  - apiGroups: [""]               # "" is the core group
+    resources: ["configmaps"]
+    verbs: ["get", "create", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list"]
+```
+
+- **No wildcards.** Name every group and resource; `*` is rejected.
+- **Policies only read.** A `JSAdmission` may list `get`, `list` and `watch`.
+- **You cannot hand out what you do not have.** gojsop rejects a hook or
+  policy whose rights the person applying it does not hold. Changing the
+  script of an existing hook needs its rights too; changing only labels or
+  annotations does not.
+- **A missing right is visible.** A `kube.*` call without it throws
+  `Forbidden`; the script can catch it. `status.serviceAccount` names the
+  ServiceAccount, so `kubectl auth can-i --as=system:serviceaccount:gojsop-system:jshook-<name> ...`
+  shows what it may do.
+
+> **Protect a source ConfigMap like the hook itself.** Whoever may edit the
+> ConfigMap a hook loads its script from changes what runs with the hook's
+> rights, and gojsop does not check that edit.
+
 ## Writing scripts
 
 **Entry points are global functions.** Write `function handle() {}` (or
@@ -164,11 +196,12 @@ snapshot. Every call starts from that snapshot, so globals you change inside
 |---|---|---|---|
 | `kube.get({apiVersion, kind, name, namespace})` | yes | yes | the object, or `null` when it is missing |
 | `kube.list({apiVersion, kind, namespace, labelSelector, fieldSelector})` | yes | yes | the items; an empty `namespace` lists all namespaces |
-| `kube.apply(object)` | yes | — | creates the object, or sends a JSON merge patch (not server-side apply) |
+| `kube.apply(object)` | yes | — | creates the object, or sends a JSON merge patch (not server-side apply); needs `get`, `create` and `patch` |
 | `kube.delete({apiVersion, kind, name, namespace})` | yes | — | deletes; a missing object is no error |
 
-A failed call throws, and the script may catch it. Policies can only read:
-admission must not change the cluster.
+A failed call throws, and the script may catch it. Every call needs the
+matching right in `spec.permissions` (see [Permissions](#permissions)).
+Policies can only read: admission must not change the cluster.
 
 **Logging.** `console.log`, `info`, `debug`, `warn` and `error` go to the
 operator log; `warn` and `error` also become Warning events on the hook or
@@ -209,8 +242,10 @@ again.
 
 ## Known limitations
 
-- **Broad permissions.** Every script acts as the operator's ServiceAccount,
-  which may read and write every resource. Only install hooks you trust.
+- **The operator is powerful.** To give hooks their rights, the operator may
+  create any ClusterRole and impersonate the ServiceAccounts of its own
+  namespace. Whoever controls the operator's Deployment controls the cluster;
+  the scripts do not.
 - **Failover gap.** Hooks run on the leader only. After a leader change the
   new leader starts with a fresh synchronization: objects that changed in
   between arrive in it, but a deletion in between is never seen.

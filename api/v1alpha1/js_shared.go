@@ -288,3 +288,39 @@ func (b *HookBinding) WantsEvent(e HookEvent) bool {
 func (b *HookBinding) WantsSynchronization() bool {
 	return b.Synchronization == nil || *b.Synchronization
 }
+
+// PermissionVerb is a verb a Permission grants.
+// +kubebuilder:validation:Enum=get;list;watch;create;update;patch;delete
+type PermissionVerb string
+
+// Permission grants a script one set of rights: the verbs on the resources
+// named, in every namespace. It has the shape of an RBAC rule without
+// wildcards, so it says exactly what the script may touch.
+type Permission struct {
+	// APIGroups is the list of API groups, "" for the core group.
+	// "*" is not allowed.
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9.-]*$`
+	APIGroups []string `json:"apiGroups"`
+
+	// Resources is the list of plural resource names, e.g. ["configmaps"],
+	// or a subresource such as "deployments/scale". "*" is not allowed.
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=253
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9.-]+(/[a-z0-9.-]+)?$`
+	Resources []string `json:"resources"`
+
+	// Verbs is the list of verbs granted on those resources.
+	// +required
+	// +listType=set
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=7
+	Verbs []PermissionVerb `json:"verbs"`
+}

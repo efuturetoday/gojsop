@@ -124,9 +124,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **KUBE-1** `debt` `kube.apply` is not server-side apply. It does Get, then
   Create or JSON merge patch (lists replaced). The Get/Create race returns
   AlreadyExists with no retry (`KubeHost.apply` in `internal/jsengine/kubehost/kubehost.go`).
-- **KUBE-2** `gap` `Factory` ignores `ctx`, `key` and `sa`; both callers pass
-  `sa=""`. No per-hook identity (`kubehost/factory.go:46,53`,
-  `internal/jshook/controller/controller.go:163`). Prerequisite for OPS-2.
 - **KUBE-3** `gap` `kube.list` has no limit or pagination; an empty namespace on
   a namespaced kind lists cluster-wide (`KubeHost.list` in `kubehost.go`).
 
@@ -150,7 +147,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **API-9** `decision` Namespaced and cluster-scoped kinds. scrippy (the
   predecessor) split `ScriptHook` (own namespace only) from
   `ClusterScriptHook` (anywhere), Kyverno style. gojsop has only
-  cluster-scoped kinds and a wildcard RBAC (OPS-2). Decide whether gojsop
+  cluster-scoped kinds; each runs as its own ServiceAccount (kube-access.R10). Decide whether gojsop
   needs the split. Done when the decision is recorded in api-design.
 - **API-10** `decision` Rename the CRD status fields that still speak of VMs
   and restarts (`status.instance`, `restartsByReason`, `recentRestarts`,
@@ -165,9 +162,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **OPS-1** `gap` No Prometheus metrics. `--metrics-bind-address` exists, but
   nothing registers handle count and duration, restarts by reason, admission
   latency, allow and deny counts.
-- **OPS-2** `gap` No per-hook RBAC narrowing. Wildcard `groups=*,resources=*`
-  (`internal/jshook/controller/controller.go:103`); a bad script can touch
-  anything.
 - **OPS-3** `debt` Fixed 5 s `RequeueAfter` on the failure paths that are not
   builds: source load, kube host, config invalid, subscribe, webhook sync
   (`fail` in both controllers). A bad source URL and a transient API error get

@@ -17,6 +17,13 @@ spec:
       objectSelector:
         matchLabels:
           gojsop.io/sync: "true"
+  # What the script may do through kube.*. The hook runs as a ServiceAccount
+  # of its own with exactly these rights, plus read access to what the
+  # bindings watch. Whoever applies this hook must hold these rights too.
+  permissions:
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get", "create", "patch"]
   source:
     inline: |
       // Every call starts from a fresh snapshot of this script, so globals

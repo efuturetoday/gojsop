@@ -38,6 +38,7 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
+	"github.com/o-haase/gojsop/internal/jsaccess"
 	"github.com/o-haase/gojsop/internal/jsadmission"
 	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jsrun"
@@ -77,6 +78,11 @@ type JSAdmissionServerReconciler struct {
 	// KubeHost mints the host-function surface installed on every VM.
 	// ForAdmission returns a read-only binder.
 	KubeHost kubehost.Factory
+
+	// ServiceAccounts, when set, makes every policy's kube.* calls run as
+	// the policy's own ServiceAccount, which the leader creates
+	// (JSAdmissionReconciler.Access). Optional in tests.
+	ServiceAccounts bool
 	// Server holds the live policy table the HTTP webhook handler consults.
 	Server *jsadmission.Server
 
@@ -133,7 +139,11 @@ func (r *JSAdmissionServerReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	var host jsrun.Host
 	if r.KubeHost != nil {
-		host, err = r.KubeHost.ForAdmission(ctx, req.NamespacedName, "")
+		var sa string
+		if r.ServiceAccounts {
+			sa = jsaccess.Name(jsrun.KindJSAdmission, req.Name)
+		}
+		host, err = r.KubeHost.ForAdmission(ctx, req.NamespacedName, sa)
 		if err != nil {
 			log.Error(err, "minting kube host")
 			return ctrl.Result{RequeueAfter: sourceRetry}, nil

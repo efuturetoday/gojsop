@@ -43,6 +43,16 @@ type JSHookSpec struct {
 	// +listMapKey=name
 	// +kubebuilder:validation:MinItems=1
 	Bindings []HookBinding `json:"bindings"`
+
+	// Permissions are the rights the script has on the cluster through
+	// kube.*. gojsop gives the hook a ServiceAccount of its own with exactly
+	// these rights, plus get, list and watch on every resource a binding
+	// watches; the watches and every kube.* call run as that ServiceAccount.
+	// Whoever creates or changes the hook must hold all of these rights.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	Permissions []Permission `json:"permissions,omitempty"`
 }
 
 // JSHookStatus defines the observed state of JSHook.
@@ -58,6 +68,11 @@ type JSHookStatus struct {
 	// +listType=set
 	// +optional
 	Bindings []string `json:"bindings,omitempty"`
+
+	// ServiceAccount is the ServiceAccount, in the operator's namespace,
+	// that the hook's watches and kube.* calls run as.
+	// +optional
+	ServiceAccount string `json:"serviceAccount,omitempty"`
 
 	// Instance reports the prepared script every call starts from.
 	// +optional

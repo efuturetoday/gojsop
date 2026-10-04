@@ -53,6 +53,7 @@ const (
 	EventReconciled        = "Reconciled"
 	EventRestarted         = "Restarted"
 	EventSourceLoadFailed  = "SourceLoadFailed"
+	EventAccessFailed      = "AccessSetupFailed"
 	EventBuildFailed       = "BuildFailed"
 	EventModuleLoadFailed  = "ModuleLoadFailed"
 	EventConfigInvalid     = "ConfigInvalid"

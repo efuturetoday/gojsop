@@ -273,6 +273,68 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              permissions:
+                description: |-
+                  Permissions are the rights the script has on the cluster through
+                  kube.*. gojsop gives the hook a ServiceAccount of its own with exactly
+                  these rights, plus get, list and watch on every resource a binding
+                  watches; the watches and every kube.* call run as that ServiceAccount.
+                  Whoever creates or changes the hook must hold all of these rights.
+                items:
+                  description: |-
+                    Permission grants a script one set of rights: the verbs on the resources
+                    named, in every namespace. It has the shape of an RBAC rule without
+                    wildcards, so it says exactly what the script may touch.
+                  properties:
+                    apiGroups:
+                      description: |-
+                        APIGroups is the list of API groups, "" for the core group.
+                        "*" is not allowed.
+                      items:
+                        maxLength: 253
+                        pattern: ^[a-z0-9.-]*$
+                        type: string
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    resources:
+                      description: |-
+                        Resources is the list of plural resource names, e.g. ["configmaps"],
+                        or a subresource such as "deployments/scale". "*" is not allowed.
+                      items:
+                        maxLength: 253
+                        pattern: ^[a-z0-9.-]+(/[a-z0-9.-]+)?$
+                        type: string
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    verbs:
+                      description: Verbs is the list of verbs granted on those resources.
+                      items:
+                        description: PermissionVerb is a verb a Permission grants.
+                        enum:
+                        - get
+                        - list
+                        - watch
+                        - create
+                        - update
+                        - patch
+                        - delete
+                        type: string
+                      maxItems: 7
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - apiGroups
+                  - resources
+                  - verbs
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: atomic
               source:
                 description: Source is where to load the hook's JS module from.
                 properties:
@@ -501,6 +563,11 @@ spec:
                 format: int64
                 minimum: 0
                 type: integer
+              serviceAccount:
+                description: |-
+                  ServiceAccount is the ServiceAccount, in the operator's namespace,
+                  that the hook's watches and kube.* calls run as.
+                type: string
             type: object
         required:
         - spec
