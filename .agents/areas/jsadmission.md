@@ -89,12 +89,12 @@ Words used here:
 
 | ID | Rule | Source | Held by |
 |---|---|---|---|
-| jsadmission.R1 | Only requests that match `rules`, selectors and `matchPolicy` reach the script. A change or a deletion takes effect at once. | `JSAdmissionSpec` | `TestRegistrar_Update_OverwritesEntry`, `TestRegistrar_RemoveLastEntry_DeletesConfig`, `TestRegistrar_MixedValidatingAndMutating`, `TestRegistrar_TwoValidating_OneVWC_TwoEntries`, `TestServer_UnknownPolicy_Returns404` |
+| jsadmission.R1 | Only requests that match `rules`, selectors and `matchPolicy` reach the script. A change or a deletion takes effect at once. | `JSAdmissionSpec` | `TestRegistrar_Update_OverwritesEntry`, `TestRegistrar_RemoveLastEntry_DeletesConfig`, `TestRegistrar_MixedValidatingAndMutating`, `TestRegistrar_TwoValidating_OneVWC_TwoEntries`, `TestServer_UnknownPolicy_Returns404`, `TestE2E` |
 | jsadmission.R2 | A validating policy calls `validate(req)`, a mutating one `mutate(req)`. A missing function is a failed call. | `jsadmission.Handle` | `TestHandle_Validate_Allow`, `TestHandle_MissingExport` |
 | jsadmission.R3 | `req` has `uid`, `kind`, `resource`, `subResource`, `name`, `namespace`, `operation`, `userInfo`, `object`, `oldObject` and `dryRun`; `object` and `oldObject` are objects, not strings. | `jsadmission.AdmissionRequest` | `TestServer_PassesEveryRequestFieldToScript` |
 | jsadmission.R4 | A result without `allowed` denies. | `jsadmission.AdmissionResult` | `TestServer_MissingAllowedDenies_NullOrUndefinedFails` |
 | jsadmission.R5 | `message`, `code` and `warnings` reach the apiserver. | admission.k8s.io/v1 | `TestHandle_Validate_Deny` |
-| jsadmission.R6 | A mutating policy's `modifiedObject` becomes a JSON patch of the difference; no difference, no patch. | `jsadmission.CreatePatch` | `TestCreatePatch_NoChange`, `TestServer_Mutate_AddsLabel_AsJSONPatch` |
+| jsadmission.R6 | A mutating policy's `modifiedObject` becomes a JSON patch of the difference; no difference, no patch. | `jsadmission.CreatePatch` | `TestCreatePatch_NoChange`, `TestServer_Mutate_AddsLabel_AsJSONPatch`, `TestE2E` |
 | jsadmission.R7 | A validating policy's `modifiedObject` is ignored. | `jsadmission.AdmissionResult` | `TestServer_Validate_IgnoresModifiedObject` |
 | jsadmission.R8 | A patch that cannot be computed admits the request with a warning. | `fillResponse`; reason open in ADM-8 | missing → ADM-8 |
 | jsadmission.R9 | A failed call follows `failurePolicy`: `Ignore` admits with a warning, anything else denies with code 500. | `JSAdmissionSpec.FailurePolicy` | `TestServer_Validate_FailurePolicy_Fail_OnJSThrow`, `TestServer_Validate_FailurePolicy_Ignore_OnJSThrow` |
@@ -103,7 +103,7 @@ Words used here:
 | jsadmission.R12 | A failed call (error, memory limit, timeout, crash, client gone) affects only its request. The next request starts from the prepared script; nothing is prepared again. | js-registry.R2 | missing → GATE-22 |
 | jsadmission.R13 | A policy can only read the cluster: `kube.get` and `kube.list`, no `kube.apply` or `kube.delete`. | `sideEffects: None` | `TestSharedFactory_ForAdmission_ReadOnlySurface` |
 | jsadmission.R14 | Every response carries the UID of its request. | admission.k8s.io/v1 | `TestServer_Validate_AllowedRoundtrip` |
-| jsadmission.R15 | Requests in the operator's own namespace never reach a policy, nor do those in `--admission-exclude-namespaces` (default `kube-system`, `cert-manager`). | decision "exclude system namespaces" | `TestFlags_AdmissionExclude_DefaultsToSystemNamespaces` |
+| jsadmission.R15 | Requests in the operator's own namespace never reach a policy, nor do those in `--admission-exclude-namespaces` (default `kube-system`, `cert-manager`). | decision "exclude system namespaces" | `TestFlags_AdmissionExclude_DefaultsToSystemNamespaces`, `TestE2E` |
 | jsadmission.R16 | A denial carries no patch. | admission.k8s.io/v1 | `TestServer_Mutate_Denied_HasNoPatch` |
 | jsadmission.R17 | When gojsop cannot write the webhook configurations, the policy is `Ready=False`, reason `WebhookSyncFailed`. | status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse` |
 | jsadmission.R18 | While a new script is prepared the policy is `Ready=False`, reason `Building`. | status-conditions.R7 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
@@ -139,4 +139,4 @@ Words used here:
 
 ## Open
 
-ADM-3, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, GATE-28
+ADM-3, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-28

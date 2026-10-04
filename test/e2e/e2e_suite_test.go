@@ -42,6 +42,14 @@ var (
 // The default setup requires Kind and CertManager.
 //
 // To skip CertManager installation, set: CERT_MANAGER_INSTALL_SKIP=true
+//
+// The gojsop scenarios (gojsop_test.go) hold these rules on a real cluster:
+// kube-access.R10
+// kube-access.R12
+// kube-access.R13
+// jsadmission.R1
+// jsadmission.R6
+// jsadmission.R15
 func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting gojsop e2e test suite\n")

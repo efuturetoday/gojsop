@@ -217,8 +217,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   memory limit in `review` each apply `failurePolicy` and the next request
   runs on a fresh instance (jsadmission.R11, R12); bad requests in `serve`
   (405, 400, body over 3 MiB); `Registrar.mergeNSSelector`.
-- **GATE-23** e2e case that runs a JSAdmission against a real apiserver over
-  TLS with cert-manager.
 - **GATE-27** CI check that the committed `internal/jsengine/engine.wasm` equals a
   rebuild: run `make engine-wasm` and fail on a diff of `engine.wasm`. Needs the
   pinned toolchain of `glue/versions.env` on the runner (wasi-sdk 34, QuickJS-ng

@@ -144,7 +144,7 @@ sees CRDs installed after start is not verified.
   anything runs as it.
   Why: one identity per script is what lets its rights be narrow; the owner
   reference removes them with the resource.
-  Gate: `TestName_PrefixesKindAndCutsLongNames`, `TestEnsure_CreatesServiceAccountRoleAndBindingOwnedByTheResource`.
+  Gate: `TestName_PrefixesKindAndCutsLongNames`, `TestEnsure_CreatesServiceAccountRoleAndBindingOwnedByTheResource`; removal by the garbage collector on a real cluster: `TestE2E`.
 - **R11** Give a hook exactly its `spec.permissions` plus `get`, `list` and
   `watch` on every resource its bindings watch; give a policy exactly its
   `spec.permissions`.
@@ -155,13 +155,13 @@ sees CRDs installed after start is not verified.
   ServiceAccount, through a client that impersonates it; never through the
   operator's own client.
   Why: otherwise the narrow rights of R10 protect nothing.
-  Gate: `TestImpersonatingConfig_ActsAsTheServiceAccount`, `TestSharedFactory_As_UsesTheServiceAccountsClient`, `TestDispatcher_WatchesRunAsTheHooksClient`.
+  Gate: `TestImpersonatingConfig_ActsAsTheServiceAccount`, `TestSharedFactory_As_UsesTheServiceAccountsClient`, `TestDispatcher_WatchesRunAsTheHooksClient`, `TestE2E`.
 - **R13** Admit a JSHook or JSAdmission only when the user who creates it, or
   changes its spec, holds every right of R11 cluster-wide. A change of
   metadata alone is not checked.
   Why: Kubernetes' own rule for Roles; without it writing a hook would be a
   way to any right the operator can grant.
-  Gate: `TestChecker_DeniesRightsTheUserDoesNotHold`, `TestChecker_AllowsWhenTheUserHoldsEveryRight`, `TestChecker_UpdateOfTheScriptChecksEveryRight`.
+  Gate: `TestChecker_DeniesRightsTheUserDoesNotHold`, `TestChecker_AllowsWhenTheUserHoldsEveryRight`, `TestChecker_UpdateOfTheScriptChecksEveryRight`, `TestE2E`.
 - **R14** Name every API group and resource in `spec.permissions` explicitly:
   no `*`. A policy's permissions only read: `get`, `list`, `watch`.
   Why: a permission must say exactly what the script touches; admission runs

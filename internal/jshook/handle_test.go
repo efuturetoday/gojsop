@@ -53,3 +53,19 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 		t.Fatalf("return: got %q want %q", got, want)
 	}
 }
+
+// A Synchronization that matched nothing still has objects, empty.
+// jshook.R7
+func TestHandle_EmptySynchronizationHasEmptyObjects(t *testing.T) {
+	reg, key := loadHook(t, `function handle(ctx) { return ctx[0].objects.length; }`)
+	for _, objs := range [][]jshook.SyncObject{nil, {}} {
+		got, hres, err := jshook.Handle(context.Background(), reg, key,
+			[]jshook.BindingContext{{Binding: "watch", Type: jshook.TypeSynchronization, Objects: objs}})
+		if err != nil || hres.Outcome != jsrun.OutcomeOK {
+			t.Fatalf("Handle(%#v): %v, %+v", objs, err, hres)
+		}
+		if got != "0" {
+			t.Fatalf("objects.length with %#v: got %q, want 0", objs, got)
+		}
+	}
+}
