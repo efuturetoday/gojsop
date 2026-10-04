@@ -161,6 +161,11 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **OPS-4** `gap` Release process built (release-please, image, Helm chart,
   `install.yaml`; kubebuilder-scaffold Decisions) but no release published
   yet. Done when v0.1.0 is out and installs from the chart.
+- **OPS-8** `debt` The Kubebuilder CLI used here is v4.11.1; v4.16.0 is out.
+  The Helm plugin changed since (kubebuilder#5579 renders Roles apart from
+  ClusterRoles, renames `rbacHelpers` to `rbac.helpers`). Done when the
+  project runs on a current CLI and the chart is regenerated and passes the
+  Kind chart test.
 - **OPS-5** `decision` Tracing. scrippy exported OpenTelemetry traces per
   hook call. Decide whether gojsop traces calls, and how that relates to
   events and metrics (OPS-1). Done when decided and recorded in an aspect.

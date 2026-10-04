@@ -122,7 +122,10 @@ Adding a kind:
   like the ClusterRole (`manager-role`), and the Helm plugin keys files on
   that name, so one overwrote the other and the chart lost the operator's
   right to impersonate the ServiceAccounts of hooks.
+  Known upstream as kubernetes-sigs/kubebuilder#5546, fixed in PR #5579
+  (v4.14); we generated with v4.11.1. The hand-written Role works with any
+  plugin version, so it stays after an upgrade (OPS-8).
 
 ## Open
 
-Tracked in [backlog](../backlog.md): GATE-14, OPS-4.
+Tracked in [backlog](../backlog.md): GATE-14, OPS-4, OPS-8.
