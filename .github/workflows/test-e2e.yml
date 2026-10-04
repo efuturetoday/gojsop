@@ -6,7 +6,7 @@ on:
 
 jobs:
   test-e2e:
-    name: Run on Ubuntu
+    name: e2e on Kind
     runs-on: ubuntu-24.04
     steps:
       - name: Clone the code
