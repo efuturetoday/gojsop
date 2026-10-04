@@ -119,6 +119,9 @@ are written with the tools of its stack. Every rule says how it is held:
 - **A rule of an aspect** is held by a gate, it is `missing → <key>`, or it is
   `review only — <reason>` when no machine can check it reliably (for
   example: no abstraction for a single case; no secrets in source text).
+- **Keys in a missing gate** come first after `missing →`; several are
+  separated by commas (`missing → GATE-8, GATE-9`). Text after the keys is
+  free prose.
 - **An accepted aspect** has at least one gate a machine runs. Without one it
   stays `proposed`.
 - **No exception lists.** Code that breaks a new gate is fixed in the same

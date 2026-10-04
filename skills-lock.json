@@ -65,7 +65,7 @@
       "source": "efuturetoday/agentic-sdlc",
       "sourceType": "github",
       "skillPath": "skills/sdlc-core/SKILL.md",
-      "computedHash": "03d370f7ccec8d4a95f33bb5eae54cb2f91fbac3c20df84823389456c3aa7b06"
+      "computedHash": "56ef51ca01e76fe9e619c1f7e99634359a00cf7667e2a24e99461bcd22d4ea7d"
     },
     "sdlc-stack-go": {
       "source": "efuturetoday/agentic-sdlc",
