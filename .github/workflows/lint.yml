@@ -37,3 +37,6 @@ jobs:
         run: make sdlc-check
         env:
           GOPRIVATE: github.com/efuturetoday
+          # sdlc-check needs a newer Go than go.mod; setup-go sets
+          # GOTOOLCHAIN=local, so let Go fetch the toolchain it asks for.
+          GOTOOLCHAIN: auto
