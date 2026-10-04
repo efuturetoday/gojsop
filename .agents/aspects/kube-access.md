@@ -203,4 +203,4 @@ sees CRDs installed after start is not verified.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): KUBE-1, KUBE-3; gates GATE-7, GATE-14.
+Tracked in [backlog](../backlog.md): KUBE-1, KUBE-3, KUBE-5; gates GATE-7, GATE-14.

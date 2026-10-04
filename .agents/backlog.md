@@ -126,6 +126,18 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   AlreadyExists with no retry (`KubeHost.apply` in `internal/jsengine/kubehost/kubehost.go`).
 - **KUBE-3** `gap` `kube.list` has no limit or pagination; an empty namespace on
   a namespaced kind lists cluster-wide (`KubeHost.list` in `kubehost.go`).
+- **KUBE-5** `decision` Network access for scripts: `fetch()` to call outside
+  services, for example "is this customer paid before they may deploy"
+  (deferred 2026-10-05, after the alpha). Draft: off by default; a script
+  declares `spec.network.hosts`, HTTPS only, checked on every request and
+  redirect; private and link-local addresses blocked after DNS resolution
+  (cloud metadata, the apiserver past RBAC); every call bounded by the call
+  deadline and a response size cap; secrets through `kube.get` and
+  `permissions`. Open: who may allow a host, since no RBAC verb covers it.
+  Proposal: an admin allowlist in the operator (Helm value or flag) and the
+  script's hosts must be a subset, checked by the access webhook. Adding the
+  field later is not a breaking change, so no placeholder now (api-design.R6).
+  Done when decided and recorded in kube-access.
 
 ## API: CRD API surface
 
