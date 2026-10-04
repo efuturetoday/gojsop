@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
-	"github.com/o-haase/gojsop/internal/jslog"
+	"github.com/efuturetoday/gojsop/internal/jsengine"
+	"github.com/efuturetoday/gojsop/internal/jslog"
 )
 
 type recorder struct {

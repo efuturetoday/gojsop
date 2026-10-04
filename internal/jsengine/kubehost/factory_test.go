@@ -12,8 +12,8 @@ import (
 	"k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
-	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
+	"github.com/efuturetoday/gojsop/internal/jsengine"
+	"github.com/efuturetoday/gojsop/internal/jsengine/kubehost"
 )
 
 // surfaceOf is what a script would see: the host function names the binder

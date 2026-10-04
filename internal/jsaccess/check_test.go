@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 )
 
 // reviewer allows exactly the "verb resource" pairs in held and records

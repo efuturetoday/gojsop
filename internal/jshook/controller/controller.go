@@ -38,14 +38,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	ctrlsource "sigs.k8s.io/controller-runtime/pkg/source"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsaccess"
-	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
-	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
-	"github.com/o-haase/gojsop/internal/jslifecycle"
-	"github.com/o-haase/gojsop/internal/jsrun"
-	"github.com/o-haase/gojsop/internal/jssource"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/conditions"
+	"github.com/efuturetoday/gojsop/internal/jsaccess"
+	"github.com/efuturetoday/gojsop/internal/jsengine/kubehost"
+	"github.com/efuturetoday/gojsop/internal/jshook/dispatcher"
+	"github.com/efuturetoday/gojsop/internal/jslifecycle"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jssource"
 )
 
 // ManualRestartAnnotation is the JSHook annotation that triggers a manual

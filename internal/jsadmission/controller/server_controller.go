@@ -36,13 +36,13 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	ctrlsource "sigs.k8s.io/controller-runtime/pkg/source"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsaccess"
-	"github.com/o-haase/gojsop/internal/jsadmission"
-	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
-	"github.com/o-haase/gojsop/internal/jsrun"
-	"github.com/o-haase/gojsop/internal/jssource"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/conditions"
+	"github.com/efuturetoday/gojsop/internal/jsaccess"
+	"github.com/efuturetoday/gojsop/internal/jsadmission"
+	"github.com/efuturetoday/gojsop/internal/jsengine/kubehost"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jssource"
 )
 
 // sourceRetry spaces the retries of a policy whose source cannot be loaded.

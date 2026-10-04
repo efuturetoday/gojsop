@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 )
 
 // js-sources.R1

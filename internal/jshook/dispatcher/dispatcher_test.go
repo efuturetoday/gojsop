@@ -21,15 +21,15 @@ import (
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsengine"
-	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
-	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
-	"github.com/o-haase/gojsop/internal/jslog"
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/conditions"
+	"github.com/efuturetoday/gojsop/internal/jsengine"
+	"github.com/efuturetoday/gojsop/internal/jsengine/kubehost"
+	"github.com/efuturetoday/gojsop/internal/jshook/dispatcher"
+	"github.com/efuturetoday/gojsop/internal/jslog"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsregistry/registrytest"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 var cmGVR = schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}

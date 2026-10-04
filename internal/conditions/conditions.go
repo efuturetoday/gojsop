@@ -8,7 +8,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 const (

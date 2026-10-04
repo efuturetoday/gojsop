@@ -8,9 +8,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsengine"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 func hookKey(name string) jsrun.Key {

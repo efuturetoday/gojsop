@@ -1,4 +1,4 @@
-module github.com/o-haase/gojsop/hack/spikes/quickjs-wasm
+module github.com/efuturetoday/gojsop/hack/spikes/quickjs-wasm
 
 go 1.26
 

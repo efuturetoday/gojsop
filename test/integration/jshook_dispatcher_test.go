@@ -14,13 +14,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/jsengine"
-	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
-	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/jsengine"
+	"github.com/efuturetoday/gojsop/internal/jsengine/kubehost"
+	"github.com/efuturetoday/gojsop/internal/jshook/dispatcher"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsregistry/registrytest"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 type configMapMapper struct{}

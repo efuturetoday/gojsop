@@ -11,7 +11,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 )
 
 func newReader(t *testing.T, objs ...runtime.Object) *fake.ClientBuilder {

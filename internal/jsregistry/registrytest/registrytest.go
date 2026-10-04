@@ -7,8 +7,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // GetOrLoad calls Registry.Ensure for key until the key is Ready or Broken

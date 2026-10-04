@@ -14,7 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 )
 
 // CheckPath is where the operator serves the access check.

@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/efuturetoday/gojsop/internal/jsengine"
 )
 
 // FieldManager is the field manager kube.apply sends with its create and merge

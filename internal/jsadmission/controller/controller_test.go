@@ -15,12 +15,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jsadmission"
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsrun"
-	"github.com/o-haase/gojsop/internal/jssource"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/conditions"
+	"github.com/efuturetoday/gojsop/internal/jsadmission"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jssource"
 )
 
 // jsadmission.R17

@@ -25,7 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 )
 
 var _ = Describe("spec.permissions", func() {

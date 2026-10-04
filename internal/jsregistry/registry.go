@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsengine"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // historyCap bounds the recovery log so a flapping key can't drive registry

@@ -29,12 +29,12 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/conditions"
-	jshookctrl "github.com/o-haase/gojsop/internal/jshook/controller"
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsrun"
-	"github.com/o-haase/gojsop/internal/jssource"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/conditions"
+	jshookctrl "github.com/efuturetoday/gojsop/internal/jshook/controller"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jssource"
 )
 
 // sampleBinding is the minimal binding every JSHook needs: spec.bindings is

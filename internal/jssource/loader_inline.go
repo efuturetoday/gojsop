@@ -3,7 +3,7 @@ package jssource
 import (
 	"context"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 )
 
 // InlineLoader returns the JS source straight from spec.source.inline.

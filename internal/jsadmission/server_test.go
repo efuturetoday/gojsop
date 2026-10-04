@@ -18,9 +18,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	logr "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsregistry/registrytest"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // pathLabels is the JSON-patch path the diff tests expect for label changes.

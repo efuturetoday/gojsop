@@ -33,12 +33,12 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jshook"
-	"github.com/o-haase/gojsop/internal/jslifecycle"
-	"github.com/o-haase/gojsop/internal/jslog"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/conditions"
+	"github.com/efuturetoday/gojsop/internal/jshook"
+	"github.com/efuturetoday/gojsop/internal/jslifecycle"
+	"github.com/efuturetoday/gojsop/internal/jslog"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // EventEmitter is the shared lifecycle-event callback. Aliased from

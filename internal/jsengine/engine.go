@@ -19,7 +19,7 @@ import (
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // engineWasm is built by `make engine-wasm` from glue/glue.c and committed

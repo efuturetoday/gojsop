@@ -8,7 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
 )
 
 // Loader returns the JS module text for a given JSSource.

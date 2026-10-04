@@ -7,11 +7,11 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
-	"github.com/o-haase/gojsop/internal/jshook"
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsengine/kubehost"
+	"github.com/efuturetoday/gojsop/internal/jshook"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsregistry/registrytest"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // loadHook loads src as the hook of a fresh key in a real registry.

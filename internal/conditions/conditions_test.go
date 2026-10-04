@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // status-conditions.R3

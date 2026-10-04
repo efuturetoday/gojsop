@@ -20,10 +20,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/o-haase/gojsop/internal/conditions"
-	"github.com/o-haase/gojsop/internal/jslifecycle"
-	"github.com/o-haase/gojsop/internal/jslog"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/conditions"
+	"github.com/efuturetoday/gojsop/internal/jslifecycle"
+	"github.com/efuturetoday/gojsop/internal/jslog"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // EventEmitter is the shared lifecycle-event callback. Aliased from

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // GroupVersionKind mirrors metav1.GroupVersionKind on the JS side.

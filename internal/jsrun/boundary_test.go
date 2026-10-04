@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	modPath    = "github.com/o-haase/gojsop/"
+	modPath    = "github.com/efuturetoday/gojsop/"
 	enginePkg  = modPath + "internal/jsengine"
 	oldQJSPkg  = "github.com/fastschema/qjs" // replaced by our own build (EXEC-8)
 	wazeroPkg  = "github.com/tetratelabs/wazero"

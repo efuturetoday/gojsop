@@ -7,9 +7,9 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsregistry/registrytest"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // recvKey waits for one key on ch.

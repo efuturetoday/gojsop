@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/o-haase/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // notifier collects the keys of one subscriber whose build ended. A key that

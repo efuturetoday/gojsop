@@ -27,7 +27,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/o-haase/gojsop/test/utils"
+	"github.com/efuturetoday/gojsop/test/utils"
 )
 
 // e2eNamespace holds the objects the scenarios create; e2eTarget receives

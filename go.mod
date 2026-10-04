@@ -1,4 +1,4 @@
-module github.com/o-haase/gojsop
+module github.com/efuturetoday/gojsop
 
 go 1.25.3
 

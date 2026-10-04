@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/efuturetoday/gojsop/internal/jsengine"
 )
 
 // Level classifies one console line. It decides how visible the line is:

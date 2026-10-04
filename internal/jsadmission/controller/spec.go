@@ -20,8 +20,8 @@ import (
 	"context"
 	"time"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/jsrun"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
 )
 
 // This file holds what both JSAdmission reconcilers derive from one policy.

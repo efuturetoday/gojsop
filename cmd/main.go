@@ -45,17 +45,17 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
-	"github.com/o-haase/gojsop/internal/jsaccess"
-	"github.com/o-haase/gojsop/internal/jsadmission"
-	jsadmissionctrl "github.com/o-haase/gojsop/internal/jsadmission/controller"
-	webhookv1alpha1 "github.com/o-haase/gojsop/internal/jsadmission/webhook/v1alpha1"
-	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
-	jshookctrl "github.com/o-haase/gojsop/internal/jshook/controller"
-	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
-	"github.com/o-haase/gojsop/internal/jsregistry"
-	"github.com/o-haase/gojsop/internal/jsrun"
-	"github.com/o-haase/gojsop/internal/jssource"
+	corev1alpha1 "github.com/efuturetoday/gojsop/api/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/jsaccess"
+	"github.com/efuturetoday/gojsop/internal/jsadmission"
+	jsadmissionctrl "github.com/efuturetoday/gojsop/internal/jsadmission/controller"
+	webhookv1alpha1 "github.com/efuturetoday/gojsop/internal/jsadmission/webhook/v1alpha1"
+	"github.com/efuturetoday/gojsop/internal/jsengine/kubehost"
+	jshookctrl "github.com/efuturetoday/gojsop/internal/jshook/controller"
+	"github.com/efuturetoday/gojsop/internal/jshook/dispatcher"
+	"github.com/efuturetoday/gojsop/internal/jsregistry"
+	"github.com/efuturetoday/gojsop/internal/jsrun"
+	"github.com/efuturetoday/gojsop/internal/jssource"
 	// +kubebuilder:scaffold:imports
 )
 
