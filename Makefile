@@ -138,7 +138,7 @@ engine-wasm: ## Rebuild internal/jsengine/engine.wasm from glue.c with the pinne
 
 .PHONY: sdlc-check
 sdlc-check: ## Check .agents against the method of the SDLC library (github.com/efuturetoday/agentic-sdlc)
-	go run github.com/efuturetoday/agentic-sdlc/cmd/sdlc-check@v0.1.1
+	GOPRIVATE=github.com/efuturetoday go run github.com/efuturetoday/agentic-sdlc/cmd/sdlc-check@v0.1.1
 
 ##@ Build
 

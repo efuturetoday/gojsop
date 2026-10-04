@@ -111,7 +111,15 @@ previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml
 is manually re-applied afterwards.
 
 ## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
+
+`make sdlc-check` runs the checker from the private repository
+`github.com/efuturetoday/agentic-sdlc`. The target sets `GOPRIVATE`, so Go
+fetches the module straight from GitHub; Git needs credentials for it, for
+example through the GitHub CLI:
+
+```sh
+git config --global credential.https://github.com.helper '!gh auth git-credential'
+```
 
 **NOTE:** Run `make help` for more information on all potential `make` targets
 
