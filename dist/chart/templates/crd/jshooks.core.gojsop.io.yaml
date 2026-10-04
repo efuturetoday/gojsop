@@ -1,536 +1,557 @@
-{{- if .Values.crd.enable }}
+{{- if .Values.crd.enabled }}
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-    annotations:
-        controller-gen.kubebuilder.io/version: v0.20.0
-    name: jshooks.core.gojsop.io
+  annotations:
+    {{- if .Values.crd.keep }}
+    "helm.sh/resource-policy": keep
+    {{- end }}
+    controller-gen.kubebuilder.io/version: v0.20.0
+  name: jshooks.core.gojsop.io
 spec:
-    group: core.gojsop.io
-    names:
-        kind: JSHook
-        listKind: JSHookList
-        plural: jshooks
-        shortNames:
-            - jshook
-        singular: jshook
-    scope: Cluster
-    versions:
-        - additionalPrinterColumns:
-            - jsonPath: .status.conditions[?(@.type=='Ready')].status
-              name: Ready
-              type: string
-            - jsonPath: .status.conditions[?(@.type=='Ready')].reason
-              name: Reason
-              priority: 1
-              type: string
-            - jsonPath: .status.script.recentRestarts[0].reason
-              name: LastRestart
-              type: string
-            - jsonPath: .status.script.recentRestarts[0].time
-              name: RestartedAt
-              priority: 1
-              type: date
-            - jsonPath: .metadata.creationTimestamp
-              name: Age
-              type: date
-          name: v1alpha1
-          schema:
-            openAPIV3Schema:
+  group: core.gojsop.io
+  names:
+    kind: JSHook
+    listKind: JSHookList
+    plural: jshooks
+    shortNames:
+    - jshook
+    singular: jshook
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].reason
+      name: Reason
+      priority: 1
+      type: string
+    - jsonPath: .status.script.recentRestarts[0].reason
+      name: LastRestart
+      type: string
+    - jsonPath: .status.script.recentRestarts[0].time
+      name: RestartedAt
+      priority: 1
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          JSHook declares a JavaScript-based Kubernetes hook. The controller watches
+          the resources named in spec.bindings and calls the script's handle() with
+          every matching change.
+
+          JSHook is cluster-scoped because hooks typically observe resources across
+          namespaces.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of JSHook
+            properties:
+              bindings:
                 description: |-
-                    JSHook declares a JavaScript-based Kubernetes hook. The controller watches
-                    the resources named in spec.bindings and calls the script's handle() with
-                    every matching change.
+                  Bindings tell the operator which resources to watch and which events
+                  call handle(). At least one is required: a hook that watches nothing
+                  can never run.
 
-                    JSHook is cluster-scoped because hooks typically observe resources across
-                    namespaces.
-                properties:
-                    apiVersion:
-                        description: |-
-                            APIVersion defines the versioned schema of this representation of an object.
-                            Servers should convert recognized schemas to the latest internal value, and
-                            may reject unrecognized values.
-                            More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+                  Declared here rather than returned by the script, so the apiserver
+                  validates them on apply, kubectl shows them without reading the
+                  source, and the operator knows the hook's scope before it runs any
+                  user code (api-design.R11).
+                items:
+                  description: |-
+                    HookBinding is one slice of the cluster a JSHook reacts to. It is the
+                    counterpart of AdmissionRule: same resource selection, same object
+                    matching, a different trigger.
+                  properties:
+                    apiGroups:
+                      description: APIGroups is the list of API groups, "" for the
+                        core group.
+                      items:
+                        maxLength: 253
                         type: string
-                    kind:
-                        description: |-
-                            Kind is a string value representing the REST resource this object represents.
-                            Servers may infer this from the endpoint the client submits requests to.
-                            Cannot be updated.
-                            In CamelCase.
-                            More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    apiVersions:
+                      description: APIVersions is the list of versions, e.g. ["v1"].
+                      items:
+                        maxLength: 253
                         type: string
-                    metadata:
-                        type: object
-                    spec:
-                        description: spec defines the desired state of JSHook
-                        properties:
-                            bindings:
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    events:
+                      default:
+                      - Added
+                      - Modified
+                      - Deleted
+                      description: Events selects which watch events call handle().
+                        Defaults to all three.
+                      items:
+                        description: HookEvent is a watch event that triggers a JSHook
+                          binding.
+                        enum:
+                        - Added
+                        - Modified
+                        - Deleted
+                        type: string
+                      maxItems: 3
+                      type: array
+                      x-kubernetes-list-type: set
+                    name:
+                      description: |-
+                        Name identifies this binding in the binding context handed to
+                        handle(), in status.bindings and in events. Must be unique within the
+                        hook.
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    namespaceSelector:
+                      description: |-
+                        NamespaceSelector matches the labels of the object's namespace.
+                        A cluster-scoped object has no namespace and therefore matches only
+                        when the selector is empty.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
+                                type: string
+                              operator:
                                 description: |-
-                                    Bindings tell the operator which resources to watch and which events
-                                    call handle(). At least one is required: a hook that watches nothing
-                                    can never run.
-
-                                    Declared here rather than returned by the script, so the apiserver
-                                    validates them on apply, kubectl shows them without reading the
-                                    source, and the operator knows the hook's scope before it runs any
-                                    user code (api-design.R11).
-                                items:
-                                    description: |-
-                                        HookBinding is one slice of the cluster a JSHook reacts to. It is the
-                                        counterpart of AdmissionRule: same resource selection, same object
-                                        matching, a different trigger.
-                                    properties:
-                                        apiGroups:
-                                            description: APIGroups is the list of API groups, "" for the core group.
-                                            items:
-                                                maxLength: 253
-                                                type: string
-                                            maxItems: 16
-                                            minItems: 1
-                                            type: array
-                                            x-kubernetes-list-type: set
-                                        apiVersions:
-                                            description: APIVersions is the list of versions, e.g. ["v1"].
-                                            items:
-                                                maxLength: 253
-                                                type: string
-                                            maxItems: 16
-                                            minItems: 1
-                                            type: array
-                                            x-kubernetes-list-type: set
-                                        events:
-                                            default:
-                                                - Added
-                                                - Modified
-                                                - Deleted
-                                            description: Events selects which watch events call handle(). Defaults to all three.
-                                            items:
-                                                description: HookEvent is a watch event that triggers a JSHook binding.
-                                                enum:
-                                                    - Added
-                                                    - Modified
-                                                    - Deleted
-                                                type: string
-                                            maxItems: 3
-                                            type: array
-                                            x-kubernetes-list-type: set
-                                        name:
-                                            description: |-
-                                                Name identifies this binding in the binding context handed to
-                                                handle(), in status.bindings and in events. Must be unique within the
-                                                hook.
-                                            maxLength: 63
-                                            minLength: 1
-                                            type: string
-                                        namespaceSelector:
-                                            description: |-
-                                                NamespaceSelector matches the labels of the object's namespace.
-                                                A cluster-scoped object has no namespace and therefore matches only
-                                                when the selector is empty.
-                                            properties:
-                                                matchExpressions:
-                                                    description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
-                                                    items:
-                                                        description: |-
-                                                            A label selector requirement is a selector that contains values, a key, and an operator that
-                                                            relates the key and values.
-                                                        properties:
-                                                            key:
-                                                                description: key is the label key that the selector applies to.
-                                                                type: string
-                                                            operator:
-                                                                description: |-
-                                                                    operator represents a key's relationship to a set of values.
-                                                                    Valid operators are In, NotIn, Exists and DoesNotExist.
-                                                                type: string
-                                                            values:
-                                                                description: |-
-                                                                    values is an array of string values. If the operator is In or NotIn,
-                                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
-                                                                    the values array must be empty. This array is replaced during a strategic
-                                                                    merge patch.
-                                                                items:
-                                                                    type: string
-                                                                type: array
-                                                                x-kubernetes-list-type: atomic
-                                                        required:
-                                                            - key
-                                                            - operator
-                                                        type: object
-                                                    type: array
-                                                    x-kubernetes-list-type: atomic
-                                                matchLabels:
-                                                    additionalProperties:
-                                                        type: string
-                                                    description: |-
-                                                        matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-                                                        map is equivalent to an element of matchExpressions, whose key field is "key", the
-                                                        operator is "In", and the values array contains only "value". The requirements are ANDed.
-                                                    type: object
-                                            type: object
-                                            x-kubernetes-map-type: atomic
-                                        objectSelector:
-                                            description: ObjectSelector matches the labels of the object itself.
-                                            properties:
-                                                matchExpressions:
-                                                    description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
-                                                    items:
-                                                        description: |-
-                                                            A label selector requirement is a selector that contains values, a key, and an operator that
-                                                            relates the key and values.
-                                                        properties:
-                                                            key:
-                                                                description: key is the label key that the selector applies to.
-                                                                type: string
-                                                            operator:
-                                                                description: |-
-                                                                    operator represents a key's relationship to a set of values.
-                                                                    Valid operators are In, NotIn, Exists and DoesNotExist.
-                                                                type: string
-                                                            values:
-                                                                description: |-
-                                                                    values is an array of string values. If the operator is In or NotIn,
-                                                                    the values array must be non-empty. If the operator is Exists or DoesNotExist,
-                                                                    the values array must be empty. This array is replaced during a strategic
-                                                                    merge patch.
-                                                                items:
-                                                                    type: string
-                                                                type: array
-                                                                x-kubernetes-list-type: atomic
-                                                        required:
-                                                            - key
-                                                            - operator
-                                                        type: object
-                                                    type: array
-                                                    x-kubernetes-list-type: atomic
-                                                matchLabels:
-                                                    additionalProperties:
-                                                        type: string
-                                                    description: |-
-                                                        matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
-                                                        map is equivalent to an element of matchExpressions, whose key field is "key", the
-                                                        operator is "In", and the values array contains only "value". The requirements are ANDed.
-                                                    type: object
-                                            type: object
-                                            x-kubernetes-map-type: atomic
-                                        resources:
-                                            description: Resources is the list of plural resource names, e.g. ["configmaps"].
-                                            items:
-                                                maxLength: 253
-                                                type: string
-                                            maxItems: 16
-                                            minItems: 1
-                                            type: array
-                                            x-kubernetes-list-type: set
-                                        scope:
-                                            description: Scope is one of "*" (default), "Namespaced", "Cluster".
-                                            enum:
-                                                - '*'
-                                                - Namespaced
-                                                - Cluster
-                                            type: string
-                                    required:
-                                        - apiGroups
-                                        - apiVersions
-                                        - name
-                                        - resources
-                                    type: object
-                                maxItems: 32
-                                minItems: 1
-                                type: array
-                                x-kubernetes-list-map-keys:
-                                    - name
-                                x-kubernetes-list-type: map
-                            limits:
-                                description: Limits caps memory and per-call execution time of the JS instance.
-                                properties:
-                                    memoryMB:
-                                        default: 32
-                                        description: MemoryMB is the hard limit on the QuickJS heap of one call in megabytes.
-                                        format: int32
-                                        maximum: 512
-                                        minimum: 1
-                                        type: integer
-                                    timeoutSeconds:
-                                        default: 30
-                                        description: |-
-                                            TimeoutSeconds bounds a single call into JS, and the build (module load
-                                            and top-level code). On timeout the call is stopped; the next call starts
-                                            from the prepared script.
-                                        format: int32
-                                        maximum: 300
-                                        minimum: 1
-                                        type: integer
-                                type: object
-                            permissions:
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
                                 description: |-
-                                    Permissions are the rights the script has on the cluster through
-                                    kube.*. gojsop gives the hook a ServiceAccount of its own with exactly
-                                    these rights, plus get, list and watch on every resource a binding
-                                    watches; the watches and every kube.* call run as that ServiceAccount.
-                                    Whoever creates or changes the hook must hold all of these rights.
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
                                 items:
-                                    description: |-
-                                        Permission grants a script one set of rights: the verbs on the resources
-                                        named, in every namespace. It has the shape of an RBAC rule without
-                                        wildcards, so it says exactly what the script may touch.
-                                    properties:
-                                        apiGroups:
-                                            description: |-
-                                                APIGroups is the list of API groups, "" for the core group.
-                                                "*" is not allowed.
-                                            items:
-                                                maxLength: 253
-                                                pattern: ^[a-z0-9.-]*$
-                                                type: string
-                                            maxItems: 16
-                                            minItems: 1
-                                            type: array
-                                            x-kubernetes-list-type: set
-                                        resources:
-                                            description: |-
-                                                Resources is the list of plural resource names, e.g. ["configmaps"],
-                                                or a subresource such as "deployments/scale". "*" is not allowed.
-                                            items:
-                                                maxLength: 253
-                                                pattern: ^[a-z0-9.-]+(/[a-z0-9.-]+)?$
-                                                type: string
-                                            maxItems: 16
-                                            minItems: 1
-                                            type: array
-                                            x-kubernetes-list-type: set
-                                        verbs:
-                                            description: Verbs is the list of verbs granted on those resources.
-                                            items:
-                                                description: PermissionVerb is a verb a Permission grants.
-                                                enum:
-                                                    - get
-                                                    - list
-                                                    - watch
-                                                    - create
-                                                    - update
-                                                    - patch
-                                                    - delete
-                                                type: string
-                                            maxItems: 7
-                                            minItems: 1
-                                            type: array
-                                            x-kubernetes-list-type: set
-                                    required:
-                                        - apiGroups
-                                        - resources
-                                        - verbs
-                                    type: object
-                                maxItems: 64
+                                  type: string
                                 type: array
                                 x-kubernetes-list-type: atomic
-                            source:
-                                description: Source is where to load the hook's JS module from.
-                                properties:
-                                    configMapRef:
-                                        description: ConfigMapRef pulls the JS module text from a key in a ConfigMap.
-                                        properties:
-                                            key:
-                                                default: hook.js
-                                                description: Key inside the ConfigMap.
-                                                maxLength: 253
-                                                minLength: 1
-                                                type: string
-                                            name:
-                                                description: Name is the name of the referenced ConfigMap.
-                                                maxLength: 253
-                                                minLength: 1
-                                                type: string
-                                            namespace:
-                                                description: Namespace is the namespace of the referenced ConfigMap.
-                                                maxLength: 63
-                                                minLength: 1
-                                                type: string
-                                        required:
-                                            - name
-                                            - namespace
-                                        type: object
-                                    inline:
-                                        description: |-
-                                            Inline embeds the JS module text directly into the resource.
-                                            Convenient for small hooks and demos.
-                                            At most 512 KiB; larger scripts belong in a ConfigMap.
-                                        maxLength: 524288
-                                        minLength: 1
-                                        type: string
-                                type: object
-                                x-kubernetes-validations:
-                                    - message: exactly one of inline or configMapRef must be set
-                                      rule: (has(self.inline)?1:0) + (has(self.configMapRef)?1:0) == 1
-                        required:
-                            - bindings
-                            - source
-                        type: object
-                    status:
-                        description: status defines the observed state of JSHook
-                        properties:
-                            bindings:
-                                description: |-
-                                    Bindings echoes the watches the operator actually established, one
-                                    entry per binding and resource, so a user sees the resolved scope
-                                    without re-deriving it from spec.bindings.
-                                items:
-                                    type: string
-                                type: array
-                                x-kubernetes-list-type: set
-                            conditions:
-                                description: Conditions follows standard Kubernetes condition conventions.
-                                items:
-                                    description: Condition contains details for one aspect of the current state of this API Resource.
-                                    properties:
-                                        lastTransitionTime:
-                                            description: |-
-                                                lastTransitionTime is the last time the condition transitioned from one status to another.
-                                                This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
-                                            format: date-time
-                                            type: string
-                                        message:
-                                            description: |-
-                                                message is a human readable message indicating details about the transition.
-                                                This may be an empty string.
-                                            maxLength: 32768
-                                            type: string
-                                        observedGeneration:
-                                            description: |-
-                                                observedGeneration represents the .metadata.generation that the condition was set based upon.
-                                                For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                                                with respect to the current state of the instance.
-                                            format: int64
-                                            minimum: 0
-                                            type: integer
-                                        reason:
-                                            description: |-
-                                                reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                                                Producers of specific condition types may define expected values and meanings for this field,
-                                                and whether the values are considered a guaranteed API.
-                                                The value should be a CamelCase string.
-                                                This field may not be empty.
-                                            maxLength: 1024
-                                            minLength: 1
-                                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
-                                            type: string
-                                        status:
-                                            description: status of the condition, one of True, False, Unknown.
-                                            enum:
-                                                - "True"
-                                                - "False"
-                                                - Unknown
-                                            type: string
-                                        type:
-                                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
-                                            maxLength: 316
-                                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
-                                            type: string
-                                    required:
-                                        - lastTransitionTime
-                                        - message
-                                        - reason
-                                        - status
-                                        - type
-                                    type: object
-                                type: array
-                                x-kubernetes-list-map-keys:
-                                    - type
-                                x-kubernetes-list-type: map
-                            lastReconcile:
-                                description: |-
-                                    LastReconcile reports when the reconcile result last changed and what
-                                    went wrong (if anything). Distinct from runtime call telemetry — a
-                                    successful reconcile here does NOT mean handle() ran.
-                                properties:
-                                    error:
-                                        description: |-
-                                            Error is non-empty when the last reconcile failed (source load,
-                                            build, subscribe, webhook sync). Empty on a successful reconcile.
-                                        type: string
-                                    time:
-                                        description: |-
-                                            Time is when the reconcile result last changed: a failure, or the first
-                                            success after a failure.
-                                        format: date-time
-                                        type: string
-                                type: object
-                            observedGeneration:
-                                description: ObservedGeneration is the generation last reconciled by the controller.
-                                format: int64
-                                minimum: 0
-                                type: integer
-                            script:
-                                description: Script reports the prepared script every call starts from.
-                                properties:
-                                    preparedAt:
-                                        description: PreparedAt is when the current script was prepared.
-                                        format: date-time
-                                        type: string
-                                    recentRestarts:
-                                        description: |-
-                                            RecentRestarts is the most-recent-first restart log, capped at 20
-                                            entries. recentRestarts[0] is the newest event so JSONPath print
-                                            columns can show the latest reason without index-from-end gymnastics.
-                                        items:
-                                            description: |-
-                                                JSRestartEvent records one time the operator prepared the script of a hook
-                                                or admission policy again. Mirrored from the registry's log so users can
-                                                see the recent trail without `kubectl logs` on the operator.
-                                            properties:
-                                                error:
-                                                    description: Error is a diagnostic recorded with the event, if any.
-                                                    type: string
-                                                reason:
-                                                    description: |-
-                                                        Reason is what made the operator prepare the script again: the source
-                                                        changed, the limits changed, or the gojsop.io/restart annotation got a
-                                                        new value.
-                                                    enum:
-                                                        - source-changed
-                                                        - limits-changed
-                                                        - manual
-                                                    type: string
-                                                time:
-                                                    description: Time is when the newly prepared script was installed.
-                                                    format: date-time
-                                                    type: string
-                                            type: object
-                                        type: array
-                                        x-kubernetes-list-type: atomic
-                                    restartToken:
-                                        description: |-
-                                            RestartToken echoes the value of the gojsop.io/restart annotation
-                                            that produced the most recent manual restart. Setting the annotation to
-                                            a new value triggers exactly one restart; re-reconciles with the same
-                                            value are no-ops.
-                                        type: string
-                                    restartsByReason:
-                                        additionalProperties:
-                                            format: int32
-                                            type: integer
-                                        description: |-
-                                            RestartsByReason aggregates RecentRestarts. Keys are the reasons of
-                                            RecentRestarts; values are counts since the operator started.
-                                        type: object
-                                    sourceHash:
-                                        description: |-
-                                            SourceHash is a sha256 of the loaded JS source. A change here prepares
-                                            the script again.
-                                        type: string
-                                type: object
-                            serviceAccount:
-                                description: |-
-                                    ServiceAccount is the ServiceAccount, in the operator's namespace,
-                                    that the hook's watches and kube.* calls run as.
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    objectSelector:
+                      description: ObjectSelector matches the labels of the object
+                        itself.
+                      properties:
+                        matchExpressions:
+                          description: matchExpressions is a list of label selector
+                            requirements. The requirements are ANDed.
+                          items:
+                            description: |-
+                              A label selector requirement is a selector that contains values, a key, and an operator that
+                              relates the key and values.
+                            properties:
+                              key:
+                                description: key is the label key that the selector
+                                  applies to.
                                 type: string
-                        type: object
-                required:
-                    - spec
+                              operator:
+                                description: |-
+                                  operator represents a key's relationship to a set of values.
+                                  Valid operators are In, NotIn, Exists and DoesNotExist.
+                                type: string
+                              values:
+                                description: |-
+                                  values is an array of string values. If the operator is In or NotIn,
+                                  the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                  the values array must be empty. This array is replaced during a strategic
+                                  merge patch.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            required:
+                            - key
+                            - operator
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        matchLabels:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                            map is equivalent to an element of matchExpressions, whose key field is "key", the
+                            operator is "In", and the values array contains only "value". The requirements are ANDed.
+                          type: object
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    resources:
+                      description: Resources is the list of plural resource names,
+                        e.g. ["configmaps"].
+                      items:
+                        maxLength: 253
+                        type: string
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    scope:
+                      description: Scope is one of "*" (default), "Namespaced", "Cluster".
+                      enum:
+                      - '*'
+                      - Namespaced
+                      - Cluster
+                      type: string
+                  required:
+                  - apiGroups
+                  - apiVersions
+                  - name
+                  - resources
+                  type: object
+                maxItems: 32
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              limits:
+                description: Limits caps memory and per-call execution time of the
+                  JS instance.
+                properties:
+                  memoryMB:
+                    default: 32
+                    description: MemoryMB is the hard limit on the QuickJS heap of
+                      one call in megabytes.
+                    format: int32
+                    maximum: 512
+                    minimum: 1
+                    type: integer
+                  timeoutSeconds:
+                    default: 30
+                    description: |-
+                      TimeoutSeconds bounds a single call into JS, and the build (module load
+                      and top-level code). On timeout the call is stopped; the next call starts
+                      from the prepared script.
+                    format: int32
+                    maximum: 300
+                    minimum: 1
+                    type: integer
                 type: object
-          served: true
-          storage: true
-          subresources:
-            status: {}
+              permissions:
+                description: |-
+                  Permissions are the rights the script has on the cluster through
+                  kube.*. gojsop gives the hook a ServiceAccount of its own with exactly
+                  these rights, plus get, list and watch on every resource a binding
+                  watches; the watches and every kube.* call run as that ServiceAccount.
+                  Whoever creates or changes the hook must hold all of these rights.
+                items:
+                  description: |-
+                    Permission grants a script one set of rights: the verbs on the resources
+                    named, in every namespace. It has the shape of an RBAC rule without
+                    wildcards, so it says exactly what the script may touch.
+                  properties:
+                    apiGroups:
+                      description: |-
+                        APIGroups is the list of API groups, "" for the core group.
+                        "*" is not allowed.
+                      items:
+                        maxLength: 253
+                        pattern: ^[a-z0-9.-]*$
+                        type: string
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    resources:
+                      description: |-
+                        Resources is the list of plural resource names, e.g. ["configmaps"],
+                        or a subresource such as "deployments/scale". "*" is not allowed.
+                      items:
+                        maxLength: 253
+                        pattern: ^[a-z0-9.-]+(/[a-z0-9.-]+)?$
+                        type: string
+                      maxItems: 16
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    verbs:
+                      description: Verbs is the list of verbs granted on those resources.
+                      items:
+                        description: PermissionVerb is a verb a Permission grants.
+                        enum:
+                        - get
+                        - list
+                        - watch
+                        - create
+                        - update
+                        - patch
+                        - delete
+                        type: string
+                      maxItems: 7
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                  required:
+                  - apiGroups
+                  - resources
+                  - verbs
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: atomic
+              source:
+                description: Source is where to load the hook's JS module from.
+                properties:
+                  configMapRef:
+                    description: ConfigMapRef pulls the JS module text from a key
+                      in a ConfigMap.
+                    properties:
+                      key:
+                        default: hook.js
+                        description: Key inside the ConfigMap.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      name:
+                        description: Name is the name of the referenced ConfigMap.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace is the namespace of the referenced
+                          ConfigMap.
+                        maxLength: 63
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  inline:
+                    description: |-
+                      Inline embeds the JS module text directly into the resource.
+                      Convenient for small hooks and demos.
+                      At most 512 KiB; larger scripts belong in a ConfigMap.
+                    maxLength: 524288
+                    minLength: 1
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one of inline or configMapRef must be set
+                  rule: (has(self.inline)?1:0) + (has(self.configMapRef)?1:0) == 1
+            required:
+            - bindings
+            - source
+            type: object
+          status:
+            description: status defines the observed state of JSHook
+            properties:
+              bindings:
+                description: |-
+                  Bindings echoes the watches the operator actually established, one
+                  entry per binding and resource, so a user sees the resolved scope
+                  without re-deriving it from spec.bindings.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              conditions:
+                description: Conditions follows standard Kubernetes condition conventions.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              lastReconcile:
+                description: |-
+                  LastReconcile reports when the reconcile result last changed and what
+                  went wrong (if anything). Distinct from runtime call telemetry — a
+                  successful reconcile here does NOT mean handle() ran.
+                properties:
+                  error:
+                    description: |-
+                      Error is non-empty when the last reconcile failed (source load,
+                      build, subscribe, webhook sync). Empty on a successful reconcile.
+                    type: string
+                  time:
+                    description: |-
+                      Time is when the reconcile result last changed: a failure, or the first
+                      success after a failure.
+                    format: date-time
+                    type: string
+                type: object
+              observedGeneration:
+                description: ObservedGeneration is the generation last reconciled
+                  by the controller.
+                format: int64
+                minimum: 0
+                type: integer
+              script:
+                description: Script reports the prepared script every call starts
+                  from.
+                properties:
+                  preparedAt:
+                    description: PreparedAt is when the current script was prepared.
+                    format: date-time
+                    type: string
+                  recentRestarts:
+                    description: |-
+                      RecentRestarts is the most-recent-first restart log, capped at 20
+                      entries. recentRestarts[0] is the newest event so JSONPath print
+                      columns can show the latest reason without index-from-end gymnastics.
+                    items:
+                      description: |-
+                        JSRestartEvent records one time the operator prepared the script of a hook
+                        or admission policy again. Mirrored from the registry's log so users can
+                        see the recent trail without `kubectl logs` on the operator.
+                      properties:
+                        error:
+                          description: Error is a diagnostic recorded with the event,
+                            if any.
+                          type: string
+                        reason:
+                          description: |-
+                            Reason is what made the operator prepare the script again: the source
+                            changed, the limits changed, or the gojsop.io/restart annotation got a
+                            new value.
+                          enum:
+                          - source-changed
+                          - limits-changed
+                          - manual
+                          type: string
+                        time:
+                          description: Time is when the newly prepared script was
+                            installed.
+                          format: date-time
+                          type: string
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  restartToken:
+                    description: |-
+                      RestartToken echoes the value of the gojsop.io/restart annotation
+                      that produced the most recent manual restart. Setting the annotation to
+                      a new value triggers exactly one restart; re-reconciles with the same
+                      value are no-ops.
+                    type: string
+                  restartsByReason:
+                    additionalProperties:
+                      format: int32
+                      type: integer
+                    description: |-
+                      RestartsByReason aggregates RecentRestarts. Keys are the reasons of
+                      RecentRestarts; values are counts since the operator started.
+                    type: object
+                  sourceHash:
+                    description: |-
+                      SourceHash is a sha256 of the loaded JS source. A change here prepares
+                      the script again.
+                    type: string
+                type: object
+              serviceAccount:
+                description: |-
+                  ServiceAccount is the ServiceAccount, in the operator's namespace,
+                  that the hook's watches and kube.* calls run as.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
 {{- end }}
