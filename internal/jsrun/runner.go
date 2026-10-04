@@ -101,7 +101,7 @@ type Spec struct {
 type RecoveryReason string
 
 // Recovery reasons, one per trigger of Ensure. The CRD enum of
-// status.instance.recentRestarts[].reason lists exactly these
+// status.script.recentRestarts[].reason lists exactly these
 // (TestRecoveryReasons_MatchCRDEnum).
 //   - ReasonSourceChanged: Spec.SourceHash differs
 //   - ReasonLimitsChanged: Spec.Limits changed with the source hash unchanged

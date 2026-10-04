@@ -226,8 +226,8 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// prepared the script again with reason manual, in the background like any
 	// other build. The status token tells the finished build is not seen twice.
 	var prevToken string
-	if hook.Status.Instance != nil {
-		prevToken = hook.Status.Instance.ManualRestartToken
+	if hook.Status.Script != nil {
+		prevToken = hook.Status.Script.RestartToken
 	}
 	manual := !restarted && resetToken != prevToken && last.Reason == jsrun.ReasonManual
 	if restarted || manual {
@@ -267,12 +267,12 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	hook.Status.Bindings = bindings
 	hook.Status.LastReconcile = jslifecycle.ReconcileSucceeded(hook.Status.LastReconcile, time.Now())
 	byReason, recent := jslifecycle.RestartHistoryFor(st.Recoveries)
-	hook.Status.Instance = &corev1alpha1.JSInstanceStatus{
-		StartedAt:          &startedAt,
-		SourceHash:         srcHash,
-		RestartsByReason:   byReason,
-		RecentRestarts:     recent,
-		ManualRestartToken: hook.GetAnnotations()[ManualRestartAnnotation],
+	hook.Status.Script = &corev1alpha1.JSScriptStatus{
+		PreparedAt:       &startedAt,
+		SourceHash:       srcHash,
+		RestartsByReason: byReason,
+		RecentRestarts:   recent,
+		RestartToken:     hook.GetAnnotations()[ManualRestartAnnotation],
 	}
 	if err := r.Status().Update(ctx, &hook); err != nil {
 		return ctrl.Result{}, err
@@ -292,7 +292,7 @@ func (r *JSHookReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // last reconcile failed after the build. A rebuild of the same source (limits
 // changed, manual restart) keeps the subscription.
 func instanceChanged(hook *corev1alpha1.JSHook, srcHash string) bool {
-	inst := hook.Status.Instance
+	inst := hook.Status.Script
 	if inst == nil || inst.SourceHash != srcHash {
 		return true
 	}

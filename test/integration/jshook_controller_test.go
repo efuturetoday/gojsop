@@ -116,8 +116,8 @@ var _ = Describe("JSHook Controller", func() {
 				g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
 			}, "10s", "20ms").Should(Succeed())
 			Expect(updated.Status.Bindings).To(ContainElement("watch-cm:v1/configmaps"))
-			Expect(updated.Status.Instance).NotTo(BeNil())
-			Expect(updated.Status.Instance.SourceHash).NotTo(BeEmpty())
+			Expect(updated.Status.Script).NotTo(BeNil())
+			Expect(updated.Status.Script.SourceHash).NotTo(BeEmpty())
 		})
 	})
 

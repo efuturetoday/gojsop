@@ -177,8 +177,8 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// prepared the script again with reason manual, in the background like any
 	// other build. The status token tells the finished build is not seen twice.
 	var prevToken string
-	if pol.Status.Instance != nil {
-		prevToken = pol.Status.Instance.ManualRestartToken
+	if pol.Status.Script != nil {
+		prevToken = pol.Status.Script.RestartToken
 	}
 	manual := !restarted && resetToken != prevToken && last.Reason == jsrun.ReasonManual
 	if restarted || manual {
@@ -203,13 +203,14 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			})
 		}
 		r.Registrar.Upsert(jsadmission.PolicyMeta{
-			Key:            req.NamespacedName,
-			Path:           path,
-			Mutating:       mutating,
-			Rules:          jsadmission.RulesFromAPI(apiRules),
-			FailurePolicy:  admissionregv1.FailurePolicyType(pol.Spec.FailurePolicy),
-			MatchPolicy:    admissionregv1.MatchPolicyType(pol.Spec.MatchPolicy),
-			SideEffects:    admissionregv1.SideEffectClass(pol.Spec.SideEffects),
+			Key:           req.NamespacedName,
+			Path:          path,
+			Mutating:      mutating,
+			Rules:         jsadmission.RulesFromAPI(apiRules),
+			FailurePolicy: admissionregv1.FailurePolicyType(pol.Spec.FailurePolicy),
+			MatchPolicy:   admissionregv1.MatchPolicyType(pol.Spec.MatchPolicy),
+			// A policy only reads (jsadmission.R13), so it never has side effects.
+			SideEffects:    admissionregv1.SideEffectClassNone,
 			TimeoutSeconds: pol.Spec.TimeoutSeconds,
 			NSSelector:     pol.Spec.NamespaceSelector,
 			ObjectSelector: pol.Spec.ObjectSelector,
@@ -246,12 +247,12 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		pol.Status.WebhookConfigName = jsadmission.ValidatingConfigName
 	}
 	byReason, recent := jslifecycle.RestartHistoryFor(st.Recoveries)
-	pol.Status.Instance = &corev1alpha1.JSInstanceStatus{
-		StartedAt:          &startedAt,
-		SourceHash:         srcHash,
-		RestartsByReason:   byReason,
-		RecentRestarts:     recent,
-		ManualRestartToken: pol.GetAnnotations()[conditions.ManualRestartAnnotation],
+	pol.Status.Script = &corev1alpha1.JSScriptStatus{
+		PreparedAt:       &startedAt,
+		SourceHash:       srcHash,
+		RestartsByReason: byReason,
+		RecentRestarts:   recent,
+		RestartToken:     pol.GetAnnotations()[conditions.ManualRestartAnnotation],
 	}
 	if err := r.Status().Update(ctx, &pol); err != nil {
 		return ctrl.Result{}, err
@@ -274,7 +275,7 @@ func (r *JSAdmissionReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 // yet: none was recorded, it describes another source, or the last reconcile
 // failed after the build.
 func instanceChanged(pol *corev1alpha1.JSAdmission, srcHash string) bool {
-	inst := pol.Status.Instance
+	inst := pol.Status.Script
 	if inst == nil || inst.SourceHash != srcHash {
 		return true
 	}

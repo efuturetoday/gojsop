@@ -14,7 +14,7 @@ This aspect describes how gojsop turns `spec.source` of a JSHook or JSAdmission 
 
 The controller resolves the source, not the registry. Each reconcile calls one shared `jssource.Chain` with `spec.source`. The chain asks its loaders in order, and the first loader that claims the source returns the bytes. The controller hashes the bytes (sha256) and passes the hash as `SourceHash` to `jsregistry.Registry.Ensure`. A new hash prepares the script again; the same hash keeps it. The registry sees only bytes and a hash. See [js-registry](js-registry.md) for the rebuild itself.
 
-Two loaders exist: inline and ConfigMap. `spec.source.oci` is accepted by the CRD, but no loader serves it, so it fails with "no loader matched" (SRC-1). A `configMapRef` needs an explicit namespace, because both CRs are cluster-scoped. The key defaults to `hook.js`.
+Two loaders exist: inline and ConfigMap. An OCI source was in the schema without a loader and is removed until one exists (SRC-1, R6). A `configMapRef` needs an explicit namespace, because both CRs are cluster-scoped. The key defaults to `hook.js`.
 
 ConfigMap edits reach the reconcile through a watch plus a mapper, not through polling. The mapper lists all CRs on every ConfigMap event and matches by namespace and name. The loader reads through the manager's cache, so the watch starts a cluster-wide ConfigMap informer.
 
@@ -62,7 +62,7 @@ Add a source kind (for example OCI, SRC-1):
   See SRC-6 for the cost of this rule.
 - **R6** Add a CRD source field only together with its loader.
   Why: a typed field without a loader fails at runtime with "no loader matched".
-  Gate: missing → GATE-10. Violated today → SRC-1.
+  Gate: missing → GATE-10.
 - **R7** Do not put secrets in `spec.source.inline`.
   Why: the CR is readable in etcd and by anyone with `get` on it.
   Gate: review only — a secret in a string cannot be detected reliably. Violated today → SRC-2 (no CRD warning).

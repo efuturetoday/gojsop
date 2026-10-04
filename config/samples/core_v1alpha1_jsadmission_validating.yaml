@@ -13,7 +13,6 @@ spec:
       resources: ["pods"]
       operations: ["CREATE", "UPDATE"]
   failurePolicy: Fail
-  sideEffects: None
   source:
     inline: |
       function validate(req) {

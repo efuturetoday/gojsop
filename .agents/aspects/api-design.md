@@ -31,9 +31,7 @@ is to edit in place and note the break in the commit message. There is no
 second version and no conversion webhook. The maintainers have not decided this
 in writing (API-8).
 
-The project does not yet bound strings and lists. No field has `MaxLength` or
-`MaxItems`, so `spec.source.inline` is limited only by the etcd object size
-(API-7). R4 applies to new fields only.
+Every string and list of the spec has a `MaxLength` or `MaxItems` (R4). `spec.source.inline` stops at 512 KiB, well below the etcd object size limit; larger scripts belong in a ConfigMap.
 
 ## Parts
 
@@ -76,7 +74,7 @@ Adding a CRD field:
   rejection cases for enums and CEL are tracked in GATE-15.
 - **R4** Add `MaxLength` and `MaxItems` to every new string and list.
   Why: not recorded; the backlog entry names the etcd object size limit.
-  Gate: missing → GATE-15. Violated today → API-7.
+  Gate: missing → GATE-15.
 - **R5** Write field comments that state what happens today.
   Why: they become `kubectl explain` text.
   Gate: missing → GATE-10. Violated today → API-2.
@@ -123,6 +121,11 @@ Adding a CRD field:
   Why: no users are recorded that need a migration path.
   Not taken: a second version with a conversion webhook, because of the cost before `v1beta1` (R9).
 
+- **The script status is `status.script` (`preparedAt`, `sourceHash`, `restartsByReason`, `recentRestarts`, `restartToken`), not `status.instance`.** Status: accepted (2026-10, API-10).
+  Why: "instance" named a VM the user never sees; users think in scripts and restarts, and the annotation is `gojsop.io/restart`. Not taken: the port's word "recoveries", because no user asks for a recovery.
+- **`spec.sideEffects` is gone; every policy is registered with `sideEffects: None`.** Status: accepted (2026-10). Why: a policy can only read (jsadmission.R13), so any other value was a lie the apiserver would act on.
+- **`spec.source.oci` is gone until a loader exists.** Status: accepted (2026-10, SRC-1). Why: a field that fails at runtime breaks R6.
+
 ## Open
 
-API-1, API-2, API-6, API-7, API-8, GATE-10, GATE-14, GATE-15
+API-1, API-2, API-6, API-8, GATE-10, GATE-14, GATE-15

@@ -222,8 +222,7 @@ source:
     key: hook.js         # default
 ```
 
-A ConfigMap edit reaches the script without a restart. `spec.source.oci` is
-in the schema but not implemented yet.
+A ConfigMap edit reaches the script without a restart.
 
 ## Status
 

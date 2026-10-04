@@ -64,7 +64,6 @@ var _ = Describe("JSAdmission Controller", func() {
 							Operations: []string{"CREATE"},
 						}},
 						FailurePolicy: "Fail",
-						SideEffects:   "None",
 						Source: corev1alpha1.JSSource{
 							Inline: "function validate(req) { return { allowed: true }; }",
 						},

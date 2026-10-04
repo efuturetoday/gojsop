@@ -27,10 +27,10 @@ spec:
       name: Reason
       priority: 1
       type: string
-    - jsonPath: .status.instance.recentRestarts[0].reason
+    - jsonPath: .status.script.recentRestarts[0].reason
       name: LastRestart
       type: string
-    - jsonPath: .status.instance.recentRestarts[0].time
+    - jsonPath: .status.script.recentRestarts[0].time
       name: RestartedAt
       priority: 1
       type: date
@@ -284,14 +284,18 @@ spec:
                       description: APIGroups is the list of API groups, "" for the
                         core group.
                       items:
+                        maxLength: 253
                         type: string
+                      maxItems: 16
                       minItems: 1
                       type: array
                       x-kubernetes-list-type: set
                     apiVersions:
                       description: APIVersions is the list of versions, e.g. ["v1"].
                       items:
+                        maxLength: 253
                         type: string
+                      maxItems: 16
                       minItems: 1
                       type: array
                       x-kubernetes-list-type: set
@@ -305,6 +309,7 @@ spec:
                         - CONNECT
                         - '*'
                         type: string
+                      maxItems: 5
                       minItems: 1
                       type: array
                       x-kubernetes-list-type: set
@@ -312,7 +317,9 @@ spec:
                       description: Resources is the list of plural resource names,
                         e.g. ["configmaps"].
                       items:
+                        maxLength: 253
                         type: string
+                      maxItems: 16
                       minItems: 1
                       type: array
                       x-kubernetes-list-type: set
@@ -329,19 +336,9 @@ spec:
                   - operations
                   - resources
                   type: object
+                maxItems: 32
                 minItems: 1
                 type: array
-              sideEffects:
-                default: None
-                description: |-
-                  SideEffects is required by admissionregistration/v1. None is the safe
-                  default for pure-Go/JS policies.
-                enum:
-                - None
-                - NoneOnDryRun
-                - Some
-                - Unknown
-                type: string
               source:
                 description: Source is where to load the policy's JS module from.
                 properties:
@@ -352,15 +349,18 @@ spec:
                       key:
                         default: hook.js
                         description: Key inside the ConfigMap.
+                        maxLength: 253
                         minLength: 1
                         type: string
                       name:
                         description: Name is the name of the referenced ConfigMap.
+                        maxLength: 253
                         minLength: 1
                         type: string
                       namespace:
                         description: Namespace is the namespace of the referenced
                           ConfigMap.
+                        maxLength: 63
                         minLength: 1
                         type: string
                     required:
@@ -371,43 +371,14 @@ spec:
                     description: |-
                       Inline embeds the JS module text directly into the resource.
                       Convenient for small hooks and demos.
+                      At most 512 KiB; larger scripts belong in a ConfigMap.
+                    maxLength: 524288
                     minLength: 1
                     type: string
-                  oci:
-                    description: |-
-                      OCI pulls the JS module from an OCI artifact (e.g. ghcr.io/foo/hook).
-                      The artifact must contain a single layer whose body is the JS source.
-                    properties:
-                      digest:
-                        description: Digest pins a specific manifest digest (e.g.
-                          "sha256:abcd..."). Immutable.
-                        pattern: ^sha256:[A-Fa-f0-9]{64}$
-                        type: string
-                      repository:
-                        description: |-
-                          Repository is the registry + repository path, without a tag or digest
-                          (e.g. "ghcr.io/foo/hook").
-                        minLength: 1
-                        pattern: ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$
-                        type: string
-                      tag:
-                        description: |-
-                          Tag selects a tagged version (e.g. "v1.2.3"). Mutable; for production
-                          pinning prefer Digest.
-                        minLength: 1
-                        pattern: ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$
-                        type: string
-                    required:
-                    - repository
-                    type: object
-                    x-kubernetes-validations:
-                    - message: exactly one of tag or digest must be set
-                      rule: (has(self.tag)?1:0) + (has(self.digest)?1:0) == 1
                 type: object
                 x-kubernetes-validations:
-                - message: exactly one of inline, configMapRef, or oci must be set
-                  rule: (has(self.inline)?1:0) + (has(self.configMapRef)?1:0) + (has(self.oci)?1:0)
-                    == 1
+                - message: exactly one of inline or configMapRef must be set
+                  rule: (has(self.inline)?1:0) + (has(self.configMapRef)?1:0) == 1
               timeoutSeconds:
                 default: 5
                 description: |-
@@ -495,16 +466,37 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
-              instance:
-                description: Instance reports the prepared script every call starts
+              lastReconcile:
+                description: |-
+                  LastReconcile reports when the reconcile result last changed and what
+                  went wrong (if anything). Distinct from runtime call telemetry — a
+                  successful reconcile here does NOT mean validate()/mutate() ran.
+                properties:
+                  error:
+                    description: |-
+                      Error is non-empty when the last reconcile failed (source load,
+                      build, subscribe, webhook sync). Empty on a successful reconcile.
+                    type: string
+                  time:
+                    description: |-
+                      Time is when the reconcile result last changed: a failure, or the first
+                      success after a failure.
+                    format: date-time
+                    type: string
+                type: object
+              observedGeneration:
+                description: ObservedGeneration is the generation last reconciled
+                  by the controller.
+                format: int64
+                minimum: 0
+                type: integer
+              script:
+                description: Script reports the prepared script every call starts
                   from.
                 properties:
-                  manualRestartToken:
-                    description: |-
-                      ManualRestartToken echoes the value of the gojsop.io/restart annotation
-                      that produced the most recent manual restart. Setting the annotation to
-                      a new value triggers exactly one restart; re-reconciles with the same
-                      value are no-ops.
+                  preparedAt:
+                    description: PreparedAt is when the current script was prepared.
+                    format: date-time
                     type: string
                   recentRestarts:
                     description: |-
@@ -539,6 +531,13 @@ spec:
                       type: object
                     type: array
                     x-kubernetes-list-type: atomic
+                  restartToken:
+                    description: |-
+                      RestartToken echoes the value of the gojsop.io/restart annotation
+                      that produced the most recent manual restart. Setting the annotation to
+                      a new value triggers exactly one restart; re-reconciles with the same
+                      value are no-ops.
+                    type: string
                   restartsByReason:
                     additionalProperties:
                       format: int32
@@ -552,35 +551,7 @@ spec:
                       SourceHash is a sha256 of the loaded JS source. A change here prepares
                       the script again.
                     type: string
-                  startedAt:
-                    description: StartedAt is when the current script was prepared.
-                    format: date-time
-                    type: string
                 type: object
-              lastReconcile:
-                description: |-
-                  LastReconcile reports when the reconcile result last changed and what
-                  went wrong (if anything). Distinct from runtime call telemetry — a
-                  successful reconcile here does NOT mean validate()/mutate() ran.
-                properties:
-                  error:
-                    description: |-
-                      Error is non-empty when the last reconcile failed (source load,
-                      build, subscribe, webhook sync). Empty on a successful reconcile.
-                    type: string
-                  time:
-                    description: |-
-                      Time is when the reconcile result last changed: a failure, or the first
-                      success after a failure.
-                    format: date-time
-                    type: string
-                type: object
-              observedGeneration:
-                description: ObservedGeneration is the generation last reconciled
-                  by the controller.
-                format: int64
-                minimum: 0
-                type: integer
               serviceAccount:
                 description: |-
                   ServiceAccount is the ServiceAccount, in the operator's namespace,

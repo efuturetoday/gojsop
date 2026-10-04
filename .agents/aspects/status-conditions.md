@@ -28,7 +28,7 @@ Restart bookkeeping is a counter per reason plus a capped history of 20
 entries. Commit 025a482 replaced a single counter and a single string, because
 six triggers had collapsed into them. The registry owns the log. The CRD
 mirrors it, newest first, so print columns can read `recentRestarts[0]`. The
-field `status.instance.lastRestartReason` no longer exists. Do not refer to it.
+CRD fields live under `status.script` (api-design Decisions).
 
 Event reasons come from a finite set in `internal/conditions`. The Event
 recorder dedupes on reason and message, so per-request detail stays out of
@@ -77,7 +77,7 @@ Add a new failure cause to status:
   Gate: `TestClassifyBuildError`.
 - **R4** Take restart counters and history from the runner's `State.Recoveries` through
   `jslifecycle.RestartHistoryFor`, which maps them onto the CRD fields `restartsByReason` and `recentRestarts`. Never keep a second count in a controller.
-  Why: two counts drift apart. The neutral `Recoveries` of the port and the older CRD names meet in this one function (API-10).
+  Why: two counts drift apart. The neutral `Recoveries` of the port and the user's word "restart" meet in this one function.
   Gate: `TestRegistry_RecoveryHistory_RingAndCounters`.
 - **R5** Put only the reconcile outcome into `lastReconcile`, never a runtime
   call result. Write it when the outcome changes: every failure with its
@@ -106,11 +106,10 @@ Add a new failure cause to status:
   Why: six triggers had collapsed into one counter and one string.
   Not taken: a single counter and a single string, because they lose the cause.
 
-- **Map the neutral `jsrun.State.Recoveries` onto the existing CRD fields in the controllers.** Status: proposed (2026-10-01, open).
-  Why: the port dropped its persistent-VM words (js-registry Decisions); the CRD is a public API and stays as is until API-10 and API-8 decide on a rename.
-  Not taken: renaming `status.instance.restartsByReason` and `recentRestarts` now, because it breaks `v1alpha1` users without a decided policy (API-8).
+- **Map the neutral `jsrun.State.Recoveries` onto the CRD fields `status.script.restartsByReason` and `recentRestarts` in the controllers.** Status: accepted (2026-10, API-10).
+  Why: the port speaks of recoveries, the user of restarts; one function (`jslifecycle.RestartHistoryFor`) translates.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): STAT-2, STAT-4, API-1, API-10; gates
+Tracked in [backlog](../backlog.md): STAT-2, STAT-4, API-1; gates
 GATE-8, GATE-10, GATE-13.

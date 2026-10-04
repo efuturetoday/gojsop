@@ -63,8 +63,8 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## SRC: JS sources
 
-- **SRC-1** `gap` No OCI loader. `spec.source.oci` is typed only and fails with
-  "no loader matched" (SourceLoadFailed). `internal/jssource/`, `cmd/main.go`.
+- **SRC-1** `gap` No OCI loader. The `spec.source.oci` field was removed until
+  one exists (js-sources.R6); adding it means the field and the loader together.
 - **SRC-2** `doc` `spec.source.inline` is visible in etcd. Fine for code,
   dangerous for secrets. No warning in the CRD description.
 - **SRC-3** `gap` Inline source ergonomics. Multi-line JS in YAML is painful.
@@ -131,7 +131,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **API-1** `decision` Project rule: no field without implementation or a
   status that shows it is inactive. Applies to CRD fields and to the schema
-  that the CRDs expose. Today violated by SRC-1 (CRD field `oci`).
+  that the CRDs expose. Holds today.
   Gate: GATE-10.
 - **API-2** `doc` CRD field docs are thin. `kubectl explain jshook.spec.source`
   does not say which sources work.
@@ -140,8 +140,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **API-6** `debt` Scope mismatch: markers and CRDs say `scope=Cluster`
   (`api/v1alpha1/jshook_types.go:67`, `jsadmission_types.go:156`), `PROJECT`
   says `namespaced: true` for both kinds. Fix `PROJECT`.
-- **API-7** `gap` No `MaxLength` or `MaxItems` anywhere. `spec.source.inline` is
-  unbounded against the etcd object size limit (`api/v1alpha1/js_shared.go:34-35`).
 - **API-8** `decision` Breaking-change policy on `v1alpha1` is unwritten. Working
   assumption in api-design: edit in place until `v1beta1`.
 - **API-9** `decision` Namespaced and cluster-scoped kinds. scrippy (the
@@ -149,13 +147,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   `ClusterScriptHook` (anywhere), Kyverno style. gojsop has only
   cluster-scoped kinds; each runs as its own ServiceAccount (kube-access.R10). Decide whether gojsop
   needs the split. Done when the decision is recorded in api-design.
-- **API-10** `decision` Rename the CRD status fields that still speak of VMs
-  and restarts (`status.instance`, `restartsByReason`, `recentRestarts`,
-  `manualRestartToken`, type `JSRestartEvent`) to the neutral names of the
-  port (`recoveries`, `byReason`, `recent`), now that `jsrun.State.Recoveries`
-  carries them. Needs the breaking-change policy first (API-8).
-  Controllers map the port onto the old names in `jslifecycle.RestartHistoryFor`.
-  Done when the names are decided and recorded in api-design.
 
 ## OPS: Operations
 
@@ -197,9 +188,8 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **GATE-15** envtest cases for CEL and enum rejection (two sources, tag plus
   digest, bad enum).
-- **GATE-16** envtest for SourceLoadFailed (event, condition, recovery), for an
-  `oci` source (must yield SourceLoadFailed) and for a ConfigMap edit that
-  rebuilds the VM.
+- **GATE-16** envtest for SourceLoadFailed (event, condition, recovery) and
+  for a ConfigMap edit that prepares the script again.
 - **GATE-17** Test for jsadmission.R10. The registrar's `timeoutSeconds` and
   `failurePolicy` are testable in envtest, but the handler's copy sits in
   `Server.policies` with no accessor.

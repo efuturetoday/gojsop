@@ -38,7 +38,7 @@ func TestRecoveryReasons_MatchCRDEnum(t *testing.T) {
 				t.Fatal(err)
 			}
 			got := enumOf(crd, "spec", "versions", 0, "schema", "openAPIV3Schema", "properties", "status",
-				"properties", "instance", "properties", "recentRestarts", "items", "properties", "reason", "enum")
+				"properties", "script", "properties", "recentRestarts", "items", "properties", "reason", "enum")
 			slices.Sort(got)
 			if !slices.Equal(got, want) {
 				t.Fatalf("CRD enum %v, want the jsrun reasons %v", got, want)

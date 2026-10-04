@@ -34,6 +34,7 @@ type AdmissionRule struct {
 	// +required
 	// +listType=set
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=5
 	// +kubebuilder:validation:items:Enum=CREATE;UPDATE;DELETE;CONNECT;*
 	Operations []string `json:"operations"`
 }
@@ -71,6 +72,7 @@ type JSAdmissionSpec struct {
 	// At least one rule is required.
 	// +required
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=32
 	Rules []AdmissionRule `json:"rules"`
 
 	// FailurePolicy controls what happens if the JS handler errors, panics,
@@ -100,13 +102,6 @@ type JSAdmissionSpec struct {
 	// +kubebuilder:validation:Maximum=30
 	// +optional
 	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
-
-	// SideEffects is required by admissionregistration/v1. None is the safe
-	// default for pure-Go/JS policies.
-	// +kubebuilder:validation:Enum=None;NoneOnDryRun;Some;Unknown
-	// +kubebuilder:default=None
-	// +optional
-	SideEffects string `json:"sideEffects,omitempty"`
 }
 
 // JSAdmissionStatus reports the observed state of a JSAdmission policy.
@@ -132,9 +127,9 @@ type JSAdmissionStatus struct {
 	// +optional
 	ServiceAccount string `json:"serviceAccount,omitempty"`
 
-	// Instance reports the prepared script every call starts from.
+	// Script reports the prepared script every call starts from.
 	// +optional
-	Instance *JSInstanceStatus `json:"instance,omitempty"`
+	Script *JSScriptStatus `json:"script,omitempty"`
 
 	// LastReconcile reports when the reconcile result last changed and what
 	// went wrong (if anything). Distinct from runtime call telemetry — a
@@ -155,8 +150,8 @@ type JSAdmissionStatus struct {
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].reason`,priority=1
-// +kubebuilder:printcolumn:name="LastRestart",type=string,JSONPath=`.status.instance.recentRestarts[0].reason`
-// +kubebuilder:printcolumn:name="RestartedAt",type=date,JSONPath=`.status.instance.recentRestarts[0].time`,priority=1
+// +kubebuilder:printcolumn:name="LastRestart",type=string,JSONPath=`.status.script.recentRestarts[0].reason`
+// +kubebuilder:printcolumn:name="RestartedAt",type=date,JSONPath=`.status.script.recentRestarts[0].time`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // JSAdmission declares a JavaScript-backed admission webhook policy. The

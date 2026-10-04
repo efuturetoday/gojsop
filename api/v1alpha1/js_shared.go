@@ -23,27 +23,24 @@ import (
 )
 
 // JSSource describes where a JavaScript module body comes from.
-// Exactly one of inline, configMapRef, or oci must be set; this is enforced
+// Exactly one of inline or configMapRef must be set; this is enforced
 // by the apiserver via the XValidation rule below.
 //
 // Embedded by both JSHook.Spec and JSAdmission.Spec.
 //
-// +kubebuilder:validation:XValidation:rule="(has(self.inline)?1:0) + (has(self.configMapRef)?1:0) + (has(self.oci)?1:0) == 1",message="exactly one of inline, configMapRef, or oci must be set"
+// +kubebuilder:validation:XValidation:rule="(has(self.inline)?1:0) + (has(self.configMapRef)?1:0) == 1",message="exactly one of inline or configMapRef must be set"
 type JSSource struct {
 	// Inline embeds the JS module text directly into the resource.
 	// Convenient for small hooks and demos.
+	// At most 512 KiB; larger scripts belong in a ConfigMap.
 	// +optional
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=524288
 	Inline string `json:"inline,omitempty"`
 
 	// ConfigMapRef pulls the JS module text from a key in a ConfigMap.
 	// +optional
 	ConfigMapRef *ConfigMapKeyRef `json:"configMapRef,omitempty"`
-
-	// OCI pulls the JS module from an OCI artifact (e.g. ghcr.io/foo/hook).
-	// The artifact must contain a single layer whose body is the JS source.
-	// +optional
-	OCI *OCISource `json:"oci,omitempty"`
 }
 
 // ConfigMapKeyRef points to a single key inside a ConfigMap.
@@ -53,41 +50,20 @@ type JSSource struct {
 type ConfigMapKeyRef struct {
 	// Name is the name of the referenced ConfigMap.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 
 	// Namespace is the namespace of the referenced ConfigMap.
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
 
 	// Key inside the ConfigMap.
 	// +kubebuilder:default="hook.js"
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	// +optional
 	Key string `json:"key,omitempty"`
-}
-
-// OCISource locates a JS module inside an OCI artifact.
-// Exactly one of Tag or Digest must be set.
-//
-// +kubebuilder:validation:XValidation:rule="(has(self.tag)?1:0) + (has(self.digest)?1:0) == 1",message="exactly one of tag or digest must be set"
-type OCISource struct {
-	// Repository is the registry + repository path, without a tag or digest
-	// (e.g. "ghcr.io/foo/hook").
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)+$`
-	Repository string `json:"repository"`
-
-	// Tag selects a tagged version (e.g. "v1.2.3"). Mutable; for production
-	// pinning prefer Digest.
-	// +optional
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`
-	Tag string `json:"tag,omitempty"`
-
-	// Digest pins a specific manifest digest (e.g. "sha256:abcd..."). Immutable.
-	// +optional
-	// +kubebuilder:validation:Pattern=`^sha256:[A-Fa-f0-9]{64}$`
-	Digest string `json:"digest,omitempty"`
 }
 
 // JSLimits caps what one call into the script may consume. Every call runs on
@@ -130,14 +106,13 @@ type JSRestartEvent struct {
 	Error string `json:"error,omitempty"`
 }
 
-// JSInstanceStatus reports the prepared script backing a hook or admission
-// policy. Identical shape for both kinds; the same registry produces it.
-// Every call runs on a fresh instance restored from this prepared script, so
-// no state survives between calls.
-type JSInstanceStatus struct {
-	// StartedAt is when the current script was prepared.
+// JSScriptStatus reports the prepared script of a hook or admission policy.
+// Identical shape for both kinds. Every call starts from this prepared
+// script, so no state survives between calls.
+type JSScriptStatus struct {
+	// PreparedAt is when the current script was prepared.
 	// +optional
-	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+	PreparedAt *metav1.Time `json:"preparedAt,omitempty"`
 
 	// SourceHash is a sha256 of the loaded JS source. A change here prepares
 	// the script again.
@@ -156,12 +131,12 @@ type JSInstanceStatus struct {
 	// +listType=atomic
 	RecentRestarts []JSRestartEvent `json:"recentRestarts,omitempty"`
 
-	// ManualRestartToken echoes the value of the gojsop.io/restart annotation
+	// RestartToken echoes the value of the gojsop.io/restart annotation
 	// that produced the most recent manual restart. Setting the annotation to
 	// a new value triggers exactly one restart; re-reconciles with the same
 	// value are no-ops.
 	// +optional
-	ManualRestartToken string `json:"manualRestartToken,omitempty"`
+	RestartToken string `json:"restartToken,omitempty"`
 }
 
 // JSReconcileStatus reports the outcome of the most recent change of the
@@ -192,18 +167,24 @@ type ResourceRule struct {
 	// +required
 	// +listType=set
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=253
 	APIGroups []string `json:"apiGroups"`
 
 	// APIVersions is the list of versions, e.g. ["v1"].
 	// +required
 	// +listType=set
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=253
 	APIVersions []string `json:"apiVersions"`
 
 	// Resources is the list of plural resource names, e.g. ["configmaps"].
 	// +required
 	// +listType=set
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=16
+	// +kubebuilder:validation:items:MaxLength=253
 	Resources []string `json:"resources"`
 
 	// Scope is one of "*" (default), "Namespaced", "Cluster".
@@ -265,6 +246,7 @@ type HookBinding struct {
 	// Events selects which watch events call handle(). Defaults to all three.
 	// +optional
 	// +listType=set
+	// +kubebuilder:validation:MaxItems=3
 	// +kubebuilder:default={Added,Modified,Deleted}
 	Events []HookEvent `json:"events,omitempty"`
 

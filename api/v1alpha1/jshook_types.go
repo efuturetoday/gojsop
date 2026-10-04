@@ -42,6 +42,7 @@ type JSHookSpec struct {
 	// +listType=map
 	// +listMapKey=name
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=32
 	Bindings []HookBinding `json:"bindings"`
 
 	// Permissions are the rights the script has on the cluster through
@@ -74,9 +75,9 @@ type JSHookStatus struct {
 	// +optional
 	ServiceAccount string `json:"serviceAccount,omitempty"`
 
-	// Instance reports the prepared script every call starts from.
+	// Script reports the prepared script every call starts from.
 	// +optional
-	Instance *JSInstanceStatus `json:"instance,omitempty"`
+	Script *JSScriptStatus `json:"script,omitempty"`
 
 	// LastReconcile reports when the reconcile result last changed and what
 	// went wrong (if anything). Distinct from runtime call telemetry — a
@@ -96,8 +97,8 @@ type JSHookStatus struct {
 // +kubebuilder:resource:scope=Cluster,shortName=jshook
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].reason`,priority=1
-// +kubebuilder:printcolumn:name="LastRestart",type=string,JSONPath=`.status.instance.recentRestarts[0].reason`
-// +kubebuilder:printcolumn:name="RestartedAt",type=date,JSONPath=`.status.instance.recentRestarts[0].time`,priority=1
+// +kubebuilder:printcolumn:name="LastRestart",type=string,JSONPath=`.status.script.recentRestarts[0].reason`
+// +kubebuilder:printcolumn:name="RestartedAt",type=date,JSONPath=`.status.script.recentRestarts[0].time`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // JSHook declares a JavaScript-based Kubernetes hook. The controller watches

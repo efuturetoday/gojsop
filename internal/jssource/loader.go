@@ -41,7 +41,7 @@ func (c *Chain) Load(ctx context.Context, src corev1alpha1.JSSource) ([]byte, er
 }
 
 // Hash returns a stable sha256 of the JS source. A new hash makes the registry
-// prepare the script again (status.instance.sourceHash).
+// prepare the script again (status.script.sourceHash).
 // js-sources.R3
 func Hash(body []byte) string {
 	sum := sha256.Sum256(body)
