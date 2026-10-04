@@ -16,10 +16,10 @@ spec:
   source:
     inline: |
       function validate(req) {
-        const obj = req.object;
-        const containers = (obj.spec && obj.spec.containers) || [];
-        for (const c of containers) {
-          if (c.image && c.image.endsWith(":latest")) {
+        // Empty fields are missing and req.object is null on DELETE:
+        // reach into objects with ?. and ??.
+        for (const c of req.object?.spec?.containers ?? []) {
+          if (c.image?.endsWith(":latest")) {
             return { allowed: false, message: "image " + c.image + " uses :latest, refusing" };
           }
         }

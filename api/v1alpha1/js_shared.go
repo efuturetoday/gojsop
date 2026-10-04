@@ -227,7 +227,10 @@ const (
 
 // HookBinding is one slice of the cluster a JSHook reacts to. It is the
 // counterpart of AdmissionRule: same resource selection, same object
-// matching, a different trigger.
+// matching, a different trigger. A binding names one concrete resource, so
+// scope has nothing to narrow and is rejected (jshook.R16).
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.scope)",message="scope does not apply to a hook binding: it names concrete resources"
 type HookBinding struct {
 	// Name identifies this binding in the binding context handed to
 	// handle(), in status.bindings and in events. Must be unique within the

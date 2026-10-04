@@ -78,4 +78,12 @@ var _ = Describe("spec.permissions", func() {
 		Expect(k8sClient.Create(ctx, hook(star), client.DryRunAll)).NotTo(Succeed())
 		Expect(k8sClient.Create(ctx, hook(perm("configmaps", "*")), client.DryRunAll)).NotTo(Succeed())
 	})
+
+	It("rejects scope on a hook binding, which nothing would act on", func() {
+		// jshook.R16
+		h := hook(perm("configmaps", "get"))
+		h.Spec.Bindings[0].Scope = "Namespaced"
+		Expect(k8sClient.Create(ctx, h, client.DryRunAll)).
+			To(MatchError(ContainSubstring("scope does not apply to a hook binding")))
+	})
 })

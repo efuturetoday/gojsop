@@ -130,7 +130,7 @@ Words used here:
 | jshook.R13 | A retry never overwrites a newer state of the same object. | decision "retry without cap" | `TestDispatcher_RetryKeepsFresherStateOfSameObject` |
 | jshook.R14 | A deleted hook gets no more calls. | `Dispatcher.Drop` | `TestDispatcher_Drop_NoMoreEvents` |
 | jshook.R15 | `objectSelector` and `namespaceSelector` filter objects in every `LabelSelector` form, `matchExpressions` included. | `corev1alpha1.ObjectMatch` | `TestControllers` |
-| jshook.R16 | Every field of a binding takes effect; none is accepted and then ignored. | api-design.R6 | `TestSummarizeBindings_ListsEveryWatchedResource` |
+| jshook.R16 | Every field of a binding takes effect; none is accepted and then ignored. `scope` is rejected, because a binding names concrete resources. | api-design.R6 | `TestSummarizeBindings_ListsEveryWatchedResource`, `TestControllers` |
 | jshook.R17 | A hook whose watch cannot start does not delay other hooks; deleting it ends the wait. | decision "per-hook lock" | `TestDispatcher_SlowSync_DoesNotBlockOtherHooks` |
 | jshook.R18 | While a new script is prepared the hook is `Ready=False`, reason `Building`. | status-conditions.R7 | `TestReconcile_HangingBuildDoesNotBlockOtherHook` |
 | jshook.R19 | Events that arrive while no script is ready wait and reach the script once it is ready; none is dropped. | js-registry.R19 | `TestDispatcher_NoVM_KeepsEventsAndDeliversAfterBuild` |

@@ -1,16 +1,21 @@
-# gojsop
+# gojsop – Kubernetes hooks and admission policies in JavaScript
 
-gojsop is a Kubernetes operator that runs your JavaScript inside the cluster.
+Automate and guard your cluster with a few lines of JavaScript, instead of
+writing a Go controller or learning a policy language.
 
-- A **`JSHook`** watches resources and calls your `handle()` for every change,
-  like [shell-operator](https://github.com/flant/shell-operator) hooks, but in
-  JavaScript and declared as a custom resource.
-- A **`JSAdmission`** turns your `validate()` or `mutate()` into an admission
-  webhook: the apiserver asks your script before it stores an object.
+- **React to changes with a `JSHook`.** Copy a ConfigMap into every namespace
+  that asks for it, label new Pods, clean up what a deleted object left
+  behind. You write `handle(event)`; gojsop watches the resources you name and
+  calls it for every change.
+- **Allow, deny or fix requests with a `JSAdmission`.** Refuse images tagged
+  `:latest`, require an owner label, add defaults. You write `validate(req)`
+  or `mutate(req)`; the apiserver asks it before it stores an object.
 
-The scripts run in [QuickJS](https://github.com/quickjs-ng/quickjs) compiled to
-WebAssembly and embedded in the operator. There is no Node.js, no sidecar and
-no cgo; each script gets its own sandbox with a memory limit and a timeout.
+Both are plain Kubernetes resources: you apply them with `kubectl`, Helm or
+GitOps, and read their state with `kubectl get`. Each script runs sandboxed in
+the operator ([QuickJS](https://github.com/quickjs-ng/quickjs) compiled to
+WebAssembly, no Node.js, no sidecar), with a memory limit, a timeout and
+exactly the cluster rights you grant it.
 
 > **Status: alpha.** The API is `core.gojsop.io/v1alpha1` and may still change
 > in incompatible ways. See [Known limitations](#known-limitations).
@@ -72,30 +77,46 @@ Remove it with `make undeploy`.
 ## JSHook
 
 A hook names the resources it watches in `spec.bindings` and defines
-`handle()` in `spec.source`:
+`handle()` in `spec.source`. Every field, with the values it takes:
 
 ```yaml
 apiVersion: core.gojsop.io/v1alpha1
 kind: JSHook
 metadata:
-  name: label-logger
+  name: label-logger                 # cluster-scoped: no namespace
+  annotations:
+    gojsop.io/restart: "2026-10-05"  # optional; any new value prepares the script again
 spec:
-  bindings:
-    - name: pods
-      apiGroups: [""]
-      apiVersions: ["v1"]
-      resources: ["pods"]
-      events: ["Added", "Deleted"]          # default: all three
-      namespaceSelector:
-        matchLabels:
+  bindings:                          # required, 1 to 32
+    - name: pods                     # required, unique in the hook, at most 63 characters
+      apiGroups: [""]                # required, concrete: "" is the core group, no "*"
+      apiVersions: ["v1"]            # required, concrete, no "*"
+      resources: ["pods"]            # required, plural names, no "*"; one resource per binding in a hook
+      events: ["Added", "Deleted"]   # optional: Added | Modified | Deleted; default all three
+      namespaceSelector:             # optional LabelSelector on the object's namespace;
+        matchLabels:                 #   one namespace: kubernetes.io/metadata.name
           kubernetes.io/metadata.name: default
-  source:
-    inline: |
+      objectSelector:                # optional LabelSelector on the object itself
+        matchExpressions:            #   matchLabels and matchExpressions
+          - { key: app, operator: Exists }   # In | NotIn | Exists | DoesNotExist
+  permissions:                       # optional, at most 64: what kube.* may do, see Permissions
+    - apiGroups: [""]                # required, no "*"
+      resources: ["configmaps"]      # required, no "*"; subresources like "deployments/scale"
+      verbs: ["get", "list"]         # required: get | list | watch | create | update | patch | delete
+  source:                            # required: exactly one of inline or configMapRef
+    inline: |                        # at most 512 KiB
       function handle(event) {
         console.log(event.type, event.object.metadata.name,
                     event.initial ? "(was there before)" : "");
         console.log("pods in default now:", event.all().length);
       }
+    # configMapRef:                  # instead of inline
+    #   name: my-hook                # required
+    #   namespace: default           # required
+    #   key: hook.js                 # optional, default hook.js
+  limits:                            # optional
+    memoryMB: 32                     # 1 to 512, default 32: heap of one call
+    timeoutSeconds: 30               # 1 to 300, default 30: one call, and loading the script
 ```
 
 **What `handle()` receives.** One event per call:
@@ -129,32 +150,47 @@ whole picture, for example to delete copies whose original is gone, calls
 ## JSAdmission
 
 A policy names the requests it guards in `spec.rules` and defines
-`validate(req)` (`type: validating`, the default) or `mutate(req)`
-(`type: mutating`):
+`validate(req)` or `mutate(req)`. Every field, with the values it takes:
 
 ```yaml
 apiVersion: core.gojsop.io/v1alpha1
 kind: JSAdmission
 metadata:
-  name: prevent-latest-tags
+  name: prevent-latest-tags          # cluster-scoped: no namespace
+  annotations:
+    gojsop.io/restart: "2026-10-05"  # optional; any new value prepares the script again
 spec:
-  rules:
+  type: validating                   # validating (calls validate) | mutating (calls mutate); default validating
+  rules:                             # required, 1 to 32
+    - apiGroups: [""]                # required; "*" allowed here
+      apiVersions: ["v1"]            # required; "*" allowed
+      resources: ["pods"]            # required; "*" and subresources ("pods/exec") allowed
+      operations: ["CREATE", "UPDATE"]  # required: CREATE | UPDATE | DELETE | CONNECT | *
+      scope: "*"                     # optional: * | Namespaced | Cluster; default *
+  namespaceSelector: {}              # optional LabelSelector on the request's namespace
+  objectSelector: {}                 # optional LabelSelector on the object
+  matchPolicy: Equivalent            # Exact | Equivalent; default Equivalent
+  failurePolicy: Fail                # Fail | Ignore; default Fail: what a failed call means
+  timeoutSeconds: 5                  # 1 to 30, default 5: how long the apiserver waits
+  permissions:                       # optional: what kube.get and kube.list may read
     - apiGroups: [""]
-      apiVersions: ["v1"]
-      resources: ["pods"]
-      operations: ["CREATE", "UPDATE"]
-  failurePolicy: Fail        # or Ignore
-  timeoutSeconds: 5          # 1 to 30
-  source:
+      resources: ["namespaces"]
+      verbs: ["get"]                 # get | list | watch only: a policy never writes
+  source:                            # required: exactly one of inline or configMapRef
     inline: |
       function validate(req) {
-        for (const c of req.object.spec.containers || []) {
-          if (c.image.endsWith(":latest")) {
+        // Fields Kubernetes leaves empty are missing, and req.object is
+        // null on DELETE: reach into objects with ?. and ??.
+        for (const c of req.object?.spec?.containers ?? []) {
+          if (c.image?.endsWith(":latest")) {
             return { allowed: false, message: c.image + " uses :latest" };
           }
         }
         return { allowed: true };
       }
+  limits:                            # optional
+    memoryMB: 32                     # 1 to 512, default 32
+    timeoutSeconds: 30               # 1 to 300, default 30; a call ends at the smaller of this and spec.timeoutSeconds
 ```
 
 **The request.** `req` has `uid`, `kind`, `resource`, `subResource`, `name`,
@@ -215,6 +251,12 @@ permissions:
 `var handle = ...`). A top-level `const`, `let` or `class`, and code a bundler
 wrapped in a closure, are not visible to gojsop; the script then fails with
 `missing required export: handle()`.
+
+**Missing fields are normal.** Kubernetes leaves out empty fields: an object
+without labels has no `metadata.labels`, and `req.object` is `null` on
+DELETE (`req.oldObject` on CREATE). `obj.metadata.labels.team` then throws,
+and the call fails. Reach into objects with `?.` and `??`:
+`obj.metadata?.labels?.team ?? "none"`.
 
 **No state between calls.** gojsop runs the top-level code once and takes a
 snapshot. Every call starts from that snapshot, so globals you change inside
