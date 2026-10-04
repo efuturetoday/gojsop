@@ -91,13 +91,8 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 ## DISP: Hook dispatch and bindings
 
 - **DISP-4** `bug` No leader-election awareness. On failover the new leader
-  rebuilds informers with a fresh Synchronization; events in the gap are lost.
-- **DISP-5** `decision` `BindingContext` shape depends on type: `Object` for
-  events, `Objects` for Synchronization.
-- **DISP-6** `doc` Interaction of `events` and `synchronization` unspecified.
-  An empty `events` means "all events"; the relation to snapshot delivery is
-  unclear.
-
+  rebuilds informers and delivers every object again as an initial Added; a
+  deletion in the gap is never seen.
 - **DISP-10** `debt` Failed events are requeued with `AddRateLimited` and no
   retry cap; a poison event retries forever (`dispatcher.go`, `requeue`). The
   same holds for events of a hook that has no VM (`noVM`): they wait, folded

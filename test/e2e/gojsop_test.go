@@ -85,8 +85,23 @@ func productScenarios() {
 		})
 
 		It("syncs a ConfigMap through a hook that acts as its own ServiceAccount", func() {
+			By("creating a ConfigMap before the hook exists")
+			_, err := apply(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: existing
+  namespace: ` + e2eNamespace + `
+  labels:
+    gojsop.io/sync: "true"
+  annotations:
+    gojsop.io/sync-to: ` + e2eTarget + `
+data:
+  greeting: early
+`)
+			Expect(err).NotTo(HaveOccurred())
+
 			By("applying the ConfigMap sync sample")
-			_, err := kubectl("apply", "-f", "config/samples/core_v1alpha1_jshook.yaml")
+			_, err = kubectl("apply", "-f", "config/samples/core_v1alpha1_jshook.yaml")
 			Expect(err).NotTo(HaveOccurred())
 			Eventually(jsonpath("get", "jshook", "configmap-sync",
 				"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")).Should(Equal("True"))
@@ -112,6 +127,9 @@ data:
 			// so the copy shows that impersonation and its rights work.
 			Eventually(jsonpath("get", "configmap", "shared", "-n", e2eTarget,
 				"-o", "jsonpath={.data.greeting}")).Should(Equal("hello"))
+			// The ConfigMap from before the hook arrived as an initial Added.
+			Eventually(jsonpath("get", "configmap", "existing", "-n", e2eTarget,
+				"-o", "jsonpath={.data.greeting}")).Should(Equal("early"))
 		})
 
 		It("stops a script at the edge of its rights", func() {
@@ -131,14 +149,9 @@ spec:
           gojsop.io/e2e-victim: "true"
   source:
     inline: |
-      function handle(contexts) {
-        for (const ctx of contexts) {
-          const items = ctx.type === "Synchronization" ? ctx.objects : [ctx];
-          for (const o of items) {
-            const m = o.object.metadata;
-            kube.delete({ apiVersion: "v1", kind: "ConfigMap", namespace: m.namespace, name: m.name });
-          }
-        }
+      function handle(event) {
+        const m = event.object.metadata;
+        kube.delete({ apiVersion: "v1", kind: "ConfigMap", namespace: m.namespace, name: m.name });
       }
 `)
 			Expect(err).NotTo(HaveOccurred())

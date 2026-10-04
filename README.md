@@ -61,28 +61,28 @@ spec:
           kubernetes.io/metadata.name: default
   source:
     inline: |
-      function handle(contexts) {
-        for (const ctx of contexts) {
-          if (ctx.type === "Synchronization") {
-            console.log(ctx.binding, "starts with", ctx.objects.length, "pods");
-          } else {
-            console.log(ctx.watchEvent, ctx.object.metadata.name);
-          }
-        }
+      function handle(event) {
+        console.log(event.type, event.object.metadata.name,
+                    event.initial ? "(was there before)" : "");
+        console.log("pods in default now:", event.all().length);
       }
 ```
 
-**What `handle()` receives.** Each call gets an array with one context:
+**What `handle()` receives.** One event per call:
 
-| `type` | When | Fields |
-|---|---|---|
-| `Synchronization` | once per binding, when its watch starts | `binding`, `objects: [{object}, ...]` — every matching object that exists |
-| `Event` | once per change after that | `binding`, `watchEvent` (`Added`, `Modified`, `Deleted`), `object` |
+| Field | Means |
+|---|---|
+| `event.type` | `Added`, `Modified` or `Deleted` |
+| `event.object` | the object; for `Deleted` its last state |
+| `event.binding` | the name of the binding that saw it |
+| `event.initial` | `true` for an object that already existed when the hook started watching |
+| `event.all()` | every object the binding watches right now, from the watch's cache, without a call to the apiserver |
 
-"Synchronization" is the start state: your hook sees every existing object
-once, then only the changes. Changes during the synchronization are not lost.
-With `synchronization: false` there is no synchronization; existing objects
-arrive as `Added` events instead.
+Objects that exist when the hook starts arrive first, as `Added` with
+`initial: true`; after that every change arrives, and nothing that happens in
+between is lost. Most hooks only look at `event.object`. A hook that needs the
+whole picture, for example to delete copies whose original is gone, calls
+`event.all()`.
 
 **Guarantees.**
 
@@ -246,8 +246,9 @@ again.
   namespace. Whoever controls the operator's Deployment controls the cluster;
   the scripts do not.
 - **Failover gap.** Hooks run on the leader only. After a leader change the
-  new leader starts with a fresh synchronization: objects that changed in
-  between arrive in it, but a deletion in between is never seen.
+  new leader delivers every object again as an initial `Added`: objects that
+  changed in between arrive that way, but a deletion in between is never
+  seen.
 - **Endless retries.** A hook that always fails is retried forever.
 - **`v1alpha1`.** Fields may change without a migration path.
 

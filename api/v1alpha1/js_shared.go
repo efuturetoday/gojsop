@@ -249,13 +249,6 @@ type HookBinding struct {
 	// +kubebuilder:validation:MaxItems=3
 	// +kubebuilder:default={Added,Modified,Deleted}
 	Events []HookEvent `json:"events,omitempty"`
-
-	// Synchronization asks for one initial call carrying every object that
-	// already exists, before any event is delivered. With it disabled those
-	// objects arrive as Added events instead.
-	// +optional
-	// +kubebuilder:default=true
-	Synchronization *bool `json:"synchronization,omitempty"`
 }
 
 // WantsEvent reports whether this binding asked for the given watch event.
@@ -264,11 +257,6 @@ func (b *HookBinding) WantsEvent(e HookEvent) bool {
 		return true
 	}
 	return slices.Contains(b.Events, e)
-}
-
-// WantsSynchronization reports whether the initial snapshot call is enabled.
-func (b *HookBinding) WantsSynchronization() bool {
-	return b.Synchronization == nil || *b.Synchronization
 }
 
 // PermissionVerb is a verb a Permission grants.

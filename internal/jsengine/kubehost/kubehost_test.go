@@ -160,29 +160,26 @@ func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
 	// passes a derived object into kube.apply. This is the path that surfaced
 	// the empty-JSONStringify bug in production.
 	const src = `
-		function handle(ctx) {
-			for (const evt of ctx) {
-				const obj = evt.object;
-				const ann = (obj.metadata && obj.metadata.annotations) || {};
-				const targets = (ann["sync-to"] || "").split(",").filter(Boolean);
-				for (const ns of targets) {
-					kube.apply({
-						apiVersion: "v1", kind: "ConfigMap",
-						metadata: { name: obj.metadata.name, namespace: ns },
-						data: obj.data || {},
-					});
-				}
+		function handle(event) {
+			const obj = event.object;
+			const ann = (obj.metadata && obj.metadata.annotations) || {};
+			const targets = (ann["sync-to"] || "").split(",").filter(Boolean);
+			for (const ns of targets) {
+				kube.apply({
+					apiVersion: "v1", kind: "ConfigMap",
+					metadata: { name: obj.metadata.name, namespace: ns },
+					data: obj.data || {},
+				});
 			}
 		}
 	`
 	inst := runHook(t, h, src)
 
-	// Run handle() many times with realistic BindingContext payloads.
+	// Run handle() many times with realistic events.
 	for i := range 10 {
-		bc := []map[string]any{{
-			"binding":    "watch",
-			"type":       "Event",
-			"watchEvent": "Modified",
+		bc := map[string]any{
+			"binding": "watch",
+			"type":    "Modified",
 			"object": map[string]any{
 				"apiVersion": "v1", "kind": "ConfigMap",
 				"metadata": map[string]any{
@@ -194,7 +191,7 @@ func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
 				},
 				"data": map[string]any{"color": "blue", "n": "v" + string(rune('0'+i))},
 			},
-		}}
+		}
 		if _, err := inst.CallExport(context.Background(), "handle", bc); err != nil {
 			t.Fatalf("Handle iteration %d: %v", i, err)
 		}

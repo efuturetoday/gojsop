@@ -239,13 +239,6 @@ spec:
                       - Namespaced
                       - Cluster
                       type: string
-                    synchronization:
-                      default: true
-                      description: |-
-                        Synchronization asks for one initial call carrying every object that
-                        already exists, before any event is delivered. With it disabled those
-                        objects arrive as Added events instead.
-                      type: boolean
                   required:
                   - apiGroups
                   - apiVersions

@@ -26,33 +26,33 @@ spec:
       verbs: ["get", "create", "patch"]
   source:
     inline: |
-      // Every call starts from a fresh snapshot of this script, so globals
-      // set inside handle() are gone at the next call.
-      function handle(ctx) {
-        for (const evt of ctx) {
-          const obj = evt.object;
-          if (!obj || !obj.metadata) continue;
-          const ann = obj.metadata.annotations || {};
-          const targets = ann["gojsop.io/sync-to"];
-          if (!targets) continue;
-          const namespaces = targets.split(",").map(s => s.trim()).filter(Boolean);
-          for (const ns of namespaces) {
-            if (ns === obj.metadata.namespace) continue; // never copy onto self
-            // console.log and console.debug go to the operator log;
-            // console.warn and console.error also show up as Warning events
-            // on this JSHook (kubectl describe jshook configmap-sync).
-            console.debug("syncing", obj.metadata.name, "to", ns);
-            kube.apply({
-              apiVersion: "v1",
-              kind: "ConfigMap",
-              metadata: {
-                name: obj.metadata.name,
-                namespace: ns,
-                labels: { "gojsop.io/synced-from": obj.metadata.namespace },
-              },
-              data: obj.data || {},
-            });
-          }
+      // handle() gets one change at a time. ConfigMaps that existed before
+      // the hook arrive as Added with event.initial set, so they are synced
+      // too. Every call starts from a fresh snapshot of this script, so
+      // globals set inside handle() are gone at the next call.
+      function handle(event) {
+        if (event.type === "Deleted") return;
+        const obj = event.object;
+        const ann = obj.metadata.annotations || {};
+        const targets = ann["gojsop.io/sync-to"];
+        if (!targets) return;
+        const namespaces = targets.split(",").map(s => s.trim()).filter(Boolean);
+        for (const ns of namespaces) {
+          if (ns === obj.metadata.namespace) continue; // never copy onto self
+          // console.log and console.debug go to the operator log;
+          // console.warn and console.error also show up as Warning events
+          // on this JSHook (kubectl describe jshook configmap-sync).
+          console.debug("syncing", obj.metadata.name, "to", ns);
+          kube.apply({
+            apiVersion: "v1",
+            kind: "ConfigMap",
+            metadata: {
+              name: obj.metadata.name,
+              namespace: ns,
+              labels: { "gojsop.io/synced-from": obj.metadata.namespace },
+            },
+            data: obj.data || {},
+          });
         }
       }
   limits:

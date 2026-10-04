@@ -24,6 +24,7 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/conditions"
 	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jslog"
 	"github.com/o-haase/gojsop/internal/jsregistry"
@@ -138,7 +139,7 @@ func newEnv(t *testing.T, src string, lim jsengine.Limits, objs ...runtime.Objec
 		return nil
 	})
 	// The dispatcher's own surface plus the console every script gets.
-	binder := jsengine.Binders(hooks, jslog.Binder{})
+	binder := jsengine.Binders(hooks, jslog.Binder{}, kubehost.HookEvents{})
 	e.spec = jsrun.Spec{
 		Source: []byte(src), SourceHash: "h", Limits: lim, Host: binder,
 		PostBuild: func(ctx context.Context, _ jsrun.Script) error {
@@ -295,66 +296,35 @@ func (e *env) waitEmitted(reason string, n int) {
 	}
 }
 
-const (
-	bcSynchronization = "Synchronization"
-	bcEvent           = "Event"
-)
-
-func boolp(b bool) *bool { return &b }
+// added is the type of a call for a new object.
+const added = "Added"
 
 const recordSrc = `
-function handle(c) { record(c[0]); }
+function handle(e) { record(e); }
 `
 
 // jshook.R3
 // jshook.R4
-func TestDispatcher_SynchronizationFirstThenDeltas(t *testing.T) {
+// jshook.R5
+func TestDispatcher_ExistingObjectsArriveFirstAsInitialAdded(t *testing.T) {
 	e := newEnv(t, recordSrc, jsengine.Limits{}, newCM("a", "uid-a", "1"))
 	e.subscribe(corev1alpha1.HookBinding{})
 	e.create(newCM("b", "uid-b", "1"))
 
 	cs := e.waitCalls(2)
-	// R3: the snapshot is delivered first, the later change after it.
-	if cs[0]["type"] != bcSynchronization {
-		t.Fatalf("first context is %v, want Synchronization", cs[0])
+	// R3: the object that existed comes first, as an initial Added.
+	if cs[0]["type"] != added || cs[0]["initial"] != true || objName(cs[0]) != "a" {
+		t.Fatalf("first call is %v, want initial Added a", cs[0])
 	}
-	objs, _ := cs[0]["objects"].([]any)
-	if len(objs) != 1 {
-		t.Fatalf("snapshot has %d objects, want 1: %v", len(objs), cs[0])
+	if cs[1]["type"] != added || cs[1]["initial"] != false || objName(cs[1]) != "b" {
+		t.Fatalf("second call is %v, want Added b", cs[1])
 	}
-	if cs[1]["type"] != "Event" || cs[1]["watchEvent"] != "Added" || objName(cs[1]) != "b" {
-		t.Fatalf("second context is %v, want Added b", cs[1])
-	}
-	// R4: "a" is in the snapshot and must not come again as Added.
+	// R4: "a" arrives once.
 	time.Sleep(200 * time.Millisecond)
 	for _, c := range e.calls()[1:] {
 		if objName(c) == "a" {
-			t.Fatalf("object a was delivered again after the snapshot: %v", c)
+			t.Fatalf("object a was delivered twice: %v", c)
 		}
-	}
-}
-
-// jshook.R5
-func TestDispatcher_SyncDisabled_ExistingObjectsArriveAsAdded(t *testing.T) {
-	e := newEnv(t, recordSrc, jsengine.Limits{}, newCM("a", "uid-a", "1"))
-	e.subscribe(corev1alpha1.HookBinding{Synchronization: boolp(false)})
-	e.create(newCM("b", "uid-b", "1"))
-
-	e.waitCalls(2)
-	time.Sleep(200 * time.Millisecond)
-	cs := e.calls()
-	if len(cs) != 2 {
-		t.Fatalf("want 2 calls, got %d: %v", len(cs), cs)
-	}
-	names := map[string]bool{}
-	for _, c := range cs {
-		if c["type"] != "Event" || c["watchEvent"] != "Added" {
-			t.Fatalf("context %v, want Event/Added and no Synchronization", c)
-		}
-		names[objName(c)] = true
-	}
-	if !names["a"] || !names["b"] {
-		t.Fatalf("want Added for a and b, got %v", names)
 	}
 }
 
@@ -362,17 +332,16 @@ func TestDispatcher_SyncDisabled_ExistingObjectsArriveAsAdded(t *testing.T) {
 func TestDispatcher_ExecuteHookOnEvent_ListedTypesOnly(t *testing.T) {
 	e := newEnv(t, recordSrc, jsengine.Limits{})
 	e.subscribe(corev1alpha1.HookBinding{Events: []corev1alpha1.HookEvent{corev1alpha1.HookEventDeleted}})
-	e.waitCalls(1) // Synchronization (empty)
 
 	e.create(newCM("a", "uid-a", "1"))
 	e.update(newCM("a", "uid-a", "2"))
 	e.remove("a")
 
-	e.waitCalls(2)
+	e.waitCalls(1)
 	time.Sleep(200 * time.Millisecond)
 	cs := e.calls()
-	if len(cs) != 2 || cs[1]["watchEvent"] != "Deleted" {
-		t.Fatalf("want Synchronization then Deleted only, got %v", cs)
+	if len(cs) != 1 || cs[0]["type"] != "Deleted" {
+		t.Fatalf("want Deleted only, got %v", cs)
 	}
 }
 
@@ -380,15 +349,14 @@ func TestDispatcher_ExecuteHookOnEvent_ListedTypesOnly(t *testing.T) {
 func TestDispatcher_ExecuteHookOnEvent_EmptyMeansAll(t *testing.T) {
 	e := newEnv(t, recordSrc, jsengine.Limits{})
 	e.subscribe(corev1alpha1.HookBinding{})
-	e.waitCalls(1)
 
 	e.create(newCM("a", "uid-a", "1"))
-	e.waitCalls(2)
+	e.waitCalls(1)
 	e.update(newCM("a", "uid-a", "2"))
-	e.waitCalls(3)
+	e.waitCalls(2)
 	e.remove("a")
-	cs := e.waitCalls(4)
-	got := []any{cs[1]["watchEvent"], cs[2]["watchEvent"], cs[3]["watchEvent"]}
+	cs := e.waitCalls(3)
+	got := []any{cs[0]["type"], cs[1]["type"], cs[2]["type"]}
 	want := []any{"Added", "Modified", "Deleted"}
 	for i := range want {
 		if got[i] != want[i] {
@@ -400,7 +368,7 @@ func TestDispatcher_ExecuteHookOnEvent_EmptyMeansAll(t *testing.T) {
 // jshook.R8
 func TestDispatcher_BurstOfChangesFoldsIntoNewestObject(t *testing.T) {
 	const src = `
-function handle(c) { waitGate(); record(c[0]); }`
+function handle(e) { waitGate(); record(e); }`
 	e := newEnv(t, src, jsengine.Limits{}, newCM("a", "uid-a", "0"))
 	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitCalls(1)
@@ -421,7 +389,7 @@ function handle(c) { waitGate(); record(c[0]); }`
 	time.Sleep(300 * time.Millisecond)
 	cs := e.calls()
 	if len(cs) != 3 {
-		t.Fatalf("want Synchronization + in-flight + one folded call, got %d: %v", len(cs), cs)
+		t.Fatalf("want initial + in-flight + one folded call, got %d: %v", len(cs), cs)
 	}
 	if dataV(cs[2]) != "4" {
 		t.Fatalf("folded call carries v=%q, want newest 4", dataV(cs[2]))
@@ -432,11 +400,11 @@ function handle(c) { waitGate(); record(c[0]); }`
 // jshook.R25
 func TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart(t *testing.T) {
 	const src = `
-function handle(c) {
-  record(c[0]);
+function handle(e) {
+  record(e);
   if (failNow()) { throw new Error("boom"); }
 }`
-	e := newEnv(t, src, jsengine.Limits{})
+	e := newEnv(t, src, jsengine.Limits{}, newCM("seed", "uid-seed", "0"))
 	e.fails.Store(2)
 	before, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(corev1alpha1.HookBinding{})
@@ -465,11 +433,11 @@ function handle(c) {
 // jshook.R12
 func TestDispatcher_MemoryLimit_WarnsKeepsVMAndRetries(t *testing.T) {
 	const src = `
-function handle(c) {
+function handle(e) {
   if (oomNow()) { var a = []; while (true) { a.push(new Array(100000).fill(1)); } }
-  record(c[0]);
+  record(e);
 }`
-	e := newEnv(t, src, jsengine.Limits{MemoryMB: 1})
+	e := newEnv(t, src, jsengine.Limits{MemoryMB: 1}, newCM("seed", "uid-seed", "0"))
 	e.ooms.Store(1)
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(corev1alpha1.HookBinding{})
@@ -479,7 +447,7 @@ function handle(c) {
 		t.Fatalf("event %v, want the memory-limit Warning", ev)
 	}
 	cs := e.waitCalls(1) // the retry runs on a fresh VM of the same script
-	if cs[0]["type"] != bcSynchronization {
+	if cs[0]["initial"] != true {
 		t.Fatalf("retried context %v", cs[0])
 	}
 	if now, _ := e.reg.Get(jsrun.HookKey(e.key)); now != first || len(now.Recoveries.Recent) != 0 {
@@ -495,10 +463,10 @@ function handle(c) {
 // jshook.R13
 func TestDispatcher_RetryKeepsFresherStateOfSameObject(t *testing.T) {
 	const src = `
-function handle(c) {
+function handle(e) {
   enter();
-  record(c[0]);
-  if (c[0].type === "Event" && failNow()) {
+  record(e);
+  if (!e.initial && failNow()) {
     var end = Date.now() + 400;
     while (Date.now() < end) {}
     throw new Error("boom");
@@ -518,7 +486,7 @@ function handle(c) {
 	time.Sleep(400 * time.Millisecond)
 	cs := e.calls()
 	if len(cs) != 3 {
-		t.Fatalf("want 3 calls (sync, failed v=1, retry), got %d: %v", len(cs), cs)
+		t.Fatalf("want 3 calls (initial, failed v=1, retry), got %d: %v", len(cs), cs)
 	}
 	if dataV(cs[1]) != "1" || dataV(cs[2]) != "2" {
 		t.Fatalf("retry carries v=%q after failed v=%q, want the fresher 2", dataV(cs[2]), dataV(cs[1]))
@@ -528,10 +496,9 @@ function handle(c) {
 // jshook.R14
 func TestDispatcher_Drop_NoMoreEvents(t *testing.T) {
 	const src = `
-function handle(c) { enter(); record(c[0]); }`
+function handle(e) { enter(); record(e); }`
 	e := newEnv(t, src, jsengine.Limits{})
 	e.subscribe(corev1alpha1.HookBinding{})
-	e.waitCalls(1)
 
 	e.d.Drop(e.key)
 	n := e.entered.Load()
@@ -547,8 +514,8 @@ function handle(c) { enter(); record(c[0]); }`
 // js-execution.R3
 func TestDispatcher_Timeout_CancelsWarnsAndKeepsVM(t *testing.T) {
 	const src = `
-function handle(c) { enter(); while (true) {} }`
-	e := newEnv(t, src, jsengine.Limits{TimeoutSeconds: 1})
+function handle(e) { enter(); while (true) {} }`
+	e := newEnv(t, src, jsengine.Limits{TimeoutSeconds: 1}, newCM("seed", "uid-seed", "0"))
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(corev1alpha1.HookBinding{})
 
@@ -572,8 +539,8 @@ function handle(c) { enter(); while (true) {} }`
 // jshook.R9
 func TestDispatcher_ResubscribeDuringCall_NoOverlapAndProcessAlive(t *testing.T) {
 	const src = `
-function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {} record(c[0]); }`
-	e := newEnv(t, src, jsengine.Limits{})
+function handle(e) { enter(); var t = Date.now(); while (Date.now() - t < 300) {} record(e); }`
+	e := newEnv(t, src, jsengine.Limits{}, newCM("seed", "uid-seed", "0"))
 	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitEntered(0)
 
@@ -581,7 +548,7 @@ function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {
 	// and the new one must not start before the old call has ended.
 	e.subscribe(corev1alpha1.HookBinding{})
 
-	// The new subscription delivers its own Synchronization.
+	// The new subscription delivers the existing object again.
 	deadline := time.Now().Add(10 * time.Second)
 	for e.entered.Load() < 2 {
 		if time.Now().After(deadline) {
@@ -600,15 +567,15 @@ function handle(c) { enter(); var t = Date.now(); while (Date.now() - t < 300) {
 // script, nothing is prepared again and no Restarted event is emitted.
 func TestDispatcher_PanicInHandle_RetriesOnFreshVM(t *testing.T) {
 	const src = `
-function handle(c) { crashNow(); record(c[0]); }`
-	e := newEnv(t, src, jsengine.Limits{})
+function handle(e) { crashNow(); record(e); }`
+	e := newEnv(t, src, jsengine.Limits{}, newCM("seed", "uid-seed", "0"))
 	e.crashes.Store(1)
 	first, _ := e.reg.Get(jsrun.HookKey(e.key))
 	e.subscribe(corev1alpha1.HookBinding{})
 
 	cs := e.waitCalls(1)
-	if cs[0]["type"] != bcSynchronization {
-		t.Fatalf("retried context %v", cs[0])
+	if cs[0]["initial"] != true {
+		t.Fatalf("retried event %v", cs[0])
 	}
 	if e.crashes.Load() >= 0 {
 		t.Fatal("crashNow() never panicked")
@@ -646,11 +613,10 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 	d := dispatcher.New(dyn, fixedMapper{}, jsregistry.NewRegistry())
 	keyA := types.NamespacedName{Name: "a"}
 	keyB := types.NamespacedName{Name: "b"}
-	off := false
 	bindingsA := []corev1alpha1.HookBinding{{Name: "cms", ResourceRule: cmRule, ObjectMatch: corev1alpha1.ObjectMatch{
 		ObjectSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"sync": "slow"}},
 	}}}
-	bindingsB := []corev1alpha1.HookBinding{{Name: "cms", ResourceRule: cmRule, Synchronization: &off}}
+	bindingsB := []corev1alpha1.HookBinding{{Name: "cms", ResourceRule: cmRule}}
 	t.Cleanup(func() { d.Drop(keyA); d.Drop(keyB) })
 
 	errA := make(chan error, 1)
@@ -703,8 +669,8 @@ func TestDispatcher_SlowSync_DoesNotBlockOtherHooks(t *testing.T) {
 // js-registry.R19
 func TestDispatcher_NoVM_KeepsEventsAndDeliversAfterBuild(t *testing.T) {
 	const src = `
-function handle(c) { enter(); record(c[0]); }`
-	e := newEnv(t, src, jsengine.Limits{})
+function handle(e) { enter(); record(e); }`
+	e := newEnv(t, src, jsengine.Limits{}, newCM("seed", "uid-seed", "0"))
 	gate := make(chan struct{})
 	e.hold.Store(&gate)
 	// Forget the script and register it again: the new build blocks on the gate.
@@ -723,7 +689,7 @@ function handle(c) { enter(); record(c[0]); }`
 	}
 	close(gate)
 	cs := e.waitCalls(1)
-	if cs[0]["type"] != bcSynchronization {
+	if cs[0]["initial"] != true {
 		t.Fatalf("event kept across the rebuild: %v", cs[0])
 	}
 }
@@ -735,13 +701,13 @@ function handle(c) { enter(); record(c[0]); }`
 // js-execution.R17
 func TestDispatcher_ConsoleWarning_BecomesAnEvent(t *testing.T) {
 	const src = `
-function handle(c) {
+function handle(e) {
   console.debug("quiet");
   console.log("also quiet");
   console.error("image tag 'latest' is not allowed");
-  record(c[0]);
+  record(e);
 }`
-	e := newEnv(t, src, jsengine.Limits{})
+	e := newEnv(t, src, jsengine.Limits{}, newCM("seed", "uid-seed", "0"))
 	e.subscribe(corev1alpha1.HookBinding{})
 
 	e.waitEmitted(conditions.EventScriptMessage, 1)
@@ -773,11 +739,11 @@ function handle(c) {
 // js-execution.R17
 func TestDispatcher_ConsoleEventsAreCappedPerCall(t *testing.T) {
 	const src = `
-function handle(c) {
+function handle(e) {
   for (var i = 0; i < 20; i++) console.warn("noisy " + i);
-  record(c[0]);
+  record(e);
 }`
-	e := newEnv(t, src, jsengine.Limits{})
+	e := newEnv(t, src, jsengine.Limits{}, newCM("seed", "uid-seed", "0"))
 	e.subscribe(corev1alpha1.HookBinding{})
 	e.waitCalls(1)
 	e.waitEmitted(conditions.EventScriptMessage, 1)
@@ -861,10 +827,9 @@ func TestPlanWatches_RejectsWildcardUnknownAndDuplicate(t *testing.T) {
 //
 // jshook.R20
 func TestPlanWatches_BadBindingKeepsExistingWatches(t *testing.T) {
-	const src = `function handle(c) { record(c[0]); }`
+	const src = `function handle(e) { record(e); }`
 	e := newEnv(t, src, jsengine.Limits{})
 	e.subscribe(corev1alpha1.HookBinding{})
-	e.waitCalls(1) // the Synchronization context
 
 	bad := []corev1alpha1.HookBinding{{Name: "a", ResourceRule: corev1alpha1.ResourceRule{
 		APIGroups: []string{""}, APIVersions: []string{"v1"}, Resources: []string{"widgets"},
@@ -874,9 +839,9 @@ func TestPlanWatches_BadBindingKeepsExistingWatches(t *testing.T) {
 	}
 
 	e.create(newCM("still-watched", "uid-still", "1"))
-	cs := e.waitCalls(2)
-	if got := cs[1]["type"]; got != bcEvent {
-		t.Fatalf("after the rejected re-subscribe the old watch is gone: %v", cs[1])
+	cs := e.waitCalls(1)
+	if got := cs[0]["type"]; got != added {
+		t.Fatalf("after the rejected re-subscribe the old watch is gone: %v", cs[0])
 	}
 }
 
@@ -895,8 +860,38 @@ func TestDispatcher_WatchesRunAsTheHooksClient(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	cs := e.waitCalls(1)
-	objs, _ := cs[0]["objects"].([]any)
-	if len(objs) != 1 {
-		t.Fatalf("synchronization has %d objects, want the one only the hook's client sees: %v", len(objs), cs[0])
+	if objName(cs[0]) != "a" {
+		t.Fatalf("first call %v, want object a, which only the hook's client sees", cs[0])
+	}
+}
+
+// event.all() returns what the binding watches right now, from the cache of
+// its watch: every object, the changed one included.
+// jshook.R26
+func TestDispatcher_AllReturnsEveryObjectOfTheBinding(t *testing.T) {
+	const src = `
+function handle(e) {
+  record({ type: e.type, object: e.object, names: e.all().map(function (o) { return o.metadata.name; }).sort() });
+}`
+	e := newEnv(t, src, jsengine.Limits{}, newCM("a", "uid-a", "1"), newCM("b", "uid-b", "1"))
+	e.subscribe(corev1alpha1.HookBinding{})
+	e.waitCalls(2)
+	e.create(newCM("c", "uid-c", "1"))
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for _, c := range e.calls() {
+			if objName(c) == "c" {
+				names, _ := c["names"].([]any)
+				if len(names) != 3 || names[0] != "a" || names[1] != "b" || names[2] != "c" {
+					t.Fatalf("all() on the call for c returned %v, want [a b c]", names)
+				}
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no call for c: %v", e.calls())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

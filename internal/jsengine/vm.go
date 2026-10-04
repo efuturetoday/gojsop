@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -292,9 +293,19 @@ func (vm *VM) callJSON(ctx context.Context, name string, argJSON []byte) (string
 	}
 	out, err := vm.result(ctx, st)
 	if err != nil {
-		return "", fmt.Errorf("calling %s(): %w", name, err)
+		return "", fmt.Errorf("calling %s(): %w", exportLabel(name), err)
 	}
 	return string(out), nil
+}
+
+// wrapperPrefix starts the name of an export a binder's shim defines around
+// a function the author wrote, such as __gojsop_handle around handle.
+const wrapperPrefix = "__gojsop_"
+
+// exportLabel is the name an error shows for an export: the author's
+// function, not the wrapper around it (js-execution.R15).
+func exportLabel(name string) string {
+	return strings.TrimPrefix(name, wrapperPrefix)
 }
 
 // Invoke calls the named export with in as its one argument (none if in is

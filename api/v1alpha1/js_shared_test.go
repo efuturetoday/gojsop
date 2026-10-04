@@ -54,18 +54,9 @@ func TestHookBinding_EventDefaults(t *testing.T) {
 			t.Errorf("an empty events list must mean all events, %q is dropped", e)
 		}
 	}
-	if !empty.WantsSynchronization() {
-		t.Error("synchronization is on unless it is set to false")
-	}
 
 	only := HookBinding{Events: []HookEvent{HookEventDeleted}}
 	if only.WantsEvent(HookEventAdded) || !only.WantsEvent(HookEventDeleted) {
 		t.Error("only the listed event types are delivered")
-	}
-
-	off := false
-	disabled := HookBinding{Synchronization: &off}
-	if disabled.WantsSynchronization() {
-		t.Error("synchronization: false must turn the snapshot off")
 	}
 }

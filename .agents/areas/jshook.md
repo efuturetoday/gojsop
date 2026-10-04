@@ -4,7 +4,7 @@ status: proposed
 entrypoints:
   - corev1alpha1.HookBinding
   - jshook.Handle
-  - jshook.BindingContext
+  - jshook.Event
   - dispatcher.Dispatcher.Subscribe
   - dispatcher.Dispatcher.Drop
 ---
@@ -23,8 +23,10 @@ A binding names resources like a webhook rule (apiGroups, apiVersions,
 resources) and narrows them with `namespaceSelector` and `objectSelector`,
 the same shape as in `JSAdmission` (api-design.R10).
 
-Per binding, `handle()` first gets one `Synchronization` with every matching
-object, then one `Event` per change (`Added`, `Modified`, `Deleted`).
+`handle(event)` gets one change per call. Objects that already exist when
+the hook starts watching arrive first, as `Added` with `initial: true`.
+`event.all()` gives the whole current state of the binding when a hook needs
+it.
 
 Words used here:
 
@@ -49,16 +51,17 @@ Words used here:
 - **Exceptions**: an author who lacks a right the hook would get cannot apply it (kube-access.R13). `*`, a resource the cluster does not serve, or two bindings on one resource fail the reconcile; the hook keeps the watches it had (jshook.R20, jshook.R21). A script without `handle()` fails (jshook.R2). A `kube.*` call without the right throws `Forbidden`.
 - **Result**: the hook watches exactly what it declared.
 
-### jshook.UC2 Receive the current state, then changes
+### jshook.UC2 Receive what exists, then changes
 
 - **Actor**: hook author
 - **Trigger**: a binding starts watching (hook created, bindings or source changed)
 - **Before**: UC1
 - **Steps**:
-  1. `handle()` gets one `Synchronization` with all matching objects.
-  2. Then it gets one `Event` per change.
-- **Exceptions**: with `synchronization: false` existing objects arrive as `Added` (jshook.R5). Changes during the snapshot are not lost (jshook.R3, jshook.R4).
-- **Result**: the hook sees the start state, then only the changes.
+  1. `handle()` gets every existing object as `Added` with `initial: true` (jshook.R3).
+  2. Then it gets one event per change.
+  3. When it needs the whole state, it calls `event.all()` (jshook.R26).
+- **Exceptions**: changes during the start are not lost, and no object arrives twice (jshook.R3, jshook.R4).
+- **Result**: the hook handles each object the same way, whether it existed before or not.
 
 ### jshook.UC3 Choose which events and objects reach the hook
 
@@ -114,11 +117,11 @@ Words used here:
 |---|---|---|---|
 | jshook.R1 | `spec.bindings` alone decides what a hook watches. Changing it re-subscribes the hook without preparing the script again. | api-design.R11 | `TestSummarizeBindings_ListsEveryWatchedResource`, `TestControllers` |
 | jshook.R2 | A script without `handle()` fails to prepare and says so. | `requireHandle` | `TestRequireHandle_PostBuildRejectsMissingHandle`, `TestRequireHandle_AcceptsHandleOnly`, `TestControllers` |
-| jshook.R3 | The `Synchronization` comes first; changes during it follow and are not dropped. | shell-operator parity | `TestDispatcher_SynchronizationFirstThenDeltas` |
-| jshook.R4 | An object already in the `Synchronization` does not arrive again as `Added`. | shell-operator parity | `TestDispatcher_SynchronizationFirstThenDeltas` |
-| jshook.R5 | With `synchronization: false` there is no `Synchronization`; existing objects arrive as `Added`. | `HookBinding.WantsSynchronization` | `TestDispatcher_SyncDisabled_ExistingObjectsArriveAsAdded` |
-| jshook.R6 | Only event types listed in `events` arrive; an empty list means all three. | `HookBinding.WantsEvent` | `TestDispatcher_ExecuteHookOnEvent_ListedTypesOnly`, `TestDispatcher_ExecuteHookOnEvent_EmptyMeansAll` |
-| jshook.R7 | `handle()` gets a one-element array. An `Event` has `binding`, `type`, `watchEvent`, `object`; a `Synchronization` has `binding`, `type`, `objects`. | `jshook.BindingContext` | `TestHandle_ReceivesBindingContext` |
+| jshook.R3 | Objects that exist when a watch starts arrive first, each as `Added` with `initial: true`; changes during the start follow and are not lost. | decision "one event per call" | `TestDispatcher_ExistingObjectsArriveFirstAsInitialAdded` |
+| jshook.R4 | An object that exists when the watch starts arrives once, not twice. | decision "one event per call" | `TestDispatcher_ExistingObjectsArriveFirstAsInitialAdded` |
+| jshook.R5 | (withdrawn: `synchronization: false` is gone, existing objects always arrive as `Added`, R3) | decision "one event per call" | `TestDispatcher_ExistingObjectsArriveFirstAsInitialAdded` |
+| jshook.R6 | Only event types listed in `events` arrive, the initial `Added` included; an empty list means all three. | `HookBinding.WantsEvent` | `TestDispatcher_ExecuteHookOnEvent_ListedTypesOnly`, `TestDispatcher_ExecuteHookOnEvent_EmptyMeansAll` |
+| jshook.R7 | `handle()` gets one event per call: `binding`, `type` (`Added`, `Modified`, `Deleted`), `object`, `initial`, and `all()`. | `jshook.Event` | `TestHandle_ReceivesOneEvent` |
 | jshook.R8 | Waiting changes of one object fold into one call with the newest object. | shell-operator parity | `TestDispatcher_BurstOfChangesFoldsIntoNewestObject` |
 | jshook.R9 | Two calls of one hook never run at the same time, also not while its bindings change. | decision "one worker per hook" | `TestDispatcher_ResubscribeDuringCall_NoOverlapAndProcessAlive` |
 | jshook.R10 | A throwing `handle()` records a Warning event, and the event is retried with backoff. | decision "retry without cap" | `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
@@ -137,6 +140,7 @@ Words used here:
 | jshook.R23 | `status.bindings` has one entry `name:group/version/resource` per watched resource, and each entry is a running watch. | `summarizeBindings` | `TestSummarizeBindings_ListsEveryWatchedResource` |
 | jshook.R24 | A script that fails to prepare shows `BuildFailed` and is retried with backoff; a new source is tried at once. | status-conditions.R7, js-registry.R17 | `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce` |
 | jshook.R25 | A successful call ends the retries of its event. | decision "retry without cap" | `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
+| jshook.R26 | `event.all()` returns every object the binding watches now, filtered by its selectors, from the cache of the watch; it costs no call to the apiserver. | decision "one event per call" | `TestDispatcher_AllReturnsEveryObjectOfTheBinding`, `TestHandle_AllAnswersFromTheListerOfTheCall` |
 
 Every rule is held by a test or is `missing → <KEY>`.
 
@@ -151,6 +155,7 @@ Every rule is held by a test or is `missing → <KEY>`.
 
 ## Decisions
 
+- **`handle()` gets one event per call, existing objects as `Added` with `initial: true`, and `event.all()` for the whole state.** Status: accepted (2026-10). Why: one shape is all a beginner has to learn; shell-operator's `Synchronization` was a second shape that scripts got wrong (our own sample skipped it and never synced existing ConfigMaps). `all()` is a function, not a field, so a binding over thousands of objects costs nothing until a script asks. Not taken: shell-operator's contexts (`Synchronization` plus `Event`, as an array), because of the above; keeping `synchronization` as an option, because two ways to say one thing drift.
 - **Bindings live in `spec.bindings`, not in a `config()` the script returns.** Status: accepted (api-design.R11). Why: gojsop must know a hook's scope, and derive its RBAC, before it runs the hook's code. Not taken: shell-operator's `config()`.
 - **One worker per hook: one queue, one goroutine for all its bindings.** Status: accepted. Why: calls must not overlap (R9). Not taken: a worker per binding, which breaks R9.
 - **The queue holds object keys; the payload waits beside it.** Status: accepted. Why: equal keys fold bursts (R8).
@@ -162,4 +167,4 @@ Every rule is held by a test or is `missing → <KEY>`.
 
 ## Open
 
-DISP-4, DISP-5, DISP-6, DISP-10, DISP-13, API-1, EXEC-2
+DISP-4, DISP-10, DISP-13, API-1, EXEC-2

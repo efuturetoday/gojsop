@@ -16,6 +16,7 @@ import (
 
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 	"github.com/o-haase/gojsop/internal/jsengine"
+	"github.com/o-haase/gojsop/internal/jsengine/kubehost"
 	"github.com/o-haase/gojsop/internal/jshook/dispatcher"
 	"github.com/o-haase/gojsop/internal/jsregistry"
 	"github.com/o-haase/gojsop/internal/jsregistry/registrytest"
@@ -29,10 +30,10 @@ func (configMapMapper) KindFor(schema.GroupVersionResource) (schema.GroupVersion
 }
 
 var _ = Describe("JSHook dispatcher against a real API server", func() {
-	// Every call starts from the snapshot, so the contexts are logged on the
+	// Every call starts from the snapshot, so the events are logged on the
 	// Go side through the host function record().
 	const src = `
-function handle(c) { record(c[0]); }`
+function handle(e) { record(e); }`
 
 	It("delivers only objects of the selected namespace and labels", func() {
 		// jshook.R15
@@ -69,7 +70,8 @@ function handle(c) { record(c[0]); }`
 			})
 			return nil
 		})
-		opts := jsrun.Spec{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}, Host: record}
+		host := jsengine.Binders(record, kubehost.HookEvents{})
+		opts := jsrun.Spec{Source: []byte(src), SourceHash: "s", Limits: jsengine.Limits{}, Host: host}
 		_, _, err := registrytest.GetOrLoad(reg, ctx, jsrun.HookKey(key), opts)
 		Expect(err).NotTo(HaveOccurred())
 		dyn, err := dynamic.NewForConfig(cfg)
@@ -96,7 +98,7 @@ function handle(c) { record(c[0]); }`
 		}
 		Expect(d.Subscribe(ctx, key, []corev1alpha1.HookBinding{binding}, nil, nil)).To(Succeed())
 
-		// Created after the snapshot: one match, two misses, one match.
+		// Created after the watch started: one match, two misses, one match.
 		mkCM("sel-a", "match-2", match)
 		mkCM("sel-a", "no-label-2", nil)
 		mkCM("sel-b", "other-ns-2", match)
@@ -109,19 +111,9 @@ function handle(c) { record(c[0]); }`
 			mu.Unlock()
 			var names []string
 			for _, r := range raw {
-				var c struct {
-					Type    string
-					Object  meta
-					Objects []struct{ Object meta }
-				}
-				Expect(json.Unmarshal(r, &c)).To(Succeed())
-				if c.Type == "Synchronization" {
-					for _, o := range c.Objects {
-						names = append(names, o.Object.Metadata.Name)
-					}
-					continue
-				}
-				names = append(names, c.Object.Metadata.Name)
+				var ev struct{ Object meta }
+				Expect(json.Unmarshal(r, &ev)).To(Succeed())
+				names = append(names, ev.Object.Metadata.Name)
 			}
 			return names
 		}

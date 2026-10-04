@@ -62,6 +62,7 @@ func (f *SharedFactory) ForHook(_ context.Context, _ types.NamespacedName, sa st
 	return jsengine.Binders(
 		&KubeHost{Ctx: f.Ctx, Dyn: dyn, Mapper: f.Mapper},
 		jslog.Binder{},
+		HookEvents{},
 	), nil
 }
 

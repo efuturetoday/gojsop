@@ -1,5 +1,5 @@
 // Package dispatcher subscribes the controller to the Kubernetes events that
-// each JSHook's spec.bindings declared, and forwards them as BindingContext payloads
+// each JSHook's spec.bindings declared, and forwards each change as a jshook.Event
 // to a fresh instance of that hook's prepared script.
 //
 // One Dispatcher serves all JSHooks. Per JSHook it owns:
@@ -46,12 +46,10 @@ import (
 // while the type lives in one place.
 type EventEmitter = jslifecycle.EventEmitter
 
-// eventKey identifies a queued BindingContext. All fields are strings, so the
+// eventKey identifies a queued Event. All fields are strings, so the
 // struct is hashable and can be used directly as a workqueue key — the queue
 // dedupes by struct equality, collapsing bursts on the same object into one
 // entry while still distinguishing Added/Modified/Deleted and old/new UIDs.
-//
-// For Synchronization-type contexts only `binding` and `event` are populated.
 // jshook.R8
 type eventKey struct {
 	binding   string
@@ -150,7 +148,8 @@ func (d *Dispatcher) Subscribe(parent context.Context, key types.NamespacedName,
 			workqueue.TypedRateLimitingQueueConfig[eventKey]{Name: key.String()},
 		),
 		cancel:  cancel,
-		pending: make(map[eventKey]jshook.BindingContext),
+		pending: make(map[eventKey]jshook.Event),
+		stores:  make(map[string][]watchedStore),
 		emit:    emit,
 	}
 	// Registered before the watchers start so Drop can cancel a sync that hangs.
@@ -338,8 +337,8 @@ func (d *Dispatcher) Drop(key types.NamespacedName) {
 
 // subscription is one JSHook's slice of the world.
 //
-// The workqueue holds eventKey structs; the associated BindingContext payload
-// lives in `pending`. The split exists because BindingContext contains
+// The workqueue holds eventKey structs; the associated Event payload
+// lives in `pending`. The split exists because Event contains
 // map/slice fields and is therefore not hashable, so it cannot itself be a
 // workqueue item. Keying on object identity also collapses bursts of Modified
 // events for the same resource into one queue entry that always carries the
@@ -352,7 +351,11 @@ type subscription struct {
 	wg     sync.WaitGroup
 
 	pendMu  sync.Mutex
-	pending map[eventKey]jshook.BindingContext
+	pending map[eventKey]jshook.Event
+
+	// stores holds the caches of every watch, by binding, for event.all().
+	storesMu sync.Mutex
+	stores   map[string][]watchedStore
 
 	// emit publishes corev1.Events about this subscription's hook. Nil when
 	// the reconciler did not configure a recorder (test default).
@@ -370,7 +373,12 @@ func (s *subscription) stop() {
 	s.wg.Wait()
 }
 
+// startWatcher starts the informer of one watch. The informer delivers every
+// object that exists when it starts as Added with initial set, then every
+// change, in order, so nothing that happens during the start is lost. Its
+// cache is what event.all() reads.
 // jshook.R3
+// jshook.R4
 func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, w watch, inNamespace func(string) bool) error {
 	b := w.binding
 	bindingName := b.Name
@@ -382,8 +390,9 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 	})
 	informer := factory.ForResource(w.gvr).Informer()
 
-	enqueueEvent := func(eventName string, raw map[string]any) {
-		if !b.WantsEvent(corev1alpha1.HookEvent(eventName)) {
+	enqueue := func(eventName string, obj any, initial bool) {
+		raw := toRaw(obj)
+		if raw == nil || !b.WantsEvent(corev1alpha1.HookEvent(eventName)) {
 			return
 		}
 		md, _ := raw["metadata"].(map[string]any)
@@ -394,118 +403,64 @@ func (s *subscription) startWatcher(ctx context.Context, dyn dynamic.Interface, 
 		name, _ := md["name"].(string)
 		uid, _ := md["uid"].(string)
 		k := eventKey{binding: bindingName, event: eventName, namespace: ns, name: name, uid: uid}
-		bc := jshook.BindingContext{
-			Binding:    bindingName,
-			Type:       "Event",
-			WatchEvent: eventName,
-			Object:     raw,
-		}
+		ev := jshook.Event{Binding: bindingName, Type: eventName, Object: raw, Initial: initial}
 		s.pendMu.Lock()
-		s.pending[k] = bc
+		s.pending[k] = ev
 		s.pendMu.Unlock()
 		s.queue.Add(k)
 	}
 
-	// gate buffers every event handler call until Synchronization is published.
-	// We never drop pre-sync events: between WaitForCacheSync and the gate flip
-	// a Modified or Deleted may legitimately arrive for an object that's about
-	// to ship in the snapshot, and silently dropping it would lose an update.
-	// After the gate opens, the buffer is drained — Added redeliveries for
-	// objects already in the snapshot are filtered out via initialUIDs to keep
-	// shell-operator semantics (Synchronization first, then strict deltas).
-	type bufferedEvent struct {
-		eventName string
-		raw       map[string]any
-	}
-	var (
-		gateMu   sync.Mutex
-		gateOpen bool
-		preSync  []bufferedEvent
-	)
-	gated := func(eventName string, obj any) {
-		raw := toRaw(obj)
-		if raw == nil {
-			return
-		}
-		gateMu.Lock()
-		if !gateOpen {
-			preSync = append(preSync, bufferedEvent{eventName, raw})
-			gateMu.Unlock()
-			return
-		}
-		gateMu.Unlock()
-		enqueueEvent(eventName, raw)
-	}
-
-	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(o any) { gated("Added", o) },
-		UpdateFunc: func(_, n any) { gated("Modified", n) },
-		DeleteFunc: func(o any) { gated("Deleted", o) },
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerDetailedFuncs{
+		AddFunc:    func(o any, initial bool) { enqueue("Added", o, initial) },
+		UpdateFunc: func(_, n any) { enqueue("Modified", n, false) },
+		DeleteFunc: func(o any) { enqueue("Deleted", o, false) },
 	})
 	if err != nil {
 		return err
 	}
 
+	s.storesMu.Lock()
+	s.stores[bindingName] = append(s.stores[bindingName], watchedStore{store: informer.GetStore(), inNamespace: inNamespace})
+	s.storesMu.Unlock()
+
 	factory.Start(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
 		return fmt.Errorf("binding %q: cache sync canceled", bindingName)
 	}
+	return nil
+}
 
-	syncEnabled := b.WantsSynchronization()
+// watchedStore is the cache of one watch of a binding, with the namespace
+// selector the binding applies on top of it.
+type watchedStore struct {
+	store       cache.Store
+	inNamespace func(string) bool
+}
 
-	gateMu.Lock()
-	objs := informer.GetStore().List()
-	syncObjects := make([]jshook.SyncObject, 0, len(objs))
-	initialUIDs := make(map[string]bool, len(objs))
-	for _, o := range objs {
-		raw := toRaw(o)
-		if raw == nil {
-			continue
-		}
-		md, _ := raw["metadata"].(map[string]any)
-		if ns, _ := md["namespace"].(string); !inNamespace(ns) {
-			continue
-		}
-		if uid := uidOf(raw); uid != "" {
-			initialUIDs[uid] = true
-		}
-		syncObjects = append(syncObjects, jshook.SyncObject{Object: raw})
-	}
-	if syncEnabled {
-		s.enqueueSynchronization(bindingName, syncObjects)
-	} else {
-		// Sync disabled: replay initial state as Added events so hooks that
-		// opted out of Synchronization still see what existed at startup.
-		for _, so := range syncObjects {
-			enqueueEvent("Added", so.Object)
-		}
-		// initialUIDs is no longer needed for dedupe — pre-sync Added events
-		// in the buffer for those objects are redeliveries of what we just
-		// replayed, but the workqueue's struct-key dedupe collapses them
-		// into one entry already.
-		initialUIDs = nil
-	}
-	buffered := preSync
-	preSync = nil
-	gateOpen = true
-	gateMu.Unlock()
-
-	// Drain pre-sync buffer in arrival order. Added events for objects that
-	// already shipped in the Synchronization snapshot are dropped — those are
-	// redeliveries from client-go's sharedProcessor notification buffer (it
-	// holds pending notifications for a brief window after WaitForCacheSync
-	// returns). Modified/Deleted events flow through unconditionally; they
-	// represent state changes the snapshot can't capture.
-	for _, ev := range buffered {
-		if ev.eventName == "Added" && initialUIDs != nil {
-			if uid := uidOf(ev.raw); uid != "" && initialUIDs[uid] {
-				delete(initialUIDs, uid)
-				continue
+// lister answers event.all() for binding: every object its watches hold
+// that passes the namespace selector, read from the caches.
+// jshook.R26
+func (s *subscription) lister(binding string) jshook.Lister {
+	return func() ([]map[string]any, error) {
+		s.storesMu.Lock()
+		stores := s.stores[binding]
+		s.storesMu.Unlock()
+		out := []map[string]any{}
+		for _, ws := range stores {
+			for _, o := range ws.store.List() {
+				raw := toRaw(o)
+				if raw == nil {
+					continue
+				}
+				md, _ := raw["metadata"].(map[string]any)
+				if ns, _ := md["namespace"].(string); !ws.inNamespace(ns) {
+					continue
+				}
+				out = append(out, raw)
 			}
 		}
-		enqueueEvent(ev.eventName, ev.raw)
+		return out, nil
 	}
-	return nil
 }
 
 // toRaw extracts the map[string]any payload from an informer-emitted object.
@@ -519,29 +474,6 @@ func toRaw(obj any) map[string]any {
 		return u.UnstructuredContent()
 	}
 	return nil
-}
-
-func uidOf(raw map[string]any) string {
-	md, _ := raw["metadata"].(map[string]any)
-	uid, _ := md["uid"].(string)
-	return uid
-}
-
-// enqueueSynchronization ships a single Synchronization-type BindingContext
-// carrying the snapshot of existing objects. shell-operator parity: hooks see
-// this once per (re)Subscribe before any per-object events.
-// jshook.R3
-func (s *subscription) enqueueSynchronization(bindingName string, objs []jshook.SyncObject) {
-	k := eventKey{binding: bindingName, event: "Synchronization"}
-	bc := jshook.BindingContext{
-		Binding: bindingName,
-		Type:    "Synchronization",
-		Objects: objs,
-	}
-	s.pendMu.Lock()
-	s.pending[k] = bc
-	s.pendMu.Unlock()
-	s.queue.Add(k)
 }
 
 func (s *subscription) runWorker(ctx context.Context) {
@@ -565,7 +497,7 @@ func (s *subscription) runWorker(ctx context.Context) {
 	}
 }
 
-// handleEvent runs one BindingContext through a fresh script instance and
+// handleEvent runs one Event through a fresh script instance and
 // dispatches on the outcome. The locking + recover + OOM/cancel classification
 // lives in jsrun.Runner.Invoke; the dispatcher only owns the policy table:
 //
@@ -582,9 +514,10 @@ func (s *subscription) runWorker(ctx context.Context) {
 // jshook.R10
 // jshook.R11
 // jshook.R12
-func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
+func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, qkey eventKey, bc jshook.Event) {
 	console := &jslog.Collector{}
-	out, res, err := jshook.Handle(jslog.WithSink(parent, console), s.reg, jsrun.HookKey(s.key), []jshook.BindingContext{bc})
+	callCtx := jshook.WithLister(jslog.WithSink(parent, console), s.lister(bc.Binding))
+	out, res, err := jshook.Handle(callCtx, s.reg, jsrun.HookKey(s.key), bc)
 	s.routeConsole(logger, console, bc)
 	if err != nil {
 		// ErrVMUnavailable: no script now (prepared again meanwhile), retry.
@@ -593,7 +526,7 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 			s.noVM(logger, qkey, bc)
 			return
 		}
-		logger.Info("hook not in runner — dropping event", "binding", bc.Binding, "event", bc.WatchEvent)
+		logger.Info("hook not in runner — dropping event", "binding", bc.Binding, "event", bc.Type)
 		s.queue.Forget(qkey)
 		return
 	}
@@ -602,12 +535,12 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 	case jsrun.OutcomePanic:
 		logger.Error(fmt.Errorf("panic in handle(): %v", res.Panic),
 			"handle() panicked",
-			"binding", bc.Binding, "event", bc.WatchEvent, "stack", string(debug.Stack()))
+			"binding", bc.Binding, "event", bc.Type, "stack", string(debug.Stack()))
 		s.requeue(qkey, bc)
 
 	case jsrun.OutcomeMemoryLimit:
 		logger.Error(res.Err, "handle() hit memory limit",
-			"binding", bc.Binding, "event", bc.WatchEvent)
+			"binding", bc.Binding, "event", bc.Type)
 		s.publishWarning(conditions.EventHandleFailed,
 			"handle() exceeded its memory limit")
 		s.requeue(qkey, bc)
@@ -621,11 +554,11 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 				"handle() exceeded its timeout")
 		}
 		logger.Info("handle() cancelled",
-			"binding", bc.Binding, "event", bc.WatchEvent, "elapsed", res.Duration)
+			"binding", bc.Binding, "event", bc.Type, "elapsed", res.Duration)
 		s.requeue(qkey, bc)
 
 	case jsrun.OutcomeError:
-		logger.Error(res.Err, "handle() failed", "binding", bc.Binding, "event", bc.WatchEvent)
+		logger.Error(res.Err, "handle() failed", "binding", bc.Binding, "event", bc.Type)
 		// Static message — the JS error string would explode dedup
 		// cardinality at admission/event-loop volume. The verbose error
 		// reaches the operator log only; the hook's own CR shows nothing
@@ -651,11 +584,11 @@ func (s *subscription) handleEvent(parent context.Context, logger logr.Logger, q
 // the low-cardinality rule for Event messages. jslog caps the text and
 // Collector.Route caps how many lines of one call become Events.
 // js-execution.R17
-func (s *subscription) routeConsole(logger logr.Logger, c *jslog.Collector, bc jshook.BindingContext) {
+func (s *subscription) routeConsole(logger logr.Logger, c *jslog.Collector, bc jshook.Event) {
 	c.Route(
 		func(l jslog.Line) {
 			logger.V(1).Info("console."+string(l.Level),
-				"binding", bc.Binding, "event", bc.WatchEvent, "message", l.Text)
+				"binding", bc.Binding, "event", bc.Type, "message", l.Text)
 		},
 		func(l jslog.Line) {
 			s.publishWarning(conditions.EventScriptMessage, l.Text)
@@ -668,9 +601,9 @@ func (s *subscription) routeConsole(logger logr.Logger, c *jslog.Collector, bc j
 // and meet the new VM. A hook the runner no longer knows loses them (Invoke
 // reports ErrUnknownKey, handleEvent forgets the event).
 // jshook.R19
-func (s *subscription) noVM(logger logr.Logger, qkey eventKey, bc jshook.BindingContext) {
+func (s *subscription) noVM(logger logr.Logger, qkey eventKey, bc jshook.Event) {
 	logger.V(1).Info("hook has no VM yet — requeueing event",
-		"binding", bc.Binding, "event", bc.WatchEvent)
+		"binding", bc.Binding, "event", bc.Type)
 	s.requeue(qkey, bc)
 }
 
@@ -686,7 +619,7 @@ func (s *subscription) publishWarning(reason, message string) {
 // requeue stashes bc back under qkey (unless a fresher event arrived) and
 // re-enqueues with rate-limited backoff.
 // jshook.R13
-func (s *subscription) requeue(qkey eventKey, bc jshook.BindingContext) {
+func (s *subscription) requeue(qkey eventKey, bc jshook.Event) {
 	s.pendMu.Lock()
 	if _, fresher := s.pending[qkey]; !fresher {
 		s.pending[qkey] = bc
