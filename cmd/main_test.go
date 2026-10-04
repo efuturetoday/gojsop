@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -133,5 +134,35 @@ func TestFlags_MaxConcurrentCalls_DefaultsAndRejectsNonsense(t *testing.T) {
 		if _, err := parse(t, args...); err == nil {
 			t.Errorf("%v: want an error", args)
 		}
+	}
+}
+
+// jsadmission.R15
+func TestFlags_AdmissionExclude_DefaultsToSystemNamespaces(t *testing.T) {
+	def, err := parse(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"gojsop-system", "kube-system", "cert-manager"}
+	if got := def.excludedNamespaces("gojsop-system"); !slices.Equal(got, want) {
+		t.Fatalf("default: got %v, want %v", got, want)
+	}
+
+	f, err := parse(t, "--admission-exclude-namespaces= kube-system ,,gojsop-system,infra")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"gojsop-system", "kube-system", "infra"}
+	if got := f.excludedNamespaces("gojsop-system"); !slices.Equal(got, want) {
+		t.Fatalf("custom: got %v, want %v", got, want)
+	}
+
+	none, err := parse(t, "--admission-exclude-namespaces=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"gojsop-system"}
+	if got := none.excludedNamespaces("gojsop-system"); !slices.Equal(got, want) {
+		t.Fatalf("empty: got %v, want %v; the own namespace is always excluded", got, want)
 	}
 }

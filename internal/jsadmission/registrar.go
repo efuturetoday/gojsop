@@ -1,6 +1,7 @@
 package jsadmission
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -22,8 +23,8 @@ const (
 )
 
 // CABundleProvider returns the PEM-encoded CA bundle the apiserver should
-// trust when calling our webhook. Called every Sync so a cert-manager
-// rotation propagates within one debounce window.
+// trust when calling our webhook. Called on every Sync and every CAResync
+// tick, so a cert-manager renewal reaches the configurations on its own.
 type CABundleProvider func(ctx context.Context) ([]byte, error)
 
 // PolicyMeta is everything the registrar needs to write a single
@@ -70,6 +71,10 @@ type Registrar struct {
 	// own namespace plus kube-system / cert-manager belong here so a broken
 	// policy can't lock the controller out of its own pod re-creation.
 	ExcludeNamespaces []string
+	// CAResync is how often the registrar reads the CA bundle and writes both
+	// configurations again when it changed since the last Sync. Zero means
+	// one minute.
+	CAResync time.Duration
 
 	mu       sync.Mutex
 	policies map[types.NamespacedName]PolicyMeta
@@ -77,6 +82,8 @@ type Registrar struct {
 	timer    *time.Timer
 	syncCtx  context.Context
 	syncErr  error
+	// lastCA is the CA bundle the last successful Sync wrote.
+	lastCA []byte
 }
 
 // NewRegistrar wires a Registrar to its dependencies. Pass the same
@@ -97,8 +104,43 @@ func NewRegistrar(c client.Client, svc admissionregv1.ServiceReference, ca CABun
 // SetupWithManager is expected to call Start with the manager's context.
 func (r *Registrar) Start(ctx context.Context) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.syncCtx = ctx
+	r.mu.Unlock()
+	go r.watchCA(ctx)
+}
+
+// watchCA writes both configurations again when the CA bundle changed since
+// the last successful Sync. cert-manager renews the serving certificate on
+// its own; without this the apiserver keeps the old CA until a policy
+// changes, and every admission call fails TLS until then.
+// jsadmission.R26
+func (r *Registrar) watchCA(ctx context.Context) {
+	d := r.CAResync
+	if d <= 0 {
+		d = time.Minute
+	}
+	t := time.NewTicker(d)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		ca, err := r.CAProvider(ctx)
+		if err != nil {
+			r.Log.Error(err, "reading CA bundle")
+			continue
+		}
+		r.mu.Lock()
+		// A pending Sync reads the CA anyway; scheduling again would only
+		// push it back.
+		if !r.dirty && r.lastCA != nil && !bytes.Equal(ca, r.lastCA) {
+			r.Log.Info("CA bundle changed, rewriting webhook configurations")
+			r.scheduleSyncLocked()
+		}
+		r.mu.Unlock()
+	}
 }
 
 // Upsert publishes a policy. Triggers a debounced sync.
@@ -217,6 +259,9 @@ func (r *Registrar) Sync(ctx context.Context) error {
 	if err := r.applyMutating(ctx, mutating, caBundle); err != nil {
 		return err
 	}
+	r.mu.Lock()
+	r.lastCA = caBundle
+	r.mu.Unlock()
 	return nil
 }
 

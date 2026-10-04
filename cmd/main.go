@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
@@ -85,7 +87,8 @@ func admissionServiceFromEnv() admissionregv1.ServiceReference {
 }
 
 // fileCABundleProvider reads the PEM CA bundle off disk every time it's
-// called so cert-manager rotations propagate within one Sync window.
+// called; the registrar polls it, so a cert-manager renewal reaches the
+// webhook configurations within one CAResync interval.
 func fileCABundleProvider(certDir string) jsadmission.CABundleProvider {
 	if certDir == "" {
 		certDir = "/tmp/k8s-webhook-server/serving-certs"
@@ -124,6 +127,7 @@ type runFlags struct {
 	buildBackoffMax      time.Duration
 	engineCacheDir       string
 	maxConcurrentCalls   int
+	admissionExclude     string
 	zap                  zap.Options
 }
 
@@ -146,6 +150,21 @@ func (f runFlags) validate() error {
 		return fmt.Errorf("--max-concurrent-calls must be positive, got %d", f.maxConcurrentCalls)
 	}
 	return nil
+}
+
+// excludedNamespaces are the namespaces no admission policy sees: the
+// operator's own, so a broken policy cannot stop its pod from being
+// re-created, plus --admission-exclude-namespaces.
+// jsadmission.R15
+func (f runFlags) excludedNamespaces(own string) []string {
+	out := []string{own}
+	for ns := range strings.SplitSeq(f.admissionExclude, ",") {
+		ns = strings.TrimSpace(ns)
+		if ns != "" && !slices.Contains(out, ns) {
+			out = append(out, ns)
+		}
+	}
+	return out
 }
 
 // parseFlags binds every flag and parses os.Args.
@@ -189,6 +208,9 @@ func parseFlagSet(fs *flag.FlagSet, args []string) (runFlags, error) {
 	fs.IntVar(&f.maxConcurrentCalls, "max-concurrent-calls", jsregistry.DefaultMaxConcurrentCalls,
 		"Process-wide number of JS calls that may run at once, across every JSHook and JSAdmission. "+
 			"Every call holds a VM of its own, so this bounds the memory of a burst.")
+	fs.StringVar(&f.admissionExclude, "admission-exclude-namespaces", "kube-system,cert-manager",
+		"Comma-separated namespaces no JSAdmission ever sees, so a broken policy or a down operator cannot "+
+			"block them. The operator's own namespace is always excluded.")
 	f.zap.BindFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return f, err
@@ -335,10 +357,7 @@ func main() {
 
 	caProvider := fileCABundleProvider(f.webhookCertPath)
 	registrar := jsadmission.NewRegistrar(mgr.GetClient(), admissionServiceFromEnv(), caProvider, admissionLog)
-	// Exclude the controller's own namespace from every policy so a broken
-	// admission policy cannot prevent the manager pod from being re-created.
-	// Other infra namespaces are the user's call.
-	registrar.ExcludeNamespaces = []string{admissionServiceFromEnv().Namespace}
+	registrar.ExcludeNamespaces = f.excludedNamespaces(admissionServiceFromEnv().Namespace)
 	// The Registrar writes the two central WebhookConfigurations, so it needs
 	// exactly one writer. manager.RunnableFunc does not implement
 	// LeaderElectionRunnable, which puts it in the leader-elected group — here

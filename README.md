@@ -143,6 +143,10 @@ with a warning, `Fail` denies it with code 500. The call ends at the smaller of
 Every operator replica answers every policy, so scaling the operator never
 leaves a replica that answers with 404.
 
+No policy ever sees requests in the operator's namespace, `kube-system` or
+`cert-manager`, so a broken policy cannot lock up the cluster itself. Change
+the list with the operator flag `--admission-exclude-namespaces`.
+
 ## Writing scripts
 
 **Entry points are global functions.** Write `function handle() {}` (or
@@ -210,9 +214,6 @@ again.
 - **Failover gap.** Hooks run on the leader only. After a leader change the
   new leader starts with a fresh synchronization: objects that changed in
   between arrive in it, but a deletion in between is never seen.
-- **System namespaces.** Only the operator's own namespace is excluded from
-  admission. A policy with `failurePolicy: Fail` on broad rules can block
-  `kube-system`; narrow it with `namespaceSelector`.
 - **Endless retries.** A hook that always fails is retried forever.
 - **`v1alpha1`.** Fields may change without a migration path.
 

@@ -112,11 +112,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **ADM-3** `gap` `ReinvocationPolicy` is never set. The `PolicyMeta` field
   exists, the controller does not fill it (`registrar.go:43,215`,
   `internal/jsadmission/controller/controller.go:227-238`).
-- **ADM-4** `debt` cert-manager CA rotation reaches the webhook configs only on
-  the next policy change, contrary to the comment (`cmd/main.go:84-85`).
-- **ADM-6** `decision` `ExcludeNamespaces` holds only the operator namespace,
-  although the registrar comment names kube-system and cert-manager
-  (`cmd/main.go:282`, `registrar.go:59-62`).
 - **ADM-7** `doc` The scaffolded webhook for the JSAdmission CRD is empty
   (`internal/jsadmission/webhook/v1alpha1/jsadmission_webhook.go:55-100`).
   Fill it (e.g. syntax check, SRC-3) or remove it.

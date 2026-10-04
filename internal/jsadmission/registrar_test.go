@@ -205,3 +205,50 @@ func TestRegistrar_SyncFailure_IsRetriedAndReported(t *testing.T) {
 		t.Fatalf("VWC missing after retry: %v", err)
 	}
 }
+
+// jsadmission.R26
+func TestRegistrar_CAChange_RewritesConfigsWithoutPolicyChange(t *testing.T) {
+	r, c := newFakeRegistrar(t)
+	var mu sync.Mutex
+	ca := "CA-1"
+	r.CAProvider = func(context.Context) ([]byte, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return []byte(ca), nil
+	}
+	r.CAResync = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	r.Start(ctx)
+	r.Upsert(samplePolicy("a", false))
+	r.Upsert(samplePolicy("m", true))
+
+	caOf := func() (string, string) {
+		var v admissionregv1.ValidatingWebhookConfiguration
+		var m admissionregv1.MutatingWebhookConfiguration
+		if c.Get(ctx, client.ObjectKey{Name: ValidatingConfigName}, &v) != nil ||
+			c.Get(ctx, client.ObjectKey{Name: MutatingConfigName}, &m) != nil ||
+			len(v.Webhooks) == 0 || len(m.Webhooks) == 0 {
+			return "", ""
+		}
+		return string(v.Webhooks[0].ClientConfig.CABundle), string(m.Webhooks[0].ClientConfig.CABundle)
+	}
+	waitFor := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			if v, m := caOf(); v == want && m == want {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		v, m := caOf()
+		t.Fatalf("caBundle: validating %q, mutating %q; want %q in both", v, m, want)
+	}
+	waitFor("CA-1")
+
+	mu.Lock()
+	ca = "CA-2"
+	mu.Unlock()
+	waitFor("CA-2")
+}

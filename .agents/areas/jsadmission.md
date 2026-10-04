@@ -103,7 +103,7 @@ Words used here:
 | jsadmission.R12 | A failed call (error, memory limit, timeout, crash, client gone) affects only its request. The next request starts from the prepared script; nothing is prepared again. | js-registry.R2 | missing → GATE-22 |
 | jsadmission.R13 | A policy can only read the cluster: `kube.get` and `kube.list`, no `kube.apply` or `kube.delete`. | `sideEffects: None` | `TestSharedFactory_ForAdmission_ReadOnlySurface` |
 | jsadmission.R14 | Every response carries the UID of its request. | admission.k8s.io/v1 | `TestServer_Validate_AllowedRoundtrip` |
-| jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `excludeNamespaces` in `cmd`; extent open in ADM-6 | missing → ADM-6 |
+| jsadmission.R15 | Requests in the operator's own namespace never reach a policy, nor do those in `--admission-exclude-namespaces` (default `kube-system`, `cert-manager`). | decision "exclude system namespaces" | `TestFlags_AdmissionExclude_DefaultsToSystemNamespaces` |
 | jsadmission.R16 | A denial carries no patch. | admission.k8s.io/v1 | `TestServer_Mutate_Denied_HasNoPatch` |
 | jsadmission.R17 | When gojsop cannot write the webhook configurations, the policy is `Ready=False`, reason `WebhookSyncFailed`. | status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse` |
 | jsadmission.R18 | While a new script is prepared the policy is `Ready=False`, reason `Building`. | status-conditions.R7 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
@@ -114,6 +114,7 @@ Words used here:
 | jsadmission.R23 | A result of `undefined` or `null` is a failed call. | `jsadmission.Handle` | `TestServer_MissingAllowedDenies_NullOrUndefinedFails` |
 | jsadmission.R24 | Server-managed fields and `/status` are never in the patch. | admission.k8s.io/v1 | `TestCreatePatch_FiltersImmutable` |
 | jsadmission.R25 | gojsop retries writing the webhook configurations until it succeeds. | `jsadmission.Registrar` | `TestRegistrar_SyncFailure_IsRetriedAndReported` |
+| jsadmission.R26 | A renewed webhook certificate reaches the webhook configurations within a minute, without a policy change. | decision "TLS with cert-manager" | `TestRegistrar_CAChange_RewritesConfigsWithoutPolicyChange` |
 
 ## Aspects
 
@@ -130,11 +131,12 @@ Words used here:
 - **Each policy is served at `/admission/validate/<ns|cluster>/<name>` or `/admission/mutate/...`, built only by `jsadmission.PathFor`.** Status: accepted (2026-05). Why: registrar and server must agree on one format.
 - **A policy is served before it is published to the registrar.** Status: accepted (2026-05). Why: requests arrive as soon as the configuration points at the operator; an unknown path answers 404.
 - **Webhook entries are named `<ns>-<name>.policies.gojsop.io`, cluster-scoped `<name>.policies.gojsop.io`.** Status: accepted (2026-05). Why: unique inside one configuration.
-- **TLS with a cert-manager certificate; the registrar reads the CA bundle on every sync.** Status: accepted (2026-05). Why: the apiserver rejects controller-runtime's self-signed certificate. Open: a CA rotation arrives only with the next policy change (ADM-4).
+- **TLS with a cert-manager certificate; the registrar reads the CA bundle on every sync and polls it every minute.** Status: accepted (2026-05; polling 2026-10, ADM-4). Why: the apiserver rejects controller-runtime's self-signed certificate, and cert-manager renews the certificate without telling anyone (R26). Not taken: cert-manager's CA injector, because it only patches configurations it was told about by annotation, and the registrar rewrites them.
 - **Admission scripts are prepared only by `SharedFactory.ForAdmission`, with a read-only `kube`.** Status: accepted (2026-05). Why: admission runs with `sideEffects: None`.
+- **`kube-system` and `cert-manager` are excluded from every policy by default; `--admission-exclude-namespaces` changes the list, the operator's namespace is always out.** Status: accepted (2026-10, ADM-6). Why: under `failurePolicy: Fail` a broken policy or a down operator would otherwise block the cluster's own components and the issuer of the webhook certificate (R15). Not taken: no default exclusion, because one careless rule on `pods` could then stop `kube-system`.
 - **The admission path is replicated, the hook path is not.** Status: accepted (2026-10, ADM-12). Why: the Service routes requests to every ready pod; a replica that knows no policy answers 404, and under `failurePolicy: Fail` that denies requests cluster-wide. Hooks stay leader-only because `handle()` has side effects and must run once. Cost: every replica prepares every policy. Gain: the webhook answers from process start. Not taken: routing through the leader, which needs a second Service and an endpoint rewrite on every failover.
 - **The scaffolded Kubebuilder webhook for the `JSAdmission` CRD validates nothing.** Status: proposed. Open: ADM-7.
 
 ## Open
 
-ADM-3, ADM-4, ADM-6, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, GATE-28
+ADM-3, ADM-7, ADM-8, EXEC-2, EXEC-4, STAT-4, OPS-1, GATE-7, GATE-13, GATE-17, GATE-18, GATE-22, GATE-23, GATE-28
