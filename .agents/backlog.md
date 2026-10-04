@@ -26,6 +26,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 | Gates and test infrastructure | GATE | [testing](aspects/testing.md) |
 | Documentation | DOC | none |
 | Operator UI | UI | none (area not decided, UI-1) |
+| Maintainer workspace and CLI | WS | none (area not decided, WS-1) |
 
 ## EXEC: JS execution
 
@@ -65,6 +66,10 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **SRC-1** `gap` No OCI loader. The `spec.source.oci` field was removed until
   one exists (js-sources.R6); adding it means the field and the loader together.
+  Direction (2026-10, to refine with WS-4): pinned by digest only, no tags and
+  no polling, so new code still arrives through a changed CR and passes the
+  access check (kube-access.R13). Mainly for bundles above the inline and
+  ConfigMap size limits.
 - **SRC-2** `doc` `spec.source.inline` is visible in etcd. Fine for code,
   dangerous for secrets. No warning in the CRD description.
 - **SRC-3** `gap` Inline source ergonomics. Multi-line JS in YAML is painful.
@@ -230,3 +235,33 @@ No open items.
   hook authors), and what it shows. It would be a new area with its own
   users and a second side (front end). Depends on OPS-1, OPS-5, OPS-6 for
   its data. Done when decided; if yes, the area exists as `proposed`.
+
+## WS: Maintainer workspace and CLI
+
+Target picture (2026-10, to refine): maintainers keep their hooks and
+policies in a repository of their own, write them in TypeScript, test them
+locally and publish them with one command; GitOps tools deliver them.
+
+- **WS-1** `decision` A `gojsop` CLI and workspace for maintainers: `init`
+  (repo layout, `tsconfig`, types for `event`, `req`, `kube.*`), `build`,
+  `test`, `push`. Decide scope, users and whether it is a new area. Done when
+  decided; if yes, the area exists as `proposed` with these use cases.
+- **WS-2** `decision` `gojsop build`: bundle each TypeScript hook or policy
+  into one script the engine accepts (entry point on `globalThis`, EXEC-11,
+  EXEC-12) and generate the `JSHook` and `JSAdmission` manifests with their
+  `permissions`. Decide the bundler (esbuild?), how a script declares its
+  bindings, rules and permissions (in TS or in YAML next to it), and the
+  size limit (512 KiB inline, 1 MiB ConfigMap, else SRC-1). Done when the
+  contract is recorded.
+- **WS-3** `gap` `gojsop test`: run a hook or policy locally against sample
+  events and admission requests, with the same engine as the operator
+  (embedded, pure Go and wasm) and a fake `kube`. Expected to save the most
+  frustration: no cluster needed to try a script. Done when a maintainer can
+  test a script without a cluster.
+- **WS-4** `decision` `gojsop push`: publish the built manifests as an OCI
+  artifact that Flux (`OCIRepository`) and Argo CD pull. Delivery stays with
+  GitOps tools; the operator does not poll registries itself, because a pull
+  in the operator would bypass GitOps review and the access check: whoever
+  may push to the registry would get the rights of every hook. Decide the
+  artifact format and signing (cosign?). Done when recorded.
+
