@@ -248,9 +248,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 ## DOC: Documentation
 
-- **DOC-1** README is the Kubebuilder template with `TODO(user)` placeholders.
-- **DOC-2** "Synchronization" is shell-operator jargon, explained nowhere a
-  user looks (README, CRD description, sample).
+No open items.
 
 ## UI: Operator UI
 
