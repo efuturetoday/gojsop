@@ -11,7 +11,7 @@ What gojsop promises the engineers who write JavaScript for it.
 
 | Area | Covers |
 |---|---|
-| [jshook](areas/jshook.md) | JSHook: `config()` bindings, Synchronization and events, `handle()` |
+| [jshook](areas/jshook.md) | JSHook: `spec.bindings`, Synchronization and events, `handle()` |
 | [jsadmission](areas/jsadmission.md) | JSAdmission: which requests reach the script, its answer, failure policy |
 
 ## Aspects

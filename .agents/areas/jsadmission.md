@@ -5,119 +5,130 @@ status: proposed
 
 # JSAdmission
 
-This area describes what a policy author can do with a `JSAdmission`: write the decision about a Kubernetes request in JavaScript and have the cluster enforce it.
+This area describes what a policy author can do with a `JSAdmission`: decide on a Kubernetes
+request in JavaScript and have the cluster enforce the decision.
 
-The user is an engineer who writes a policy. They declare which requests the policy is for (`rules`, selectors, `matchPolicy`), put the script in a source, and export `validate(req)` for a validating policy or `mutate(req)` for a mutating one. gojsop calls the function for each matching request on the apiserver path and turns the return value into the answer of an admission webhook. The author also chooses what happens when the script fails (`failurePolicy`) and how long it may run (`timeoutSeconds`).
+The author declares which requests the policy is for (`rules`, selectors,
+`matchPolicy`) and writes a script that defines `validate(req)` for a
+validating policy or `mutate(req)` for a mutating one. gojsop calls it for
+each matching request and turns the return value into the webhook's answer.
+The author also chooses what a failure means (`failurePolicy`) and how long a
+call may run (`timeoutSeconds`).
 
-A policy decides on a request and must not change the cluster, so it can read other objects through `kube.get` and `kube.list` but cannot write. How the script is loaded and kept alive is covered by the aspects below; `JSHook` is the neighbouring area for scripts that react to events and may write.
+A policy decides; it does not change the cluster. It can read with
+`kube.get` and `kube.list`, never write. Scripts that react to events and may
+write are the neighbour area [jshook](jshook.md).
+
+Words used here:
+
+- **script**: the policy's source, loaded and prepared by gojsop. A new
+  script is prepared when the source, the limits or the restart annotation
+  change.
+- **call**: one run of `validate()` or `mutate()` for one request. Every call
+  starts from the freshly prepared script; nothing a call leaves behind
+  reaches the next one.
 
 ## Use cases
 
 ### jsadmission.UC1 Reject requests that break a rule
 
 - **Actor**: policy author
-- **Trigger**: the author creates or changes a validating `JSAdmission`
-- **Before**: the script exports `validate(req)`; the policy's `rules` match the kind and operation to guard
+- **Trigger**: applies a validating `JSAdmission`
+- **Before**: the script defines `validate(req)`; `rules` match the kinds and operations to guard
 - **Steps**:
-  1. The author applies the `JSAdmission`.
-  2. A user creates or updates a matching object.
-  3. The script receives `req` and returns `{allowed: false, message, code?, warnings?}` or `{allowed: true}`.
-  4. The apiserver rejects or admits the request and shows the message and warnings to the user.
-- **Exceptions**: a script that omits `allowed` denies (jsadmission.R4); a script error follows `failurePolicy` (jsadmission.R9); a modified object is ignored (jsadmission.R7)
-- **Result**: only requests the script allowed are stored
+  1. A user creates or updates a matching object.
+  2. The script returns `{allowed: false, message, code?, warnings?}` or `{allowed: true}`.
+  3. The apiserver rejects or admits the request and shows message and warnings.
+- **Exceptions**: a result without `allowed` denies (jsadmission.R4); a failed call follows `failurePolicy` (jsadmission.R9); a returned `modifiedObject` is ignored (jsadmission.R7).
+- **Result**: only requests the script allowed are stored.
 
 ### jsadmission.UC2 Change requests on their way in
 
 - **Actor**: policy author
-- **Trigger**: the author creates or changes a mutating `JSAdmission`
-- **Before**: the script exports `mutate(req)`
+- **Trigger**: applies a mutating `JSAdmission`
+- **Before**: the script defines `mutate(req)`
 - **Steps**:
   1. A user creates or updates a matching object.
   2. The script changes `req.object` and returns `{allowed: true, modifiedObject}`.
-  3. gojsop turns the difference into a JSON patch and the apiserver applies it.
-- **Exceptions**: server-managed fields in the change are dropped (jsadmission.R6); a difference that cannot be computed admits the request with a warning (jsadmission.R8); a script error follows `failurePolicy` (jsadmission.R9)
-- **Result**: the stored object carries the change
+  3. gojsop sends the difference as a JSON patch; the apiserver applies it.
+- **Exceptions**: server-managed fields are dropped from the patch (jsadmission.R6); a patch that cannot be computed admits with a warning (jsadmission.R8); a failed call follows `failurePolicy` (jsadmission.R9).
+- **Result**: the stored object carries the change.
 
 ### jsadmission.UC3 Decide with the context of the request
 
 - **Actor**: policy author
-- **Trigger**: the script runs for a request
-- **Before**: none
+- **Trigger**: a call runs
 - **Steps**:
-  1. The script reads `req` (operation, kind, resource, name, namespace, user, `object`, `oldObject`, `dryRun`) (jsadmission.R3).
-  2. The script looks up related objects with `kube.get` or `kube.list`.
+  1. The script reads `req`: operation, kind, resource, name, namespace, user, `object`, `oldObject`, `dryRun` (jsadmission.R3).
+  2. The script reads related objects with `kube.get` or `kube.list`.
   3. The script returns its decision.
-- **Exceptions**: `kube.apply` and `kube.delete` do not exist for admission (jsadmission.R13)
-- **Result**: the decision may depend on the request and on other objects, and never changes the cluster
+- **Exceptions**: `kube.apply` and `kube.delete` do not exist (jsadmission.R13).
+- **Result**: the decision may depend on the request and on other objects, and never changes the cluster.
 
 ### jsadmission.UC4 Choose what a failing policy means
 
 - **Actor**: policy author
-- **Trigger**: the script throws, runs out of memory, crashes or runs longer than `timeoutSeconds`, or the operator cannot be reached
-- **Before**: the author set `failurePolicy` (`Fail` or `Ignore`) and optionally `timeoutSeconds`
+- **Trigger**: the call throws, hits the memory limit, crashes the engine or runs past `timeoutSeconds`; or no script is ready; or the operator cannot be reached
+- **Before**: the author set `failurePolicy` (`Fail` or `Ignore`)
 - **Steps**:
-  1. The request cannot get a decision from the script.
-  2. With `Ignore` the request is admitted with a warning; otherwise it is denied with code 500.
-  3. After a crash (a wasm trap) the script instance is rebuilt in the background; until it is ready `failurePolicy` decides every request (jsadmission.R19), and the policy shows `Ready=False` (jsadmission.R18).
-- **Exceptions**: a plain script error, a memory overrun or a timeout does not restart the instance (jsadmission.R12)
-- **Result**: the author gets the availability or the enforcement they chose
+  1. With `Ignore` the request is admitted with a warning; otherwise it is denied with code 500.
+  2. The next request starts from the prepared script; nothing is prepared again (jsadmission.R12).
+- **Exceptions**: while a new script is prepared, `failurePolicy` decides every request at once (jsadmission.R19), and the policy shows `Ready=False` (jsadmission.R18).
+- **Result**: the author gets the availability or the enforcement they chose.
 
 ### jsadmission.UC5 Change or remove a policy
 
 - **Actor**: policy author
-- **Trigger**: the author edits or deletes the `JSAdmission`
-- **Before**: the policy exists
+- **Trigger**: edits or deletes the `JSAdmission`
 - **Steps**:
   1. The author changes `rules`, selectors, `failurePolicy`, `timeoutSeconds` or the source, or deletes the policy.
-  2. Requests that no longer match stop reaching the script; a deleted policy stops receiving any request.
-- **Exceptions**: none
-- **Result**: the cluster enforces the current policy set
+  2. Requests that no longer match stop reaching the script; a deleted policy gets no requests.
+- **Result**: the cluster enforces the current set of policies.
 
 ## Rules
 
 | ID | Rule | Source | Held by |
 |---|---|---|---|
-| jsadmission.R1 | Only requests that match the policy's `rules`, selectors and `matchPolicy` reach the script; a changed or deleted policy changes or ends that at once. | `api/v1alpha1/jsadmission_types.go` (`JSAdmissionSpec`) | `TestRegistrar_Update_OverwritesEntry`, `TestRegistrar_RemoveLastEntry_DeletesConfig` |
-| jsadmission.R2 | A validating policy runs `validate(req)` and a mutating one `mutate(req)`; a missing function is a script failure. | `internal/jsadmission/handle.go` (`Handle`) | `TestHandle_Validate_Allow`, `TestHandle_MissingExport` |
-| jsadmission.R3 | The script receives `uid`, `kind`, `resource`, `subResource`, `name`, `namespace`, `operation`, `userInfo`, `object`, `oldObject` and `dryRun`, with `object` and `oldObject` as real objects. | `internal/jsadmission/handle.go` (`AdmissionRequest`) | `TestServer_PassesEveryRequestFieldToScript` |
-| jsadmission.R4 | A script that omits `allowed` denies; a return of `undefined` or `null` is a script failure. | `internal/jsadmission/handle.go` (`AdmissionResult`, `Handle`) | `TestServer_MissingAllowedDenies_NullOrUndefinedFails` |
-| jsadmission.R5 | `message`, `code` and `warnings` of the result reach the apiserver. | `internal/jsadmission/handle.go` (`AdmissionResult`) | `TestHandle_Validate_Deny` |
-| jsadmission.R6 | For a mutating policy `modifiedObject` becomes a JSON patch against the original object; server-managed fields and `/status` are never in the patch. | `internal/jsadmission/diff.go` (`CreatePatch`) | `TestCreatePatch_FiltersImmutable`, `TestServer_Mutate_AddsLabel_AsJSONPatch` |
-| jsadmission.R7 | A `modifiedObject` returned by a validating policy is ignored. | `AdmissionResult.ModifiedObject` comment in `handle.go` | `TestServer_Validate_IgnoresModifiedObject` |
-| jsadmission.R8 | When the patch cannot be computed the request stays allowed and gets a warning. | `fillResponse` in `server.go`; reason open in ADM-8 | missing → ADM-8 |
-| jsadmission.R9 | On every script failure `failurePolicy` decides: `Ignore` allows with a warning, anything else denies with code 500. | `api/v1alpha1/jsadmission_types.go` (`FailurePolicy`) | `TestServer_Validate_FailurePolicy_Fail_OnJSThrow`, `TestServer_Validate_FailurePolicy_Ignore_OnJSThrow` |
-| jsadmission.R10 | `failurePolicy` is the same for the apiserver (operator unreachable) and for the handler, and the handler's deadline is never longer than the `timeoutSeconds` the apiserver waits. | `Registrar` and `PolicyEntry` in `internal/jsadmission` | missing → GATE-17 |
-| jsadmission.R11 | A call that runs longer than the smaller of `spec.timeoutSeconds` (default 5 s) and `spec.limits.timeoutSeconds` (default 30 s) is a script failure. | `callTimeout` in `internal/jsadmission/controller`; the runner applies the limit on its own | `TestCallTimeout_SmallerOfWebhookAndLimits`; the failure path: missing → GATE-22 |
-| jsadmission.R12 | A panic (a wasm trap), a plain script error, a memory overrun, a timeout or a client disconnect end only that request; the next request starts on a fresh instance and nothing is rebuilt. | `Server.review` in `server.go`, js-registry.R2 | missing → GATE-22 |
-| jsadmission.R13 | A policy can only read the cluster (`kube.get`, `kube.list`); `kube.apply` and `kube.delete` are not available. | admission runs with `sideEffects: None` | `TestSharedFactory_ForAdmission_ReadOnlySurface` |
+| jsadmission.R1 | Only requests that match `rules`, selectors and `matchPolicy` reach the script. A change or a deletion takes effect at once. | `JSAdmissionSpec` | `TestRegistrar_Update_OverwritesEntry`, `TestRegistrar_RemoveLastEntry_DeletesConfig` |
+| jsadmission.R2 | A validating policy calls `validate(req)`, a mutating one `mutate(req)`. A missing function is a failed call. | `jsadmission.Handle` | `TestHandle_Validate_Allow`, `TestHandle_MissingExport` |
+| jsadmission.R3 | `req` has `uid`, `kind`, `resource`, `subResource`, `name`, `namespace`, `operation`, `userInfo`, `object`, `oldObject` and `dryRun`; `object` and `oldObject` are objects, not strings. | `jsadmission.AdmissionRequest` | `TestServer_PassesEveryRequestFieldToScript` |
+| jsadmission.R4 | A result without `allowed` denies. `undefined` or `null` is a failed call. | `jsadmission.AdmissionResult` | `TestServer_MissingAllowedDenies_NullOrUndefinedFails` |
+| jsadmission.R5 | `message`, `code` and `warnings` reach the apiserver. | admission.k8s.io/v1 | `TestHandle_Validate_Deny` |
+| jsadmission.R6 | A mutating policy's `modifiedObject` becomes a JSON patch. Server-managed fields and `/status` are never patched. | `jsadmission.CreatePatch` | `TestCreatePatch_FiltersImmutable`, `TestServer_Mutate_AddsLabel_AsJSONPatch` |
+| jsadmission.R7 | A validating policy's `modifiedObject` is ignored. | `jsadmission.AdmissionResult` | `TestServer_Validate_IgnoresModifiedObject` |
+| jsadmission.R8 | A patch that cannot be computed admits the request with a warning. | `fillResponse`; reason open in ADM-8 | missing → ADM-8 |
+| jsadmission.R9 | A failed call follows `failurePolicy`: `Ignore` admits with a warning, anything else denies with code 500. | `JSAdmissionSpec.FailurePolicy` | `TestServer_Validate_FailurePolicy_Fail_OnJSThrow`, `TestServer_Validate_FailurePolicy_Ignore_OnJSThrow` |
+| jsadmission.R10 | `failurePolicy` means the same whether the operator is unreachable or the call fails, and gojsop never waits longer than the apiserver does. | `jsadmission.Registrar` | missing → GATE-17 |
+| jsadmission.R11 | A call ends at the smaller of `spec.timeoutSeconds` (default 5 s) and `spec.limits.timeoutSeconds` (default 30 s) and then counts as failed. | `callTimeout` | `TestCallTimeout_SmallerOfWebhookAndLimits`; the failure path: missing → GATE-22 |
+| jsadmission.R12 | A failed call (error, memory limit, timeout, crash, client gone) affects only its request. The next request starts from the prepared script; nothing is prepared again. | js-registry.R2 | missing → GATE-22 |
+| jsadmission.R13 | A policy can only read the cluster: `kube.get` and `kube.list`, no `kube.apply` or `kube.delete`. | `sideEffects: None` | `TestSharedFactory_ForAdmission_ReadOnlySurface` |
 | jsadmission.R14 | Every response carries the UID of its request. | admission.k8s.io/v1 | `TestServer_Validate_AllowedRoundtrip` |
-| jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `cmd/main.go` (`excludeNamespaces`); extent open in ADM-6 | missing → ADM-6 |
-| jsadmission.R16 | A response with `allowed=false` carries no patch. | admission.k8s.io/v1 (`AdmissionResponse`) | `TestServer_Mutate_Denied_HasNoPatch` |
-| jsadmission.R17 | When the central webhook configurations cannot be written, the policy shows `Ready=False` with reason `WebhookSyncFailed`, the registrar retries, and `Ready` returns to `True` once it succeeds. | `Registrar.SyncError` and `JSAdmissionReconciler.Reconcile`; status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse`, `TestRegistrar_SyncFailure_IsRetriedAndReported` |
-| jsadmission.R18 | While the VM is not ready the policy is `Ready=False` with reason `Building` (the build runs; the reconcile does not wait for it) or `BuildFailed` (the last build failed; retried with backoff, a source change rebuilds at once). | [js-registry](../aspects/js-registry.md), status-conditions.R7 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
-| jsadmission.R19 | While the policy has no VM (a restart builds, or the build failed) every request is decided by `failurePolicy` at once; the request does not wait for the build. | [js-registry](../aspects/js-registry.md), js-registry.R19, `Server.review` | `TestServer_NoVM_AppliesFailurePolicyAtOnce` |
-| jsadmission.R20 | Every replica answers every policy: each one loads the source, prepares the script and publishes the policy in its own HTTP table, without leader election. Status and the central webhook configurations are written by the leader alone. | `JSAdmissionServerReconciler` (not leader-elected), `JSAdmissionReconciler` (leader-only), `cmd/main.go` | `TestJSAdmissionServerReconciler_EveryReplicaAnswers`, `TestJSAdmissionServerReconciler_DeletionUnregisters`, `TestServerController_IsNotLeaderElected`; with `replicas: 2` missing → GATE-28 |
+| jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `excludeNamespaces` in `cmd`; extent open in ADM-6 | missing → ADM-6 |
+| jsadmission.R16 | A denial carries no patch. | admission.k8s.io/v1 | `TestServer_Mutate_Denied_HasNoPatch` |
+| jsadmission.R17 | When gojsop cannot write the webhook configurations, the policy is `Ready=False`, reason `WebhookSyncFailed`, and gojsop retries until it succeeds. | status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse`, `TestRegistrar_SyncFailure_IsRetriedAndReported` |
+| jsadmission.R18 | While a new script is prepared the policy is `Ready=False`, reason `Building`; after a failed prepare `BuildFailed`, retried with backoff. A new source is tried at once. | status-conditions.R7 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
+| jsadmission.R19 | While no script is ready, `failurePolicy` decides every request at once; no request waits for the prepare. | js-registry.R19 | `TestServer_NoVM_AppliesFailurePolicyAtOnce` |
+| jsadmission.R20 | Every operator replica answers every policy, also before and without leader election. | decision "replicated admission path" | `TestJSAdmissionServerReconciler_EveryReplicaAnswers`, `TestJSAdmissionServerReconciler_DeletionUnregisters`, `TestServerController_IsNotLeaderElected`; with `replicas: 2` missing → GATE-28 |
 
 ## Aspects
 
-- [js-execution](../aspects/js-execution.md): how script calls run, with deadline, memory limit and error classes
-- [js-registry](../aspects/js-registry.md): the prepared script per policy and its rebuild
-- [js-sources](../aspects/js-sources.md): where the script comes from
-- [kube-access](../aspects/kube-access.md): the `kube` object, read-only for admission
-- [status-conditions](../aspects/status-conditions.md): how the policy reports its state
+- [js-execution](../aspects/js-execution.md): deadline, memory limit and error classes of a call.
+- [js-registry](../aspects/js-registry.md): how a script is prepared and called.
+- [js-sources](../aspects/js-sources.md): where the source comes from.
+- [kube-access](../aspects/kube-access.md): the `kube` object, read-only here.
+- [status-conditions](../aspects/status-conditions.md): how the policy reports its state.
 
 ## Decisions
 
-- **All validating policies become entries of one `ValidatingWebhookConfiguration` (`gojsop-validating`), all mutating ones of one `MutatingWebhookConfiguration` (`gojsop-mutating`).** Status: accepted (2026-05, project). Why: one object to own and clean up. Not taken: one configuration per policy; the reason is not recorded.
-- **A debounced `jsadmission.Registrar` is the only writer of both configurations and deletes one when its entry set is empty.** Status: accepted (2026-05, project). Why: one owner of the aggregation.
-- **The operator serves each policy under `/admission/validate/<ns|cluster>/<name>` and `/admission/mutate/...`; the path is built only by `jsadmission.PathFor` and parsed only by `jsadmission.keyFromPath`.** Status: accepted (2026-05, project). Why: registrar and server must agree on one format; a policy is looked up per request.
-- **A policy is registered in `jsadmission.Server` before it is published to the `Registrar`.** Status: accepted (2026-05, project). Why: once the configuration points at the operator requests arrive, and an unknown path answers 404.
-- **The webhook entry is named `<ns>-<name>.policies.gojsop.io` (cluster-scoped: `<name>.policies.gojsop.io`).** Status: accepted (2026-05, project). Why: unique per policy inside one configuration.
-- **The operator serves the webhook over TLS with a cert-manager certificate, and the `Registrar` reads the CA bundle on every sync.** Status: accepted (2026-05, project). Why: without `--webhook-cert-path` controller-runtime self-signs and the apiserver rejects that certificate. Open: CA rotation reaches the configurations only on the next policy change (ADM-4).
-- **Admission VMs are built only by `SharedFactory.ForAdmission`, and scripts run only through `jsrun.Runner.Invoke`.** Status: accepted (2026-05, project). Why: one place for the read-only surface and for lock, panic recovery and result classification (see aspects). Not taken: binding `kube.apply` and `kube.delete`, because admission runs under `sideEffects: None`.
-- **After a timeout the script is stopped inside the engine instead of leaving the goroutine running.** Status: accepted (2026-05, project; changed 2026-10-01 with EXEC-8). Why: the QuickJS interrupt handler ends the script at the deadline and the VM stays usable, so no rebuild is needed; before, wazero closed the module and the VM was rescued. Not taken: leaving the goroutine running.
-- **The admission path is replicated, the hook path is not.** Status: accepted (2026-10, project; ADM-12). Why: the apiserver reaches the webhook through a Service that routes to every ready pod, so a replica that knows no policy answers 404 — under `failurePolicy: Fail` that denies matching requests cluster-wide. Serving therefore cannot depend on the lease. Hook dispatch stays leader-only for the opposite reason: `handle()` has side effects and must run once (jshook). Costs: every replica builds every JSAdmission VM, so the admission memory scales with the replica count, and the same review crash can be reported by every replica that saw it. Gained even at one replica: the webhook answers from process start instead of after the leader election. Not taken: keeping the server leader-only and routing through the leader, which would need a second Service and an endpoint rewrite on every failover.
-- **The scaffolded Kubebuilder webhook for the `JSAdmission` CRD is an empty stub and validates nothing.** Status: proposed. Open: ADM-7.
+- **One `ValidatingWebhookConfiguration` (`gojsop-validating`) and one `MutatingWebhookConfiguration` (`gojsop-mutating`) hold all policies.** Status: accepted (2026-05). Why: one object to own and clean up. Not taken: one configuration per policy; reason not recorded.
+- **`jsadmission.Registrar` is the only writer of both and deletes one when it is empty.** Status: accepted (2026-05). Why: one owner of the aggregation.
+- **Each policy is served at `/admission/validate/<ns|cluster>/<name>` or `/admission/mutate/...`, built only by `jsadmission.PathFor`.** Status: accepted (2026-05). Why: registrar and server must agree on one format.
+- **A policy is served before it is published to the registrar.** Status: accepted (2026-05). Why: requests arrive as soon as the configuration points at the operator; an unknown path answers 404.
+- **Webhook entries are named `<ns>-<name>.policies.gojsop.io`, cluster-scoped `<name>.policies.gojsop.io`.** Status: accepted (2026-05). Why: unique inside one configuration.
+- **TLS with a cert-manager certificate; the registrar reads the CA bundle on every sync.** Status: accepted (2026-05). Why: the apiserver rejects controller-runtime's self-signed certificate. Open: a CA rotation arrives only with the next policy change (ADM-4).
+- **Admission scripts are prepared only by `SharedFactory.ForAdmission`, with a read-only `kube`.** Status: accepted (2026-05). Why: admission runs with `sideEffects: None`.
+- **The admission path is replicated, the hook path is not.** Status: accepted (2026-10, ADM-12). Why: the Service routes requests to every ready pod; a replica that knows no policy answers 404, and under `failurePolicy: Fail` that denies requests cluster-wide. Hooks stay leader-only because `handle()` has side effects and must run once. Cost: every replica prepares every policy. Gain: the webhook answers from process start. Not taken: routing through the leader, which needs a second Service and an endpoint rewrite on every failover.
+- **The scaffolded Kubebuilder webhook for the `JSAdmission` CRD validates nothing.** Status: proposed. Open: ADM-7.
 
 ## Open
 

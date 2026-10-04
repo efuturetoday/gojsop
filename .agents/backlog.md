@@ -258,6 +258,14 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`;
   `kubehost.FieldManager` calls itself a server-side-apply field manager
   (KUBE-1).
+- **DOC-6** `doc` Code comments still describe `config()` and a VM that lives
+  across calls. Evidence: the `JSHook` doc comment says the controller "calls
+  its config() export" (`api/v1alpha1/jshook_types.go:89`, reaches the CRD
+  description); `JSLimits.TimeoutSeconds` names "config()"
+  (`api/v1alpha1/js_shared.go:104`); further hits in `internal/jsregistry/registry.go`,
+  `internal/jsengine/vm.go`, `internal/jsrun/runner.go`, `internal/conditions/conditions.go`
+  (`EventConfigInvalid`). Done when: no comment or event text names `config()`
+  and `make manifests` regenerated the CRDs.
 ## UI: Operator UI
 
 - **UI-1** `decision` Operator web UI. scrippy had an Angular app (hook

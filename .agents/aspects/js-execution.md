@@ -36,8 +36,8 @@ runtime inside. Four properties follow from this choice:
 - **Cancellation without killing the VM.** QuickJS asks the host every few
   thousand operations whether the call must stop (`env.interrupt`); the host
   answers from the context of the call. A script in an endless loop ends at the
-  deadline with `jsengine.ErrCancelled`, `try/catch` cannot swallow it, and the
-  VM keeps its state and serves the next call (R13).
+  deadline with `jsengine.ErrCancelled`, and `try/catch` cannot swallow it.
+  The engine survives, so a timeout never forces a new prepare (R13).
 - **JSON at the border.** Values cross as JSON, with one `JSON.parse` and one
   `JSON.stringify` inside wasm; Go never holds a JavaScript value. Host
   functions cross through one import, `env.host_call(name, json) -> json`
@@ -104,10 +104,10 @@ stays at tens of microseconds, a timeout costs its deadline).
   Why: the engine stays replaceable, and error handling stays in one place.
   Gate: `TestImportBoundary_EngineStaysBehindRegistry`.
 - **R2** Run user JavaScript only through `jsrun.Runner.Invoke`, which the registry runs inside `Registry.Call`. The only
-  exception is building a VM inside the registry (module load and `config()`).
+  exception is preparing a script inside the registry (module load and top-level code).
   Why: one place for the call semaphore, panic recovery and result classification.
   Gate: `TestImportBoundary_CallersUseOnlyRunnerPort`, `TestRegistry_Invoke_ClassifiesOutcomes`.
-- **R3** Give every call, and every build (module load and `config()`), a context with a deadline from
+- **R3** Give every call, and every prepare (module load and top-level code), a context with a deadline from
   `spec.limits.timeoutSeconds`; the adapter applies it inside `Runner.Invoke`, so the dispatcher and the admission server (which add a tighter deadline of their own) need not know the limit.
   Why: without a deadline an endless loop holds the VM forever. A build that runs into its deadline leaves the hook `Ready=False` with reason `BuildFailed` (status-conditions.R7).
   Gate: `TestDispatcher_Timeout_CancelsWarnsAndKeepsVM`, `TestRegistry_Invoke_EveryOutcomeGetsAFreshInstance`. The build deadline: `TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys`.
