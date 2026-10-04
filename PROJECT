@@ -11,7 +11,7 @@ plugins:
     manifests: dist/install.yaml
     output: dist
 projectName: gojsop
-repo: github.com/o-haase/gojsop
+repo: github.com/efuturetoday/gojsop
 resources:
 - api:
     crdVersion: v1
@@ -20,7 +20,7 @@ resources:
   domain: gojsop.io
   group: core
   kind: JSHook
-  path: github.com/o-haase/gojsop/api/v1alpha1
+  path: github.com/efuturetoday/gojsop/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
@@ -29,7 +29,7 @@ resources:
   domain: gojsop.io
   group: core
   kind: JSAdmission
-  path: github.com/o-haase/gojsop/api/v1alpha1
+  path: github.com/efuturetoday/gojsop/api/v1alpha1
   version: v1alpha1
   webhooks:
     defaulting: true
