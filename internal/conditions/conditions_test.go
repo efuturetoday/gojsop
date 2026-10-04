@@ -39,9 +39,9 @@ func TestClassifyBuildError(t *testing.T) {
 		},
 		{
 			"post-build (non-MissingExport) -> ConfigInvalid (static msg)",
-			fmt.Errorf("%w: %v", jsrun.ErrPostBuild, errors.New("config() returned non-object")),
+			fmt.Errorf("%w: %v", jsrun.ErrPostBuild, errors.New("bad shape")),
 			EventConfigInvalid,
-			"config() returned an error",
+			"post-build check failed",
 		},
 		{
 			"bind host -> BuildFailed bind host",

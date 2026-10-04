@@ -158,4 +158,4 @@ Every rule is held by a test or is `missing → <KEY>`.
 
 ## Open
 
-DISP-4, DISP-5, DISP-6, DISP-10, DISP-12, DISP-13, API-1, EXEC-2, DOC-6
+DISP-4, DISP-5, DISP-6, DISP-10, DISP-13, API-1, EXEC-2

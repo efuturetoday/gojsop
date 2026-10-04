@@ -93,8 +93,8 @@ spec:
                     default: 30
                     description: |-
                       TimeoutSeconds bounds a single call into JS, and the build (module load
-                      and config()). On timeout the call is interrupted; the next call starts
-                      from a fresh instance.
+                      and top-level code). On timeout the call is stopped; the next call starts
+                      from the prepared script.
                     format: int32
                     maximum: 300
                     minimum: 1

@@ -162,8 +162,8 @@ func (s *slot) abortBuild() {
 }
 
 // build prepares key: a fresh VM loads the source, the snapshot is taken right
-// after the top-level eval, then PostBuild runs on the same VM (its effects,
-// config() included, do not reach the snapshot), and the VM is closed. The
+// after the top-level eval, then PostBuild runs on the same VM (its effects
+// do not reach the snapshot), and the VM is closed. The
 // caller must hold the per-key build mutex; r.mu MUST NOT be held because
 // LoadModule and PostBuild execute user JS that may block or take a long time.
 //
@@ -196,8 +196,7 @@ func (r *Registry) build(ctx context.Context, key jsrun.Key, opts jsrun.Spec) (*
 		extra, err = opts.PostBuild(ctx, vm)
 		if err != nil {
 			// Pass MissingExportError through unchanged so errors.As works at
-			// the reconciler. Other PostBuild errors (config() threw, bad
-			// shape, ...) get tagged with ErrPostBuild for classification.
+			// the reconciler. Other PostBuild errors get tagged with ErrPostBuild for classification.
 			var miss *jsrun.MissingExportError
 			if errors.As(err, &miss) {
 				return nil, err

@@ -16,7 +16,8 @@ import (
 	"github.com/o-haase/gojsop/internal/jsengine"
 )
 
-// FieldManager is the server-side-apply field manager used by kube.apply.
+// FieldManager is the field manager kube.apply sends with its create and merge
+// patch. kube.apply is not server-side apply (kube-access.R4).
 const FieldManager = "gojsop"
 
 // KubeHost binds globalThis.kube.{apply,get,list,delete} into a JS runtime.

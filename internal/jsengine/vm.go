@@ -199,7 +199,7 @@ func (vm *VM) result(ctx context.Context, status uint64) ([]byte, error) {
 
 // Eval runs source as a global script and returns the string form of its last
 // expression ("" for undefined). name shows in stack traces. Function
-// declarations become globals, so a hook's config() and handle() are callable
+// declarations become globals, so a hook's handle() is callable
 // afterwards. A ctx that ends stops the script with ErrCancelled; the VM
 // stays usable.
 func (vm *VM) Eval(ctx context.Context, name, source string) (string, error) {
@@ -230,10 +230,10 @@ func (vm *VM) Eval(ctx context.Context, name, source string) (string, error) {
 	return string(out), nil
 }
 
-// LoadModule evaluates the user's source on the persistent runtime. The source
-// is a script, not an ES module: top-level `function config() {}` and
-// `function handle(ctx) {}` become globals. Top-level state survives across
-// later calls; that is the persistent-VM contract (js-registry.R5).
+// LoadModule evaluates the user's source. The source is a script, not an ES
+// module: a top-level `function handle(ctx) {}` becomes a global. The registry
+// snapshots the VM right after, so every call starts from this state
+// (js-registry.R5).
 func (vm *VM) LoadModule(ctx context.Context, name, source string) error {
 	_, err := vm.Eval(ctx, name, source)
 	return err

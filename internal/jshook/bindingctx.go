@@ -7,17 +7,14 @@ package jshook
 // For Synchronization-type contexts, Objects is populated and Object/WatchEvent
 // are zero. For Event-type contexts, Object/WatchEvent are populated.
 type BindingContext struct {
-	Binding      string         `json:"binding"`
-	Type         string         `json:"type"`                   // "Synchronization" | "Event" | "Schedule"
-	WatchEvent   string         `json:"watchEvent,omitempty"`   // "Added" | "Modified" | "Deleted"
-	Object       map[string]any `json:"object,omitempty"`       // event-type only
-	FilterResult any            `json:"filterResult,omitempty"` // jqFilter output, when set
-	Objects      []SyncObject   `json:"objects,omitempty"`      // sync-type only
-	Snapshots    map[string]any `json:"snapshots,omitempty"`    // includeSnapshotsFrom, when wired
+	Binding    string         `json:"binding"`
+	Type       string         `json:"type"`                 // "Synchronization" | "Event"
+	WatchEvent string         `json:"watchEvent,omitempty"` // "Added" | "Modified" | "Deleted"
+	Object     map[string]any `json:"object,omitempty"`     // event-type only
+	Objects    []SyncObject   `json:"objects,omitempty"`    // sync-type only
 }
 
 // SyncObject is one entry in a Synchronization binding-context payload.
 type SyncObject struct {
-	Object       map[string]any `json:"object"`
-	FilterResult any            `json:"filterResult,omitempty"`
+	Object map[string]any `json:"object"`
 }

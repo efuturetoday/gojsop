@@ -101,8 +101,8 @@ type JSLimits struct {
 	MemoryMB int32 `json:"memoryMB,omitempty"`
 
 	// TimeoutSeconds bounds a single call into JS, and the build (module load
-	// and config()). On timeout the call is interrupted; the next call starts
-	// from a fresh instance.
+	// and top-level code). On timeout the call is stopped; the next call starts
+	// from the prepared script.
 	// +kubebuilder:default=30
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=300

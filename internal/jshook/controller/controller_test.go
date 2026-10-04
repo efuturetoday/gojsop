@@ -31,7 +31,7 @@ func TestRequireHandle_PostBuildRejectsMissingHandle(t *testing.T) {
 	t.Cleanup(func() { reg.Drop(jsrun.HookKey(key)) })
 
 	_, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.HookKey(key), jsrun.Spec{
-		Source: []byte(`function config() { return {}; }`), SourceHash: "x", PostBuild: requireHandle,
+		Source: []byte(`function noHandle() {}`), SourceHash: "x", PostBuild: requireHandle,
 	})
 	var miss *jsrun.MissingExportError
 	if !errors.As(err, &miss) || miss.Name != "handle" {
@@ -132,7 +132,7 @@ func reconcileUntil(t *testing.T, r *JSHookReconciler, c client.Client, name, re
 // js-registry.R15
 // status-conditions.R7
 func TestReconcile_HangingBuildDoesNotBlockOtherHook(t *testing.T) {
-	good := `function config() { return {}; } function handle() {}`
+	good := `function handle() {}`
 	r, c := newTestReconciler(t, jsrun.Backoff{},
 		testHook("hang", `while(true){}`, 1), testHook("good", good, 0))
 	t.Cleanup(func() {
@@ -195,7 +195,7 @@ func TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce(t *testing.
 	if err := c.Get(t.Context(), key, &h); err != nil {
 		t.Fatal(err)
 	}
-	h.Spec.Source.Inline = `function config() { return {}; } function handle() {}`
+	h.Spec.Source.Inline = `function handle() {}`
 	if err := c.Update(t.Context(), &h); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce(t *testing.
 //
 // js-registry.R4
 func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
-	hook := testHook("manual", `function config() { return {}; } function handle() {}`, 0)
+	hook := testHook("manual", `function handle() {}`, 0)
 	r, c := newTestReconciler(t, jsrun.Backoff{}, hook)
 	key := types.NamespacedName{Name: "manual"}
 	t.Cleanup(func() { r.Scripts.Drop(jsrun.HookKey(key)) })

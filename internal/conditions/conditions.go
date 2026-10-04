@@ -103,7 +103,7 @@ func ClassifyBuildError(err error) (reason, message string) {
 	case errors.Is(err, jsrun.ErrLoadModule):
 		return EventModuleLoadFailed, "module load failed"
 	case errors.Is(err, jsrun.ErrPostBuild):
-		return EventConfigInvalid, "config() returned an error"
+		return EventConfigInvalid, "post-build check failed"
 	case errors.Is(err, jsrun.ErrBindHost):
 		return EventBuildFailed, "build failed: bind host"
 	case errors.Is(err, jsrun.ErrNewVM):

@@ -18,7 +18,7 @@ type Loader interface {
 }
 
 // Chain dispatches to the first loader that claims the source (returns true).
-// MVP wires only the inline loader; ConfigMap and OCI come later.
+// cmd wires the inline and the ConfigMap loader; no loader serves oci (SRC-1).
 type Chain struct {
 	loaders []Loader
 }
@@ -40,8 +40,8 @@ func (c *Chain) Load(ctx context.Context, src corev1alpha1.JSSource) ([]byte, er
 	return nil, fmt.Errorf("no loader matched source: must set one of spec.source.inline, configMapRef, or oci")
 }
 
-// Hash returns a stable sha256 of the JS source. Used as the instance restart
-// trigger in the controller (status.instance.sourceHash).
+// Hash returns a stable sha256 of the JS source. A new hash makes the registry
+// prepare the script again (status.instance.sourceHash).
 // js-sources.R3
 func Hash(body []byte) string {
 	sum := sha256.Sum256(body)

@@ -97,7 +97,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **DISP-4** `bug` No leader-election awareness. On failover the new leader
   rebuilds informers with a fresh Synchronization; events in the gap are lost.
 - **DISP-5** `decision` `BindingContext` shape depends on type: `Object` for
-  events, `Objects` for Synchronization, `Snapshots` never set.
+  events, `Objects` for Synchronization.
 - **DISP-6** `doc` Interaction of `events` and `synchronization` unspecified.
   An empty `events` means "all events"; the relation to snapshot delivery is
   unclear.
@@ -107,9 +107,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   same holds for events of a hook that has no VM (`noVM`): they wait, folded
   per object, until the VM is back or the hook is dropped. Not a cap, so not
   narrowed.
-- **DISP-12** `gap` `BindingContext` still carries `filterResult` and
-  `snapshots`; nothing fills them since the bindings moved into the CRD.
-  Remove them or implement them (`internal/jshook/bindingctx.go`).
 - **DISP-13** `gap` A JSHook has no way to run on a schedule or once at
   startup. `spec.bindings` only watches resources; shell-operator's
   `schedule` and `onStartup` have no CRD equivalent yet. Decide whether
@@ -146,8 +143,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **API-1** `decision` Project rule: no field without implementation or a
   status that shows it is inactive. Applies to CRD fields and to the schema
-  that the CRDs expose. Today violated by SRC-1 (CRD field `oci`) and by
-  DISP-12 (`BindingContext.filterResult` and `.snapshots` are never filled).
+  that the CRDs expose. Today violated by SRC-1 (CRD field `oci`).
   Gate: GATE-10.
 - **API-2** `doc` CRD field docs are thin. `kubectl explain jshook.spec.source`
   does not say which sources work.
@@ -202,9 +198,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-8** Status rules: `Reason:` only from `internal/conditions`
   constants, `Status()` only in `*/controller/`. Both hold today, nothing
   enforces them.
-- **GATE-29** `gate` Report tests that no rule names (testing.R11). Today only the
-  7 tests of the spike module `hack/spikes/quickjs-wasm` hold no rule. Done when: `make sdlc-check` or a test
-  lists them and the list is empty or each entry is accepted on purpose.
 - **GATE-10** Table test that lists every spec field with an owner (code path
   or status field) (API-1).
 - **GATE-12** Coverage floor per package. Unit run 2026-10-01: conditions 100,
@@ -253,26 +246,16 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   set); only a real Service in front of two pods shows that the apiserver
   reaches both. Needs a Kind cluster with two ready manager pods and a way to
   address one pod directly. Rule: jsadmission.R20.
+- **GATE-29** `gate` Report tests that no rule names (testing.R11). Today only the
+  7 tests of the spike module `hack/spikes/quickjs-wasm` hold no rule. Done when: `make sdlc-check` or a test
+  lists them and the list is empty or each entry is accepted on purpose.
 
 ## DOC: Documentation
 
 - **DOC-1** README is the Kubebuilder template with `TODO(user)` placeholders.
 - **DOC-2** "Synchronization" is shell-operator jargon, explained nowhere a
   user looks (README, CRD description, sample).
-- **DOC-4** Stale comments: `status.lastExecution.error` in
-  `internal/jshook/dispatcher/dispatcher.go:495`; `BindingContext.Type` lists
-  "Schedule", never produced (`internal/jshook/bindingctx.go:11`); "MVP wires
-  only inline" and an old restart trigger in `internal/jssource/loader.go:21,41-42`;
-  `kubehost.FieldManager` calls itself a server-side-apply field manager
-  (KUBE-1).
-- **DOC-6** `doc` Code comments still describe `config()` and a VM that lives
-  across calls. Evidence: the `JSHook` doc comment says the controller "calls
-  its config() export" (`api/v1alpha1/jshook_types.go:89`, reaches the CRD
-  description); `JSLimits.TimeoutSeconds` names "config()"
-  (`api/v1alpha1/js_shared.go:104`); further hits in `internal/jsregistry/registry.go`,
-  `internal/jsengine/vm.go`, `internal/jsrun/runner.go`, `internal/conditions/conditions.go`
-  (`EventConfigInvalid`). Done when: no comment or event text names `config()`
-  and `make manifests` regenerated the CRDs.
+
 ## UI: Operator UI
 
 - **UI-1** `decision` Operator web UI. scrippy had an Angular app (hook

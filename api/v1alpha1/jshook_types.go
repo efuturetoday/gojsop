@@ -85,9 +85,9 @@ type JSHookStatus struct {
 // +kubebuilder:printcolumn:name="RestartedAt",type=date,JSONPath=`.status.instance.recentRestarts[0].time`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// JSHook declares a JavaScript-based Kubernetes hook. The controller loads
-// the module, calls its config() export to learn which events to subscribe to,
-// then dispatches matching events to its handle() export.
+// JSHook declares a JavaScript-based Kubernetes hook. The controller watches
+// the resources named in spec.bindings and calls the script's handle() with
+// every matching change.
 //
 // JSHook is cluster-scoped because hooks typically observe resources across
 // namespaces.

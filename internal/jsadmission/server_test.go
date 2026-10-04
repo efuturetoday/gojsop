@@ -33,10 +33,6 @@ func loadPolicy(t *testing.T, src string, key types.NamespacedName) *jsregistry.
 	reg := jsregistry.NewRegistry()
 	t.Cleanup(func() { reg.Drop(jsrun.AdmissionKey(key)) })
 	source := []byte(src)
-	// Embed a no-op config() so Registry.Ensure doesn't reject the source.
-	if !strings.Contains(src, "function config(") {
-		source = append([]byte("function config(){return {configVersion:'v1'}}\n"), source...)
-	}
 	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), jsrun.AdmissionKey(key), jsrun.Spec{Source: source, SourceHash: "h1"}); err != nil {
 		t.Fatalf("GetOrLoad: %v", err)
 	}

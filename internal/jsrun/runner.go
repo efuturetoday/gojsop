@@ -67,11 +67,9 @@ type Script interface {
 
 // PostBuildHook is invoked once per fresh script after the source has
 // loaded. It returns the value to stash on State.Meta. JSHook uses it to
-// call jshook.ReadConfig and cache the parsed Config. Returning a non-nil
-// error aborts the build.
+// check that handle() exists. Returning a non-nil error aborts the build.
 //
-// ctx is the build context: config() runs once per build, so the build
-// deadline applies.
+// ctx is the build context, so the build deadline applies.
 //
 // js-registry.R10
 type PostBuildHook func(ctx context.Context, s Script) (meta any, err error)
@@ -183,8 +181,7 @@ type State struct {
 	// state (and does not Ensure) reads it instead of loading the source
 	// again.
 	SourceHash string
-	// Meta is the value the PostBuildHook returned (e.g. JSHook caches its
-	// parsed Config here so reconciles never enter the script).
+	// Meta is the value the PostBuildHook returned.
 	Meta       any
 	Recoveries Recoveries
 }
