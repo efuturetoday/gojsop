@@ -2,26 +2,7 @@ package jsadmission
 
 import "testing"
 
-func TestCreatePatch_AddLabel(t *testing.T) {
-	original := []byte(`{"metadata":{"name":"p"}}`)
-	modified := map[string]any{
-		"metadata": map[string]any{
-			"name":   "p",
-			"labels": map[string]any{"team": "frontend"},
-		},
-	}
-	ops, err := CreatePatch(original, modified)
-	if err != nil {
-		t.Fatalf("CreatePatch: %v", err)
-	}
-	if len(ops) != 1 {
-		t.Fatalf("expected 1 op, got %d: %+v", len(ops), ops)
-	}
-	if ops[0].Operation != "add" || ops[0].Path != pathLabels {
-		t.Fatalf("unexpected op: %+v", ops[0])
-	}
-}
-
+// jsadmission.R6
 func TestCreatePatch_NoChange(t *testing.T) {
 	original := []byte(`{"metadata":{"name":"p"}}`)
 	modified := map[string]any{"metadata": map[string]any{"name": "p"}}

@@ -769,6 +769,8 @@ function handle(c) {
 // A script in a hot loop must not fill etcd with its own Events.
 //
 // js-execution.R17
+//
+// js-execution.R17
 func TestDispatcher_ConsoleEventsAreCappedPerCall(t *testing.T) {
 	const src = `
 function handle(c) {

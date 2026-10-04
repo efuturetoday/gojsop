@@ -75,6 +75,8 @@ func TestSharedFactory_ForAdmission_ReadOnlySurface(t *testing.T) {
 // Both surfaces share the factory's client and mapper, so a policy reads the
 // same cluster state a hook does.
 // kube-access.R2
+//
+// kube-access.R1
 func TestSharedFactory_BothSurfaces_ShareClientAndMapper(t *testing.T) {
 	dyn := fake.NewSimpleDynamicClient(scheme.Scheme)
 	mapper := meta.NewDefaultRESTMapper(nil)

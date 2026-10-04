@@ -22,7 +22,7 @@ Spec holds user intent, status holds observation. Status rules live in
 [status-conditions](status-conditions.md).
 
 Both CRDs state in their spec what they react to: `JSHookSpec.bindings` and
-`JSAdmissionSpec.rules`. The script only exports `handle()` (R11). Where the
+`JSAdmissionSpec.rules`. The script only provides its entry point (R11). Where the
 two CRDs mean the same thing they share a type: `ResourceRule` names the
 resources, `ObjectMatch` the namespace and object labels (R10).
 
@@ -103,8 +103,8 @@ Adding a CRD field:
   change reaches both.
   Gate: `TestResourceRule_SharedByBothCRDs`, `TestHookBinding_EventDefaults`.
 - **R11** What a JSHook or JSAdmission reacts to is declared in its spec, not
-  returned by the script. The script exports `handle()` and nothing else is
-  read from it.
+  returned by the script. Only the entry point is read from the script:
+  `handle()`, `validate()` or `mutate()`.
   Why: the operator needs the scope before it may run the user's code — a
   script that declared its own scope would have to run with full rights to
   say which rights it needs.

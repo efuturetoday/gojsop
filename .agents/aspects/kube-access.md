@@ -31,8 +31,7 @@ later. The dynamic client with a RESTMapper fits the free-form `apiVersion` and
 
 There is no per-hook identity. The operator's own ServiceAccount performs every
 call, and its ClusterRole is a wildcard. The code calls this an MVP; a per-hook
-ServiceAccount and narrower RBAC are planned as "Phase 2". A reconciler without
-a factory builds a VM without `kube`, and no error is raised.
+ServiceAccount and narrower RBAC are planned as "Phase 2" (OPS-2).
 
 Semantics of the four functions, each taking one JS object:
 
@@ -76,7 +75,7 @@ sees CRDs installed after start is not verified.
   binder only from a `kubehost.Factory`. Build the dynamic client once, in
   `cmd/main.go`.
   Why: one seam for swapping in per-ServiceAccount clients later.
-  Gate: `TestSharedFactory_ForHook_FullSurface`, `TestSharedFactory_PerCallInstances`.
+  Gate: `TestSharedFactory_ForHook_FullSurface`, `TestSharedFactory_PerCallInstances`, `TestSharedFactory_BothSurfaces_ShareClientAndMapper`.
 - **R2** Bind only `get` and `list` for admission VMs.
   Why: the admission webhook declares `sideEffects: None`, and the API server
   may retry the request.
@@ -100,10 +99,12 @@ sees CRDs installed after start is not verified.
   permission and run `make manifests`. `config/rbac/role.yaml` is generated.
   Why: the generated role must not drift from the code.
   Gate: missing → GATE-14.
-- **R7** Do not read `kubehost.KubeHost` fields from another goroutine.
-  Why: calls arrive on the per-hook worker goroutine, and the registry
-  serialises calls per VM (held by js-registry.R8), so the type has no locking.
-  Gate: review only — no machine can tell which goroutine reads a field.
+- **R7** Keep `kubehost.KubeHost` free of state that a call writes: its
+  fields are set once at construction and only read.
+  Why: calls of one script run in parallel (js-registry.R1) and share one
+  `KubeHost`; it has no locking, and the dynamic client and the RESTMapper are
+  safe for concurrent use.
+  Gate: review only — no machine can tell a field written per call from one set once.
 - **R8** Wire a `kubehost.Factory` into every reconciler that builds a VM —
   `JSHookReconciler` and `JSAdmissionServerReconciler`; `SetupWithManager`
   fails without one. The leader-only `JSAdmissionReconciler` builds nothing
@@ -111,6 +112,11 @@ sees CRDs installed after start is not verified.
   Why: without a factory every script runs without the `kube` global and no
   error says why. Only a reconciler built bare in a unit test runs without it.
   Gate: `TestSetupWithManager_RequiresKubeHost` (jshook and jsadmission controllers).
+- **R9** `kube.get` returns `null` for a missing object, `kube.list` returns
+  the items, `kube.delete` removes the object.
+  Why: scripts branch on a missing object without `try/catch`; authors rely
+  on these semantics.
+  Gate: `TestKubeHost_GetReturnsNullForMissing`, `TestKubeHost_ListReturnsItems`, `TestKubeHost_DeleteRemovesResource`.
 
 ## Decisions
 

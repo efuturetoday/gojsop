@@ -20,9 +20,8 @@ import (
 const FieldManager = "gojsop"
 
 // KubeHost binds globalThis.kube.{apply,get,list,delete} into a JS runtime.
-// One KubeHost is shared across all hook instances; all calls run in the
-// goroutine of the per-hook FIFO worker that's invoking handle(), so this
-// type does not need additional synchronisation.
+// One KubeHost serves every call of a script, and calls run in parallel. Its
+// fields are set once and only read, so it needs no locking.
 // kube-access.R7
 type KubeHost struct {
 	// Ctx is a parent context for every call: when it ends (e.g. the manager

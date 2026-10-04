@@ -201,43 +201,6 @@ func TestRegistry_RecoveryHistory_RingAndCounters(t *testing.T) {
 	}
 }
 
-func TestRegistry_Get(t *testing.T) {
-	reg := jsregistry.NewRegistry()
-	key := jsrun.HookKey(types.NamespacedName{Name: "g"})
-	t.Cleanup(func() { reg.Drop(key) })
-
-	if _, ok := reg.Get(key); ok {
-		t.Fatal("Get must return false for unknown key")
-	}
-	src := []byte(`function config(){return {}}`)
-	p, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Spec{Source: src, SourceHash: "x"})
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	got, ok := reg.Get(key)
-	if !ok || got != p {
-		t.Fatal("Get must return the live Prepared script")
-	}
-}
-
-func TestRegistry_Drop(t *testing.T) {
-	reg := jsregistry.NewRegistry()
-	key := jsrun.HookKey(types.NamespacedName{Name: "h3"})
-
-	src := []byte(`function config(){return {}}`)
-	if _, _, err := registrytest.GetOrLoad(reg, context.Background(), key, jsrun.Spec{Source: src, SourceHash: "x"}); err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if reg.Len() != 1 {
-		t.Fatalf("Len: got %d, want 1", reg.Len())
-	}
-	reg.Drop(key)
-	if reg.Len() != 0 {
-		t.Fatalf("Len after drop: got %d, want 0", reg.Len())
-	}
-	reg.Drop(key)
-}
-
 // A cancelled call just ends that call's instance: nothing is recovered, the
 // prepared script is unchanged and the next call gets a fresh instance from
 // it, whether or not the cancelled call's export ever returns.

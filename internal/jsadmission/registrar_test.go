@@ -54,6 +54,7 @@ func samplePolicy(name string, mutating bool) PolicyMeta {
 	}
 }
 
+// jsadmission.R1
 func TestRegistrar_TwoValidating_OneVWC_TwoEntries(t *testing.T) {
 	r, c := newFakeRegistrar(t)
 	ctx := context.Background()
@@ -85,6 +86,7 @@ func TestRegistrar_TwoValidating_OneVWC_TwoEntries(t *testing.T) {
 	}
 }
 
+// jsadmission.R1
 func TestRegistrar_MixedValidatingAndMutating(t *testing.T) {
 	r, c := newFakeRegistrar(t)
 	ctx := context.Background()
@@ -148,15 +150,6 @@ func TestRegistrar_Update_OverwritesEntry(t *testing.T) {
 	}
 	if got := vwc.Webhooks[0].Rules[0].Resources; len(got) != 1 || got[0] != "deployments" {
 		t.Fatalf("rules not updated: %+v", got)
-	}
-}
-
-func TestDNSWebhookName_Cluster(t *testing.T) {
-	if got := DNSWebhookName(types.NamespacedName{Name: "p"}); got != "p.policies.gojsop.io" {
-		t.Fatalf("got %q", got)
-	}
-	if got := DNSWebhookName(types.NamespacedName{Namespace: "ns", Name: "p"}); got != "ns-p.policies.gojsop.io" {
-		t.Fatalf("got %q", got)
 	}
 }
 

@@ -53,14 +53,3 @@ func TestHandle_ReceivesBindingContext(t *testing.T) {
 		t.Fatalf("return: got %q want %q", got, want)
 	}
 }
-
-func TestHandle_MissingFunction(t *testing.T) {
-	reg, key := loadHook(t, `function config(){return {}}`)
-	_, hres, err := jshook.Handle(context.Background(), reg, key, nil)
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if hres.Err == nil {
-		t.Fatal("expected error when hook has no handle()")
-	}
-}

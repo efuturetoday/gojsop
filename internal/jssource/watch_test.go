@@ -47,6 +47,7 @@ func TestJSHookConfigMapMapper_FansOutMatchingHooks(t *testing.T) {
 	}
 }
 
+// js-sources.R4
 func TestJSHookConfigMapMapper_NoMatch(t *testing.T) {
 	hook := &corev1alpha1.JSHook{
 		ObjectMeta: metav1.ObjectMeta{Name: "a"},

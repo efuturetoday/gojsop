@@ -154,6 +154,7 @@ func TestHost_PanicIsTrapAndBreaksVM(t *testing.T) {
 	}
 }
 
+// js-execution.R11
 func TestBindHost_TwiceFails_BadNameFails(t *testing.T) {
 	vm := bound(t, func(h *Host) {})
 	if err := vm.BindHost(HostBinderFunc(func(*Host) error { return nil })); err == nil {

@@ -88,6 +88,11 @@ Adding a test that holds a rule:
   runs.
   Why: a gate that CI does not run is only a promise.
   Gate: missing → GATE-1.
+- **R11** Write a test to hold a rule of an area or aspect, and name the rule
+  in it. A test that holds no rule gets its rule written down, or it goes.
+  Why: the areas and aspects record what matters; tests of every detail cost
+  upkeep and pin the implementation instead of the promise.
+  Gate: missing → GATE-29.
 - **R10** (withdrawn) Keep blocks consistent with the code.
   Why: it existed only for `hack/checkblocks`; `make sdlc-check` now checks
   every aspect and area.
@@ -103,4 +108,4 @@ Adding a test that holds a rule:
 ## Open
 
 Tracked in [backlog](../backlog.md): GATE-1 to GATE-20, among them GATE-12
-(coverage floor) and GATE-20 (e2e cluster cleanup on failure).
+(coverage floor) and GATE-20 (e2e cluster cleanup on failure); GATE-29.

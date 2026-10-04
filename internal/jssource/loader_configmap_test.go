@@ -26,6 +26,7 @@ func newReader(t *testing.T, objs ...runtime.Object) *fake.ClientBuilder {
 	return fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...)
 }
 
+// js-sources.R8
 func TestConfigMapLoader_DefaultKey(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "ns1"},
@@ -47,6 +48,7 @@ func TestConfigMapLoader_DefaultKey(t *testing.T) {
 	}
 }
 
+// js-sources.R8
 func TestConfigMapLoader_ExplicitKey(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "ns1"},
@@ -122,6 +124,7 @@ func TestConfigMapLoader_NoRefFallsThrough(t *testing.T) {
 	}
 }
 
+// js-sources.R8
 func TestConfigMapLoader_BinaryData(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "ns1"},
@@ -140,6 +143,7 @@ func TestConfigMapLoader_BinaryData(t *testing.T) {
 	}
 }
 
+// js-sources.R1
 func TestChain_ConfigMapAfterInline(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "policy", Namespace: "ns1"},

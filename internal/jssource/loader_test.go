@@ -7,6 +7,7 @@ import (
 	corev1alpha1 "github.com/o-haase/gojsop/api/v1alpha1"
 )
 
+// js-sources.R1
 func TestChain_InlineMatches(t *testing.T) {
 	c := NewChain(InlineLoader{})
 	body, err := c.Load(context.Background(), corev1alpha1.JSSource{Inline: "1+1"})
@@ -18,6 +19,7 @@ func TestChain_InlineMatches(t *testing.T) {
 	}
 }
 
+// js-sources.R1
 func TestChain_NoSourceErrors(t *testing.T) {
 	c := NewChain(InlineLoader{})
 	_, err := c.Load(context.Background(), corev1alpha1.JSSource{})

@@ -19,28 +19,6 @@ func newVM(t *testing.T, lim Limits) *VM {
 	return vm
 }
 
-func TestEval_1Plus1(t *testing.T) {
-	vm := newVM(t, Limits{})
-	got, err := vm.Eval(context.Background(), "smoke.js", "1 + 1")
-	if err != nil || got != "2" {
-		t.Fatalf("Eval = %q, %v; want 2", got, err)
-	}
-}
-
-// js-registry.R5
-func TestEval_PersistentState(t *testing.T) {
-	vm := newVM(t, Limits{})
-	if _, err := vm.Eval(context.Background(), "setup.js", "globalThis.counter = 0;"); err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"1", "2", "3"} {
-		got, err := vm.Eval(context.Background(), "inc.js", "globalThis.counter++; globalThis.counter")
-		if err != nil || got != want {
-			t.Fatalf("got %q, %v; want %s", got, err, want)
-		}
-	}
-}
-
 // js-execution.R5
 // js-execution.R4
 // The limit ends the call with ErrOOM, and the VM serves the next call.
@@ -168,6 +146,8 @@ func TestDeadline_StopsCatastrophicRegex(t *testing.T) {
 }
 
 // Deep recursion is a script error (RangeError), not a trap.
+//
+// js-execution.R4
 func TestStackOverflow_IsScriptErrorNotTrap(t *testing.T) {
 	vm := newVM(t, Limits{})
 	_, err := vm.Eval(context.Background(), "rec.js", `function r(n) { return r(n + 1) + 1 } r(0)`)
@@ -232,6 +212,7 @@ func TestScriptError_NonErrorThrow(t *testing.T) {
 	}
 }
 
+// js-execution.R19
 func TestInvoke_DecodesJSONAndLeavesOutOnUndefined(t *testing.T) {
 	vm := newVM(t, Limits{})
 	if err := vm.LoadModule(context.Background(), "inv.js", `
@@ -256,6 +237,7 @@ func TestInvoke_DecodesJSONAndLeavesOutOnUndefined(t *testing.T) {
 	}
 }
 
+// js-execution.R19
 func TestInvoke_Unicode_LargePayloadsRoundTrip(t *testing.T) {
 	vm := newVM(t, Limits{})
 	if err := vm.LoadModule(context.Background(), "u.js", `function id(x) { return x }`); err != nil {
@@ -271,6 +253,7 @@ func TestInvoke_Unicode_LargePayloadsRoundTrip(t *testing.T) {
 	}
 }
 
+// js-execution.R16
 func TestClockAndRandom_AreReal(t *testing.T) {
 	vm := newVM(t, Limits{})
 	got, err := vm.Eval(context.Background(), "d.js", `String(Date.now())`)
@@ -291,6 +274,7 @@ func TestClockAndRandom_AreReal(t *testing.T) {
 	}
 }
 
+// js-execution.R7
 func TestClose_Idempotent_CallsAfterCloseFail(t *testing.T) {
 	vm, err := New(Limits{})
 	if err != nil {

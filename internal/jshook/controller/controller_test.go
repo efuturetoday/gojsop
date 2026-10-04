@@ -213,6 +213,8 @@ func TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce(t *testing.
 //
 // jshook.R18
 // js-registry.R4
+//
+// js-registry.R4
 func TestReconcile_ManualRestart_BuildsInBackgroundOnce(t *testing.T) {
 	hook := testHook("manual", `function config() { return {}; } function handle() {}`, 0)
 	r, c := newTestReconciler(t, jsrun.Backoff{}, hook)

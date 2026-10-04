@@ -105,6 +105,8 @@ func TestKubeHost_ApplyCreatesAndUpdates(t *testing.T) {
 }
 
 // kube-access.R3
+//
+// kube-access.R9
 func TestKubeHost_GetReturnsNullForMissing(t *testing.T) {
 	h := newKubeHost(t)
 	inst := runHook(t, h, ``)
@@ -120,6 +122,8 @@ func TestKubeHost_GetReturnsNullForMissing(t *testing.T) {
 }
 
 // kube-access.R3
+//
+// kube-access.R9
 func TestKubeHost_ListReturnsItems(t *testing.T) {
 	cm1 := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",
@@ -211,6 +215,8 @@ func TestKubeHost_RepeatedApplyInLoop(t *testing.T) {
 }
 
 // kube-access.R3
+//
+// kube-access.R9
 func TestKubeHost_DeleteRemovesResource(t *testing.T) {
 	cm := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "v1", "kind": "ConfigMap",

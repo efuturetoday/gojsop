@@ -50,6 +50,10 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   NotFound on the next reconcile, an in-flight call can outlive the CR, and a
   mid-build `GetOrLoad` can install a zombie VM (`registry.go:317-319`). RBAC
   already declares `jshooks/finalizers`.
+- **REG-10** `debt` `jsrun.State.Meta` and the return value of a
+  `PostBuildHook` have no reader: `requireHandle` returns nil, nothing reads
+  `Meta` (`internal/jsrun/runner.go:188`). Done when: removed, or a caller
+  needs it.
 
 ## STAT: Status and conditions
 
@@ -198,6 +202,9 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-8** Status rules: `Reason:` only from `internal/conditions`
   constants, `Status()` only in `*/controller/`. Both hold today, nothing
   enforces them.
+- **GATE-29** `gate` Report tests that no rule names (testing.R11). Today only the
+  7 tests of the spike module `hack/spikes/quickjs-wasm` hold no rule. Done when: `make sdlc-check` or a test
+  lists them and the list is empty or each entry is accepted on purpose.
 - **GATE-10** Table test that lists every spec field with an owner (code path
   or status field) (API-1).
 - **GATE-12** Coverage floor per package. Unit run 2026-10-01: conditions 100,

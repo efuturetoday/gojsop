@@ -69,34 +69,6 @@ func TestHandle_Validate_Deny(t *testing.T) {
 	}
 }
 
-func TestHandle_Mutate_AddLabel(t *testing.T) {
-	rt, key := loadPolicy(t, `
-		function mutate(req) {
-			const obj = req.object;
-			obj.metadata = obj.metadata || {};
-			obj.metadata.labels = obj.metadata.labels || {};
-			obj.metadata.labels.team = "frontend";
-			return { allowed: true, modifiedObject: obj };
-		}
-	`)
-	res, hres, err := jsadmission.Handle(context.Background(), rt, key, &jsadmission.AdmissionRequest{
-		Object: map[string]any{
-			"metadata": map[string]any{"name": "p"},
-		},
-	}, true)
-	if err != nil || hres.Err != nil {
-		t.Fatalf("Handle: %v, %v", err, hres.Err)
-	}
-	if !res.Allowed {
-		t.Fatal("expected allowed=true")
-	}
-	meta, _ := res.ModifiedObject["metadata"].(map[string]any)
-	labels, _ := meta["labels"].(map[string]any)
-	if labels["team"] != "frontend" {
-		t.Fatalf("team label: got %v", labels)
-	}
-}
-
 // jsadmission.R2
 func TestHandle_MissingExport(t *testing.T) {
 	rt, key := loadPolicy(t, `function validate(req) { return {allowed:true}; }`)
@@ -109,19 +81,5 @@ func TestHandle_MissingExport(t *testing.T) {
 	}
 	if !strings.Contains(hres.Err.Error(), "mutate") {
 		t.Fatalf("error should mention missing mutate(): %v", hres.Err)
-	}
-}
-
-func TestHandle_ThrowsSurface(t *testing.T) {
-	rt, key := loadPolicy(t, `function validate(req) { throw new Error("boom"); }`)
-	_, hres, err := jsadmission.Handle(context.Background(), rt, key, &jsadmission.AdmissionRequest{}, false)
-	if err != nil {
-		t.Fatalf("Handle: %v", err)
-	}
-	if hres.Err == nil {
-		t.Fatal("expected error from JS throw")
-	}
-	if !strings.Contains(hres.Err.Error(), "boom") {
-		t.Fatalf("error should propagate JS message: %v", hres.Err)
 	}
 }

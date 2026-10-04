@@ -54,10 +54,8 @@ in `State.Recoveries`) comes only from `Ensure`, with one of three reasons:
 source changed, limits changed or manual. The CRD enum of the reason lists
 exactly these three. The manual restart annotation reaches the port as
 `Spec.ResetToken`: a new value prepares again like a changed source, with
-reason manual. No `Restart` exists on the port. Per-script data that a
-controller needs (for example the parsed JSHook config) is computed in a
-`PostBuildHook` and stored in `State.Meta`. The same hook checks required
-exports. The hook sees the new script only as a `jsrun.Script`, never as a VM;
+reason manual. No `Restart` exists on the port. A controller checks required exports in a `PostBuildHook`; per-script data
+it returns lands in `State.Meta` (no caller uses it today, REG-10). The hook sees the new script only as a `jsrun.Script`, never as a VM;
 it runs on the VM the snapshot was taken from, after the snapshot, so what it
 changes does not reach the calls.
 
@@ -97,7 +95,7 @@ bounds the memory all running calls take together.
   Gate: `TestRegistry_RestartOnSourceChange`.
 - **R4** Prepare a script again from the `jsrun.Spec` handed to `Ensure` when `Spec.ResetToken` changes, with reason manual.
   Why: the manual restart annotation is a token, not a call; the port has no `Restart`.
-  Gate: `TestRegistry_Ensure_ResetTokenRebuildsFromCachedSpec`, `TestRegistry_Ensure_ResetTokenRebuildsAsManual`.
+  Gate: `TestRegistry_Ensure_ResetTokenRebuildsFromCachedSpec`, `TestRegistry_Ensure_ResetTokenRebuildsAsManual`, `TestReconcile_ManualRestart_BuildsInBackgroundOnce`.
 - **R5** Keep one prepared script per key across reconciles while the spec is unchanged, and start every call from its snapshot: the state right after the top-level code ran. Nothing a call changes reaches the next call.
   Why: preparing (module load, top-level code) costs milliseconds and is done once; calls must not see each other's state, so a failed or hostile call cannot poison the next (js-execution.R16).
   Gate: `TestRegistry_EveryCallStartsFromSnapshot`.
@@ -113,13 +111,13 @@ bounds the memory all running calls take together.
 - **R9** Touch `Prepared.Snapshot` only inside `internal/jsregistry`; callers see only `jsrun.State`.
   Why: the field is exported for tests, but restoring VMs is the registry's job. Callers cannot reach it, because they may not import the registry (js-execution.R10). Tests and `cmd` may.
   Gate: `TestImportBoundary_CallersUseOnlyRunnerPort`.
-- **R10** Cache per-VM data in `State.Meta` through `PostBuildHook`, not by calling the VM from a reconcile.
+- **R10** Cache per-script data in `State.Meta` through `PostBuildHook`, never by calling the script from a reconcile.
   Why: reconciles must not run user JavaScript outside the build.
   Gate: review only — a convention about where state lives.
 - **R11** Record every preparation after the first with its reason in `State.Recoveries` (the per-reason counters and the history ring).
   Why: operators need to see why a script was prepared again; the controllers map `Recoveries` onto the CRD status fields.
   Gate: `TestRegistry_RecoveryHistory_RingAndCounters`.
-- **R12** Rebuild a VM when `Ensure` gets other effective limits, even with an unchanged source hash.
+- **R12** Prepare a script again when `Ensure` gets other effective limits, even with an unchanged source hash.
   Why: a changed `spec.limits` must take effect; zero fields count as the defaults, so an explicit default is no change. The restart reason is `limits-changed`.
   Gate: `TestRegistry_Ensure_RebuildsOnLimitsChange`.
 - **R13** Bound every build by the timeout limit of its spec.
@@ -156,12 +154,12 @@ bounds the memory all running calls take together.
 
 ## Decisions
 
-- **A build runs user JavaScript under a per-key lock and never under the registry lock.** Status: accepted (carried over from the block, no date or name recorded).
-  Why: a slow build of one key must not block other keys. Not taken: not recorded anywhere.
-- **`Runner.Invoke` (`Registry.Call` in the adapter) is the one place for the call semaphore, panic recovery and outcome classification.** Status: accepted (carried over from the block, no date or name recorded).
-  Why: callers must not each carry their own copy. Not taken: not recorded anywhere.
-- **The registry caches the whole `jsrun.Spec` and never loads sources.** Status: accepted (carried over from the block, no date or name recorded).
-  Why: the registry stays independent of source loading. Not taken: not recorded anywhere.
+- **A build runs user JavaScript under a per-key lock and never under the registry lock.** Status: accepted.
+  Why: a slow build of one key must not block other keys.
+- **`Runner.Invoke` (`Registry.Call` in the adapter) is the one place for the call semaphore, panic recovery and outcome classification.** Status: accepted.
+  Why: callers must not each carry their own copy.
+- **The registry caches the whole `jsrun.Spec` and never loads sources.** Status: accepted.
+  Why: the registry stays independent of source loading.
 
 - **Builds run asynchronously; a newer build cancels a running one.** Status: proposed.
   Why: a build runs user JavaScript that may hang; a reconcile or call that waits for it stalls other hooks, and a stuck build blocks the fix. Every key is in one phase, Ready, Preparing or Failed, and `Scripts.Ensure` reports it without waiting.
@@ -185,4 +183,4 @@ bounds the memory all running calls take together.
 
 ## Open
 
-Tracked in [backlog](../backlog.md): REG-3.
+Tracked in [backlog](../backlog.md): REG-3, REG-10.

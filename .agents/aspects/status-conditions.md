@@ -86,12 +86,12 @@ Add a new failure cause to status:
   Why: the removed fields lied about what the controller knew; a time written
   on every success would change status on every reconcile and trigger the next.
   Gate: `TestReconcileSucceeded_ClearsErrorOnceThenKeepsStatus`, `integration.TestControllers` (the JSHook fail-then-fix case).
-- **R7** Report a JS instance that is not Ready as `Ready=False` with reason `Building` while the build runs and `BuildFailed`, with the build error as message, after it failed. Never wait for the build, and requeue a failed build only after the registry's backoff.
+- **R7** Report a script that is not ready as `Ready=False` with reason `Building` while the build runs and `BuildFailed`, with the build error as message, after it failed. Never wait for the build, and requeue a failed build only after the registry's backoff.
   Why: users must tell a slow or hanging build from a rejected spec, and a failing build must not be retried in a tight loop.
   Gate: `TestReconcile_HangingBuildDoesNotBlockOtherHook`, `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce`, `TestReconcile_BuildStates_ShowBuildingThenBuildFailed`.
-- **R6** Declare no CRD field that is neither implemented nor surfaced in
-  status. This is a candidate project rule, not yet enforced.
-  Why: not recorded.
+- **R6** (withdrawn) Declare no CRD field that is neither implemented nor
+  surfaced in status.
+  Why: it repeated api-design.R6, which now holds it.
   Gate: missing → GATE-10.
 
 ## Decisions

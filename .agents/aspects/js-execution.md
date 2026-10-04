@@ -113,7 +113,7 @@ stays at tens of microseconds, a timeout costs its deadline).
   Gate: `TestDispatcher_Timeout_CancelsWarnsAndKeepsVM`, `TestRegistry_Invoke_EveryOutcomeGetsAFreshInstance`. The build deadline: `TestRegistry_Ensure_HangingBuildDoesNotBlockOtherKeys`.
 - **R4** Classify engine errors with `errors.Is` against `jsengine.ErrCancelled` and `jsengine.ErrOOM`, and with `errors.As` against `*jsengine.JSError` (a script exception) and `*jsengine.TrapError` (a failure of the module; the registry reports it as a panic). Never read error text. Only the C glue reads exception text, once, to tell an out-of-memory error from other exceptions.
   Why: the status codes of the ABI are the contract; message wording is not.
-  Gate: `TestMemoryLimit_Honoured`, `TestCallExport_Deadline_IsErrCancelledAndVMStaysUsable`, `TestEval_Deadline_IsErrCancelled`, `TestHost_PanicIsTrapAndBreaksVM`, `TestRegistry_Invoke_ClassifiesOutcomes`.
+  Gate: `TestMemoryLimit_Honoured`, `TestCallExport_Deadline_IsErrCancelledAndVMStaysUsable`, `TestEval_Deadline_IsErrCancelled`, `TestHost_PanicIsTrapAndBreaksVM`, `TestRegistry_Invoke_ClassifiesOutcomes`, `TestStackOverflow_IsScriptErrorNotTrap`.
 - **R5** Every VM has a memory limit: `JS_SetMemoryLimit` from `spec.limits.memoryMB` for the QuickJS heap, and the wazero option `WithMemoryLimitPages` as one process-wide hard cap (`jsengine.MaxMemoryMB` plus headroom) below which the per-VM limit works. A script that hits the limit gets `ErrOOM`, and the VM stays usable.
   Why: one script must not exhaust the memory of the operator.
   Gate: `TestMemoryLimit_Honoured`, `TestMemoryLimit_GrowingHeapEndsInErrOOM`, `TestDefaultLimits_MatchKubebuilderTags`.
@@ -123,7 +123,7 @@ stays at tens of microseconds, a timeout costs its deadline).
   Gate: `TestSharedFactory_ForAdmission_ReadOnlySurface`, `TestReadOnlyKubeHost_ScriptSeesOnlyGetAndList`.
 - **R7** Use a VM in one call only: restore it from the snapshot, run one export, close it when the call ends. Never close a VM while a call on it runs.
   Why: a VM instance is not goroutine-safe, and closing during a call races inside wazero.
-  Gate: `TestSnapshot_ConcurrentRestores`, `TestRegistry_Concurrent_CallsBuildsAndDrop`.
+  Gate: `TestSnapshot_ConcurrentRestores`, `TestRegistry_Concurrent_CallsBuildsAndDrop`, `TestClose_Idempotent_CallsAfterCloseFail`.
 - **R8** Never share one VM between two resources.
   Why: isolation between scripts depends on it.
   Gate: `TestVMs_AreIsolated`, `TestRegistry_SameNameInBothKindsCoexists`.
@@ -136,7 +136,7 @@ stays at tens of microseconds, a timeout costs its deadline).
   Gate: `TestImportBoundary_CallersUseOnlyRunnerPort`, `TestImportBoundary_DataPathUsesOnlyRunnerSide`.
 - **R11** Give a script host functions only through `jsengine.Host.Func`, which crosses into wasm through the one import `env.host_call(name, json) -> json`. The Go function gets the context of the running call and JSON in and out; an error becomes a catchable exception with its message; a name that was not registered does not exist for the script, and the import itself is not reachable from it.
   Why: one narrow border to audit; a call that reaches the cluster (`kube.*`) ends with the deadline of the call (kube-access.R5); the read-only admission surface is just "not registered".
-  Gate: `TestHost_CallsGoWithJSONAndReturnsJSON`, `TestHost_ErrorBecomesCatchableException`, `TestHost_OnlyRegisteredNamesExist`, `TestHost_FuncSeesCallContext`, `TestHost_DeadlineAfterCaughtHostError`.
+  Gate: `TestHost_CallsGoWithJSONAndReturnsJSON`, `TestHost_ErrorBecomesCatchableException`, `TestHost_OnlyRegisteredNamesExist`, `TestHost_FuncSeesCallContext`, `TestHost_DeadlineAfterCaughtHostError`, `TestBindHost_TwiceFails_BadNameFails`.
 - **R12** Offer the operator flag `--engine-cache-dir` for the wazero compilation cache. Empty (the default) keeps the compiled machine code in memory; a directory keeps it across restarts, so the first VM after a start takes about 15 ms instead of about 320 ms. Point it at a directory only the operator can write (for example an `emptyDir`): wazero runs the machine code it finds there. `cmd` compiles the engine at start-up (`jsregistry.ConfigureEngine`), so a bad directory stops the operator at once.
   Why: a restart of the operator rebuilds every VM; the compile of 1 MB of wasm would delay the first one.
   Gate: `TestFlags_EngineCacheDir_DefaultsToInMemory`, `TestCompilationCache_DirIsFilledAndReused`.
@@ -151,10 +151,10 @@ stays at tens of microseconds, a timeout costs its deadline).
   Gate: `TestScriptError_CarriesMessageStackFileLine`, `TestScriptError_NonErrorThrow`.
 - **R16** Restore a VM only through `jsengine.Snapshot.NewVM` from a snapshot that `jsengine.VM.Snapshot` took: a new instance without its start function, memory grown to the size of the snapshot, only the pages that differ from a fresh instance written back, the host binder and the limits of the snapshot set again, then `gj_update_stack_top` and `gj_reseed` with a new random seed. `Math.random` is our own xorshift64* in `glue.c`, seeded per VM.
   Why: a restore must cost a fraction of a millisecond and the same memory must not repeat in every snapshot (a sparse snapshot of a small policy is tens of KB, not the whole heap); without a reseed every call of a script would see the same random numbers. The QuickJS atom hash seed stays the one of the snapshot, which only shapes hash tables.
-  Gate: `TestSnapshot_EveryVMStartsFromTheSameState`, `TestSnapshot_KeepsLimitsAndHost`, `TestSnapshot_ReseedsMathRandom`, `TestSnapshot_ConcurrentRestores`, `TestSnapshot_IsSparse`; the cost guard is `BenchmarkSnapshot_Shot`.
+  Gate: `TestSnapshot_EveryVMStartsFromTheSameState`, `TestSnapshot_KeepsLimitsAndHost`, `TestSnapshot_ReseedsMathRandom`, `TestSnapshot_ConcurrentRestores`, `TestSnapshot_IsSparse`, `TestClockAndRandom_AreReal`; the cost guard is `BenchmarkSnapshot_Shot`.
 - **R17** Every VM gets `globalThis.console` (`log`, `info`, `debug`, `warn`, `error`), bound by `jslog.Binder` next to the `kube` surface. The lines go to the `jslog.Sink` in the context of the running call, so one prepared script serves calls of different callers. A call whose caller installed no sink drops the lines and runs on. Callers send every line to the operator log at `V(1)`; `warn` and `error` also become an Event with reason `ScriptMessage` on the hook or policy that wrote them, capped at `jslog.MaxTextBytes` per line and `jslog.MaxVisibleEvents` per call. That Message is the one exception to the low-cardinality rule for Event messages (status-conditions): it is written by the author of the script, for the person who deployed it.
   Why: without it a script has no voice at all — the only other globals are `kube.*`, so an author can neither trace their own code nor explain a failure to the person who deployed the hook, who usually cannot read the operator log.
-  Gate: `TestConsole_EveryLevelReachesTheSink`, `TestConsole_JoinsEveryArgument`, `TestConsole_LogsAnErrorReadably`, `TestConsole_CapsOneLine`, `TestConsole_WithoutSink_DoesNotFailTheScript`, `TestConsole_RawHostFunctionIsHidden`, `TestSharedFactory_BothSurfaces_BindTheConsole`; the routing to log and Event: `TestDispatcher_ConsoleWarning_BecomesAnEvent`.
+  Gate: `TestConsole_EveryLevelReachesTheSink`, `TestConsole_JoinsEveryArgument`, `TestConsole_LogsAnErrorReadably`, `TestConsole_CapsOneLine`, `TestConsole_WithoutSink_DoesNotFailTheScript`, `TestConsole_RawHostFunctionIsHidden`, `TestSharedFactory_BothSurfaces_BindTheConsole`; the routing to log and Event: `TestDispatcher_ConsoleWarning_BecomesAnEvent`, `TestDispatcher_ConsoleEventsAreCappedPerCall`.
 - **R18** An entry point is a function that is a property of `globalThis`.
   `gj_has_export` and `gj_call` in `glue.c` read it off the global object and
   look nowhere else. `function handle() {}`, `var handle = ...` and
@@ -168,6 +168,12 @@ stays at tens of microseconds, a timeout costs its deadline).
   registration call for bundled code) is a decision someone takes on purpose
   — see EXEC-11.
   Gate: `TestEntrypoint_IsAPropertyOfGlobalThis`.
+- **R19** Pass values between Go and a script as JSON, unchanged: Unicode and
+  large payloads arrive intact, and an export that returns `undefined` leaves
+  the Go result untouched.
+  Why: a hook or policy must see the object the apiserver sent, byte for byte,
+  and an author must not have to return something to say "nothing".
+  Gate: `TestInvoke_DecodesJSONAndLeavesOutOnUndefined`, `TestInvoke_Unicode_LargePayloadsRoundTrip`.
 
 ## Decisions
 

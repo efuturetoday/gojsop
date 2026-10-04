@@ -154,6 +154,7 @@ func TestServer_Mutate_AddsLabel_AsJSONPatch(t *testing.T) {
 	}
 }
 
+// jsadmission.R1
 func TestServer_UnknownPolicy_Returns404(t *testing.T) {
 	srv := NewServer(jsregistry.NewRegistry(), logr.Log)
 	r := httptest.NewRequest(http.MethodPost, PathFor(types.NamespacedName{Namespace: "default", Name: "ghost"}, false), bytes.NewReader([]byte(`{}`)))
@@ -177,6 +178,8 @@ func captureEvents(buf int) (chan [2]string, EventEmitter) {
 // TestServer_Emits_ReviewFailed_OnJSThrow asserts that when validate() throws
 // a regular JS Error, the server publishes ReviewFailed with the static
 // message — never the JS error string (which would defeat dedup at scale).
+//
+// jsadmission.R21
 func TestServer_Emits_ReviewFailed_OnJSThrow(t *testing.T) {
 	key := types.NamespacedName{Namespace: "default", Name: "policy-evt-fail"}
 	reg := loadPolicy(t, `function validate(req){ throw new Error("very specific message"); }`, key)
@@ -357,22 +360,6 @@ func TestServer_Validate_IgnoresModifiedObject(t *testing.T) {
 	}
 	if resp.Patch != nil || resp.PatchType != nil {
 		t.Fatalf("validating policy produced a patch: %s (%v)", resp.Patch, resp.PatchType)
-	}
-}
-
-func TestPathFor_RoundTrip(t *testing.T) {
-	cases := []types.NamespacedName{
-		{Namespace: "default", Name: "p"},
-		{Namespace: "", Name: "cluster-policy"},
-	}
-	for _, k := range cases {
-		got, ok := keyFromPath(PathFor(k, false), PathPrefixValidate)
-		if !ok {
-			t.Fatalf("parse failed for %v", k)
-		}
-		if got != k {
-			t.Fatalf("roundtrip: %v != %v", got, k)
-		}
 	}
 }
 
