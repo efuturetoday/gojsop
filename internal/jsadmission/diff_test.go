@@ -15,7 +15,7 @@ func TestCreatePatch_NoChange(t *testing.T) {
 	}
 }
 
-// jsadmission.R6
+// jsadmission.R24
 func TestCreatePatch_FiltersImmutable(t *testing.T) {
 	original := []byte(`{"metadata":{"name":"p","uid":"abc","creationTimestamp":"2026-05-07T00:00:00Z"},"status":{"phase":"Pending"}}`)
 	modified := map[string]any{

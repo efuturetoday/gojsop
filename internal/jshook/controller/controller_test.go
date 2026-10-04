@@ -166,7 +166,7 @@ func TestReconcile_HangingBuildDoesNotBlockOtherHook(t *testing.T) {
 // A broken hook requeues after the backoff from the reconciler's flag values;
 // a source change rebuilds at once, without waiting for it.
 //
-// jshook.R18
+// jshook.R24
 // js-registry.R17
 // status-conditions.R7
 func TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce(t *testing.T) {

@@ -103,7 +103,7 @@ Words used here:
 - **Steps**:
   1. gojsop prepares the new script in the background; the hook shows `Ready=False`, reason `Building`.
   2. Events wait and reach the new script once it is ready.
-- **Exceptions**: a script that fails to prepare shows `BuildFailed` and is retried with backoff; a new source is tried at once (jshook.R18, jshook.R19).
+- **Exceptions**: a script that fails to prepare shows `BuildFailed` and is retried with backoff; a new source is tried at once (jshook.R18, jshook.R19, jshook.R24).
 - **Result**: the hook runs the new script, and no event is lost.
 
 ## Rules
@@ -122,17 +122,19 @@ Words used here:
 | jshook.R10 | A throwing `handle()` records a Warning event, and the event is retried with backoff. | decision "retry without cap" | `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
 | jshook.R11 | A call that runs past `timeoutSeconds` is stopped, records a Warning event and is retried. | js-execution.R3 | `TestDispatcher_Timeout_CancelsWarnsAndKeepsVM` |
 | jshook.R12 | A call that hits the memory limit or crashes the engine is retried. The memory limit records a Warning event. | js-registry.R2 | `TestDispatcher_MemoryLimit_WarnsKeepsVMAndRetries`, `TestDispatcher_PanicInHandle_RetriesOnFreshVM` |
-| jshook.R13 | A retry never overwrites a newer state of the same object; success ends the retries. | decision "retry without cap" | `TestDispatcher_RetryKeepsFresherStateOfSameObject`, `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
+| jshook.R13 | A retry never overwrites a newer state of the same object. | decision "retry without cap" | `TestDispatcher_RetryKeepsFresherStateOfSameObject` |
 | jshook.R14 | A deleted hook gets no more calls. | `Dispatcher.Drop` | `TestDispatcher_Drop_NoMoreEvents` |
 | jshook.R15 | `objectSelector` and `namespaceSelector` filter objects in every `LabelSelector` form, `matchExpressions` included. | `corev1alpha1.ObjectMatch` | `TestControllers` |
 | jshook.R16 | Every field of a binding takes effect; none is accepted and then ignored. | api-design.R6 | `TestSummarizeBindings_ListsEveryWatchedResource` |
 | jshook.R17 | A hook whose watch cannot start does not delay other hooks; deleting it ends the wait. | decision "per-hook lock" | `TestDispatcher_SlowSync_DoesNotBlockOtherHooks` |
-| jshook.R18 | While a new script is prepared the hook is `Ready=False`, reason `Building`; after a failed prepare `BuildFailed`, retried with backoff. A new source is tried at once. | status-conditions.R7 | `TestReconcile_HangingBuildDoesNotBlockOtherHook`, `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce` |
+| jshook.R18 | While a new script is prepared the hook is `Ready=False`, reason `Building`. | status-conditions.R7 | `TestReconcile_HangingBuildDoesNotBlockOtherHook` |
 | jshook.R19 | Events that arrive while no script is ready wait and reach the script once it is ready; none is dropped. | js-registry.R19 | `TestDispatcher_NoVM_KeepsEventsAndDeliversAfterBuild` |
 | jshook.R20 | A binding that cannot be resolved fails the reconcile, and the hook keeps the watches it had. | decision "reject before touching watches" | `TestPlanWatches_BadBindingKeepsExistingWatches` |
 | jshook.R21 | A binding names a concrete apiGroup, apiVersion and resource. `*`, a resource the cluster does not serve and a resource two bindings share are rejected. | decision "no wildcards", api-design.R10 | `TestPlanWatches_RejectsWildcardUnknownAndDuplicate` |
 | jshook.R22 | `namespaceSelector` matches the labels of the object's namespace. A cluster-scoped object matches only when there is no `namespaceSelector`. | Kubernetes webhook semantics | `TestControllers` |
 | jshook.R23 | `status.bindings` has one entry `name:group/version/resource` per watched resource, and each entry is a running watch. | `summarizeBindings` | `TestSummarizeBindings_ListsEveryWatchedResource` |
+| jshook.R24 | A script that fails to prepare shows `BuildFailed` and is retried with backoff; a new source is tried at once. | status-conditions.R7, js-registry.R17 | `TestReconcile_BrokenBuild_BacksOffAndSourceChangeRebuildsAtOnce` |
+| jshook.R25 | A successful call ends the retries of its event. | decision "retry without cap" | `TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart` |
 
 Every rule is held by a test or is `missing → <KEY>`.
 

@@ -297,6 +297,7 @@ func TestServer_PassesEveryRequestFieldToScript(t *testing.T) {
 // which a plain deny never does).
 //
 // jsadmission.R4
+// jsadmission.R23
 func TestServer_MissingAllowedDenies_NullOrUndefinedFails(t *testing.T) {
 	t.Run("omitted allowed denies", func(t *testing.T) {
 		key := types.NamespacedName{Namespace: "default", Name: "policy-no-allowed"}

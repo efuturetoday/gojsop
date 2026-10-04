@@ -113,6 +113,7 @@ func TestReconcile_RegistrarSyncFailure_ShowsReadyFalse(t *testing.T) {
 // BuildFailed; no reconcile waits for the build.
 //
 // jsadmission.R18
+// jsadmission.R22
 // js-registry.R15
 // status-conditions.R7
 func TestReconcile_BuildStates_ShowBuildingThenBuildFailed(t *testing.T) {

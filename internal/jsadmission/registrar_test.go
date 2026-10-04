@@ -158,7 +158,7 @@ func TestRegistrar_Update_OverwritesEntry(t *testing.T) {
 var _ = metav1.ObjectMeta{}
 var _ = time.Second
 
-// jsadmission.R17
+// jsadmission.R25
 func TestRegistrar_SyncFailure_IsRetriedAndReported(t *testing.T) {
 	r, c := newFakeRegistrar(t)
 	fails := 2

@@ -429,7 +429,7 @@ function handle(c) { waitGate(); record(c[0]); }`
 }
 
 // jshook.R10
-// jshook.R13
+// jshook.R25
 func TestDispatcher_ThrowingHandle_WarnsRetriesWithoutRestart(t *testing.T) {
 	const src = `
 function handle(c) {

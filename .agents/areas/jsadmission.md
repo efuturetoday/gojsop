@@ -51,7 +51,7 @@ Words used here:
   1. A user creates or updates a matching object.
   2. The script changes `req.object` and returns `{allowed: true, modifiedObject}`.
   3. gojsop sends the difference as a JSON patch; the apiserver applies it.
-- **Exceptions**: server-managed fields are dropped from the patch (jsadmission.R6); a patch that cannot be computed admits with a warning (jsadmission.R8); a failed call follows `failurePolicy` (jsadmission.R9).
+- **Exceptions**: server-managed fields are dropped from the patch (jsadmission.R24); a patch that cannot be computed admits with a warning (jsadmission.R8); a failed call follows `failurePolicy` (jsadmission.R9).
 - **Result**: the stored object carries the change.
 
 ### jsadmission.UC3 Decide with the context of the request
@@ -73,7 +73,7 @@ Words used here:
 - **Steps**:
   1. With `Ignore` the request is admitted with a warning; otherwise it is denied with code 500.
   2. The next request starts from the prepared script; nothing is prepared again (jsadmission.R12).
-- **Exceptions**: while a new script is prepared, `failurePolicy` decides every request at once (jsadmission.R19), and the policy shows `Ready=False` (jsadmission.R18).
+- **Exceptions**: while a new script is prepared, `failurePolicy` decides every request at once (jsadmission.R19), and the policy shows `Ready=False` (jsadmission.R18, jsadmission.R22).
 - **Result**: the author gets the availability or the enforcement they chose.
 
 ### jsadmission.UC5 Change or remove a policy
@@ -92,9 +92,9 @@ Words used here:
 | jsadmission.R1 | Only requests that match `rules`, selectors and `matchPolicy` reach the script. A change or a deletion takes effect at once. | `JSAdmissionSpec` | `TestRegistrar_Update_OverwritesEntry`, `TestRegistrar_RemoveLastEntry_DeletesConfig`, `TestRegistrar_MixedValidatingAndMutating`, `TestRegistrar_TwoValidating_OneVWC_TwoEntries`, `TestServer_UnknownPolicy_Returns404` |
 | jsadmission.R2 | A validating policy calls `validate(req)`, a mutating one `mutate(req)`. A missing function is a failed call. | `jsadmission.Handle` | `TestHandle_Validate_Allow`, `TestHandle_MissingExport` |
 | jsadmission.R3 | `req` has `uid`, `kind`, `resource`, `subResource`, `name`, `namespace`, `operation`, `userInfo`, `object`, `oldObject` and `dryRun`; `object` and `oldObject` are objects, not strings. | `jsadmission.AdmissionRequest` | `TestServer_PassesEveryRequestFieldToScript` |
-| jsadmission.R4 | A result without `allowed` denies. `undefined` or `null` is a failed call. | `jsadmission.AdmissionResult` | `TestServer_MissingAllowedDenies_NullOrUndefinedFails` |
+| jsadmission.R4 | A result without `allowed` denies. | `jsadmission.AdmissionResult` | `TestServer_MissingAllowedDenies_NullOrUndefinedFails` |
 | jsadmission.R5 | `message`, `code` and `warnings` reach the apiserver. | admission.k8s.io/v1 | `TestHandle_Validate_Deny` |
-| jsadmission.R6 | A mutating policy's `modifiedObject` becomes a JSON patch. Server-managed fields and `/status` are never patched. | `jsadmission.CreatePatch` | `TestCreatePatch_FiltersImmutable`, `TestCreatePatch_NoChange`, `TestServer_Mutate_AddsLabel_AsJSONPatch` |
+| jsadmission.R6 | A mutating policy's `modifiedObject` becomes a JSON patch of the difference; no difference, no patch. | `jsadmission.CreatePatch` | `TestCreatePatch_NoChange`, `TestServer_Mutate_AddsLabel_AsJSONPatch` |
 | jsadmission.R7 | A validating policy's `modifiedObject` is ignored. | `jsadmission.AdmissionResult` | `TestServer_Validate_IgnoresModifiedObject` |
 | jsadmission.R8 | A patch that cannot be computed admits the request with a warning. | `fillResponse`; reason open in ADM-8 | missing → ADM-8 |
 | jsadmission.R9 | A failed call follows `failurePolicy`: `Ignore` admits with a warning, anything else denies with code 500. | `JSAdmissionSpec.FailurePolicy` | `TestServer_Validate_FailurePolicy_Fail_OnJSThrow`, `TestServer_Validate_FailurePolicy_Ignore_OnJSThrow` |
@@ -105,11 +105,15 @@ Words used here:
 | jsadmission.R14 | Every response carries the UID of its request. | admission.k8s.io/v1 | `TestServer_Validate_AllowedRoundtrip` |
 | jsadmission.R15 | Requests in the operator's own namespace never reach a policy. | `excludeNamespaces` in `cmd`; extent open in ADM-6 | missing → ADM-6 |
 | jsadmission.R16 | A denial carries no patch. | admission.k8s.io/v1 | `TestServer_Mutate_Denied_HasNoPatch` |
-| jsadmission.R17 | When gojsop cannot write the webhook configurations, the policy is `Ready=False`, reason `WebhookSyncFailed`, and gojsop retries until it succeeds. | status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse`, `TestRegistrar_SyncFailure_IsRetriedAndReported` |
-| jsadmission.R18 | While a new script is prepared the policy is `Ready=False`, reason `Building`; after a failed prepare `BuildFailed`, retried with backoff. A new source is tried at once. | status-conditions.R7 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
+| jsadmission.R17 | When gojsop cannot write the webhook configurations, the policy is `Ready=False`, reason `WebhookSyncFailed`. | status-conditions.R1 | `TestReconcile_RegistrarSyncFailure_ShowsReadyFalse` |
+| jsadmission.R18 | While a new script is prepared the policy is `Ready=False`, reason `Building`. | status-conditions.R7 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
 | jsadmission.R19 | While no script is ready, `failurePolicy` decides every request at once; no request waits for the prepare. | js-registry.R19 | `TestServer_NoVM_AppliesFailurePolicyAtOnce` |
 | jsadmission.R20 | Every operator replica answers every policy, also before and without leader election. | decision "replicated admission path" | `TestJSAdmissionServerReconciler_EveryReplicaAnswers`, `TestJSAdmissionServerReconciler_DeletionUnregisters`, `TestServerController_IsNotLeaderElected`; with `replicas: 2` missing → GATE-28 |
 | jsadmission.R21 | A failed call records a Warning event `ReviewFailed` on the policy, with a fixed message that never carries the script's error text. | status-conditions.R3 | `TestServer_Emits_ReviewFailed_OnJSThrow` |
+| jsadmission.R22 | A script that fails to prepare shows `BuildFailed` and is retried with backoff; a new source is tried at once. | status-conditions.R7, js-registry.R17 | `TestReconcile_BuildStates_ShowBuildingThenBuildFailed` |
+| jsadmission.R23 | A result of `undefined` or `null` is a failed call. | `jsadmission.Handle` | `TestServer_MissingAllowedDenies_NullOrUndefinedFails` |
+| jsadmission.R24 | Server-managed fields and `/status` are never in the patch. | admission.k8s.io/v1 | `TestCreatePatch_FiltersImmutable` |
+| jsadmission.R25 | gojsop retries writing the webhook configurations until it succeeds. | `jsadmission.Registrar` | `TestRegistrar_SyncFailure_IsRetriedAndReported` |
 
 ## Aspects
 
