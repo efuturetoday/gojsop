@@ -90,7 +90,9 @@ Adding a kind:
   Why: the tests create and delete cluster resources.
   Gate: `make test-e2e`.
 - **R5** Never edit generated files: `zz_generated.*.go`, `config/crd/bases`,
-  `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`.
+  `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`,
+  `dist/chart/templates/` (the Helm plugin regenerates them from `config/`;
+  `Chart.yaml` and `values.yaml` are kept by hand).
   Why: the next regeneration overwrites the edit.
   Gate: missing → GATE-14.
 - **R6** Never delete `// +kubebuilder:scaffold:*` comments.
@@ -105,8 +107,21 @@ Adding a kind:
 - **Controllers live next to their domain code, not in `internal/controller/`.**
   Status: accepted (reason not recorded).
   Why: not recorded. Not taken: the Kubebuilder default layout.
-- **The distribution path (Kustomize bundle or Helm chart) is not chosen.**
-  Status: proposed (OPS-4).
+- **Distribute a Helm chart and an `install.yaml`, both built from `config/`; release with release-please.**
+  Status: accepted (2026-10, OPS-4). Why: Helm is what most clusters install
+  with, `install.yaml` serves the rest, and generating both from the one
+  Kustomize tree keeps them equal. The chart comes from Kubebuilder's
+  `helm/v2-alpha` plugin into `dist/chart`; release-please turns the
+  conventional commits into versions and bumps the image tag in
+  `config/manager`, `Chart.yaml` and `values.yaml`. The image, the chart
+  (`oci://ghcr.io/efuturetoday/charts/gojsop`) and `install.yaml` are
+  published by `.github/workflows/release.yml`.
+  Not taken: a hand-written chart, because it drifts from `config/`.
+- **A namespaced Role is written by hand (`config/rbac/manager_namespace_role.yaml`), not by an RBAC marker.**
+  Status: accepted (2026-10). Why: controller-gen names a generated Role
+  like the ClusterRole (`manager-role`), and the Helm plugin keys files on
+  that name, so one overwrote the other and the chart lost the operator's
+  right to impersonate the ServiceAccounts of hooks.
 
 ## Open
 

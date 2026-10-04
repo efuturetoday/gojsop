@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gojsop
+description: Run JavaScript in your cluster - JSHook reacts to changes, JSAdmission decides on requests
+type: application
+version: 0.0.0 # x-release-please-version
+appVersion: "0.0.0" # x-release-please-version

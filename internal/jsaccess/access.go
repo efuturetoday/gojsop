@@ -119,7 +119,9 @@ type Manager struct {
 	clients map[string]dynamic.Interface
 }
 
-// +kubebuilder:rbac:groups="",namespace=system,resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete;impersonate
+// The operator manages and impersonates ServiceAccounts in its own namespace
+// only: config/rbac/manager_namespace_role.yaml (a Role, not generated, so
+// it does not share the name of the generated ClusterRole).
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete;escalate;bind
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 

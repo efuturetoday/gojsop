@@ -158,7 +158,9 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
   (`fail` in both controllers). A bad source URL and a transient API error get
   the same retry. Build failures already back off exponentially. Done when
   these paths back off too.
-- **OPS-4** `gap` No release process. No tags, no versioned image.
+- **OPS-4** `gap` Release process built (release-please, image, Helm chart,
+  `install.yaml`; kubebuilder-scaffold Decisions) but no release published
+  yet. Done when v0.1.0 is out and installs from the chart.
 - **OPS-5** `decision` Tracing. scrippy exported OpenTelemetry traces per
   hook call. Decide whether gojsop traces calls, and how that relates to
   events and metrics (OPS-1). Done when decided and recorded in an aspect.

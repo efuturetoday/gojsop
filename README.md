@@ -15,29 +15,59 @@ no cgo; each script gets its own sandbox with a memory limit and a timeout.
 > **Status: alpha.** The API is `core.gojsop.io/v1alpha1` and may still change
 > in incompatible ways. See [Known limitations](#known-limitations).
 
-## Quick start
+## Install
 
-You need a Kubernetes cluster, `kubectl`, Docker and Go 1.25+.
+You need a Kubernetes cluster with [cert-manager](https://cert-manager.io),
+which issues the webhook certificate:
 
 ```sh
-# 1. cert-manager issues the webhook certificate
-make install-certmanager
+helm repo add jetstack https://charts.jetstack.io
+helm install cert-manager jetstack/cert-manager \
+  --namespace cert-manager --create-namespace --set crds.enabled=true --wait
+```
 
-# 2. build the image and push it where the cluster can pull it
-make docker-build docker-push IMG=<registry>/gojsop:dev
+Then install gojsop from its Helm chart, `<version>` being a
+[release](https://github.com/efuturetoday/gojsop/releases) without the `v`:
 
-# 3. install CRDs, RBAC and the operator into gojsop-system
-make deploy IMG=<registry>/gojsop:dev
+```sh
+helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop --version <version> \
+  --namespace gojsop-system --create-namespace --wait
+```
 
-# 4. try the samples: a ConfigMap sync hook and two pod policies
+Without Helm, apply the `install.yaml` attached to the release:
+`kubectl apply -f install.yaml`.
+
+> **The repository is private for now**, and so are the image and the chart.
+> Log in first with a GitHub token that may read packages
+> (`helm registry login ghcr.io`), and give the cluster an image pull secret:
+>
+> ```sh
+> kubectl -n gojsop-system create secret docker-registry ghcr \
+>   --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
+> helm install ... --set 'manager.imagePullSecrets[0].name=ghcr'
+> ```
+
+Try the samples from a clone of this repository, a ConfigMap sync hook and
+two pod policies:
+
+```sh
 kubectl apply -k config/samples/
 kubectl get jshooks,jsadmissions
 ```
 
+### From source
+
+With Docker and Go 1.25+:
+
+```sh
+make install-certmanager
+make docker-build docker-push IMG=<registry>/gojsop:dev
+make deploy IMG=<registry>/gojsop:dev
+```
+
 On [kind](https://kind.sigs.k8s.io/), skip the push and load the image instead:
 `make docker-build IMG=gojsop:dev && kind load docker-image gojsop:dev`.
-
-Remove everything with `kubectl delete -k config/samples/` and `make undeploy`.
+Remove it with `make undeploy`.
 
 ## JSHook
 
@@ -261,6 +291,14 @@ make test-e2e      # e2e tests on a throwaway kind cluster
 make engine-wasm   # rebuild the embedded QuickJS engine (after glue.c changes)
 make help          # every target
 ```
+
+Releases come from [release-please](https://github.com/googleapis/release-please):
+it keeps a release PR open that collects the conventional commits on `main`.
+Merging it tags the version, and CI publishes the image, the Helm chart and
+`install.yaml`. The chart in `dist/chart` is generated from `config/`:
+after a change there, run `make build-installer` and
+`kubebuilder edit --plugins=helm/v2-alpha`, and keep `Chart.yaml` and
+`values.yaml` by hand.
 
 How the project is organised, its rules and its open items live in
 [`.agents/`](.agents/README.md); [AGENTS.md](AGENTS.md) is the entry point.

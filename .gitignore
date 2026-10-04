@@ -1,6 +1,8 @@
 # Binaries
 bin/
-dist/
+# dist/ holds build output; the Helm chart in dist/chart is source.
+dist/*
+!dist/chart/
 *.exe
 *.dll
 *.so

@@ -1,0 +1,26 @@
+# The operator creates the ServiceAccounts of hooks and policies and acts as
+# them (kube-access.R10, R12), in its own namespace only. Written by hand,
+# not by controller-gen: a generated Role would share the name manager-role
+# with the ClusterRole, and tools that key on the name would merge the two.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/name: gojsop
+    app.kubernetes.io/managed-by: kustomize
+  name: manager-namespace-role
+  namespace: system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - impersonate
+  - list
+  - patch
+  - update
+  - watch
