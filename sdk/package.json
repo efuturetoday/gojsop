@@ -1,8 +1,13 @@
 {
   "name": "gojsop-sdk",
   "private": true,
-  "description": "npm packages of gojsop. Versions are stamped from the release tag by scripts/publish.mjs.",
-  "workspaces": ["cli", "testing", "create"],
+  "type": "module",
+  "description": "npm packages of gojsop. Versions are stamped from the release tag by scripts/publish.ts.",
+  "workspaces": [
+    "cli",
+    "testing",
+    "create"
+  ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present"
