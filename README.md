@@ -1,37 +1,137 @@
 # gojsop – Kubernetes hooks and admission policies in JavaScript
 
-Automate and guard your cluster with a few lines of JavaScript, instead of
-writing a Go controller or learning a policy language.
+Automate and guard your Kubernetes cluster with a few lines of JavaScript.
 
-- **React to changes with a `JSHook`.** Copy a ConfigMap into every namespace
-  that asks for it, label new Pods, clean up what a deleted object left
-  behind. You write `handle(event)`; gojsop watches the resources you name and
-  calls it for every change.
-- **Allow, deny or fix requests with a `JSAdmission`.** Refuse images tagged
-  `:latest`, require an owner label, add defaults. You write `validate(req)`
-  or `mutate(req)`; the apiserver asks it before it stores an object.
+- **Policies** check every request before the cluster stores it: refuse images
+  tagged `:latest`, require an owner label, add defaults.
+- **Hooks** react when something changes: copy a ConfigMap into new
+  namespaces, label new Pods, clean up after a deleted object.
 
-Both are plain Kubernetes resources: you apply them with `kubectl`, Helm or
-GitOps, and read their state with `kubectl get`. Each script runs sandboxed in
-the operator ([QuickJS](https://github.com/quickjs-ng/quickjs) compiled to
-WebAssembly, no Node.js, no sidecar), with a memory limit, a timeout and
-exactly the cluster rights you grant it.
+You write a function, test it with vitest, and deploy it with `kubectl`. Each
+script runs sandboxed inside gojsop, with a memory limit, a timeout and only
+the rights you give it.
 
-> **Status: alpha.** The API is `core.gojsop.io/v1alpha1` and may still change
-> in incompatible ways. See [Known limitations](#known-limitations).
+> **Alpha.** The API may still change. See [Known limitations](#known-limitations).
 
-## Quick start
+## Get started
 
-You need a Kubernetes cluster with [cert-manager](https://cert-manager.io),
-which issues the webhook certificate:
+You need Node.js 20 or newer. You need a cluster only for the last step.
+
+### 1. Create a project
+
+```sh
+npm create @gojsop my-policies
+cd my-policies
+npm install
+npm test
+```
+
+You get one example policy and one example hook, each in its own folder with
+its tests:
+
+```
+my-policies/
+  policies/no-latest/    policy.yaml, policy.js, policy.test.ts
+  hooks/count-pods/      hook.yaml, hook.js, hook.test.ts
+```
+
+For a new policy or hook, copy a folder and add it to `kustomization.yaml`.
+
+### 2. Write a policy
+
+`policy.yaml` says which requests the policy sees, here every Pod that is
+created or updated (shortened):
+
+```yaml
+apiVersion: core.gojsop.io/v1alpha1
+kind: JSAdmission
+metadata:
+  name: no-latest
+spec:
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE", "UPDATE"]
+```
+
+`policy.js` decides:
+
+```js
+function validate(req) {
+  for (const c of req.object?.spec?.containers ?? []) {
+    if (c.image?.endsWith(":latest")) {
+      return { allowed: false, message: c.image + " uses :latest" };
+    }
+  }
+  return { allowed: true };
+}
+```
+
+Tip: Kubernetes leaves out empty fields, so use `?.` and `??`.
+
+### 3. Test it
+
+```ts
+import { expect, test } from "vitest";
+import { policy, pod } from "@gojsop/testing";
+
+const noLatest = policy("./policy.yaml");
+
+test("denies :latest", async () => {
+  const result = await noLatest.review({ object: pod({ image: "nginx:latest" }) });
+  expect(result.allowed).toBe(false);
+});
+```
+
+Run `npx vitest`; it reruns the tests whenever you save. Your script runs
+exactly as it would in the cluster, so a green test means it works there too.
+
+### 4. Write a hook
+
+A hook gets an event for every change of what it watches. This one counts
+the Pods labeled `track: "true"` and writes the number into a ConfigMap:
+
+```js
+function handle(event) {
+  const count = event.all().length;
+  kube.apply({
+    apiVersion: "v1",
+    kind: "ConfigMap",
+    metadata: { name: "pod-count", namespace: event.object.metadata.namespace },
+    data: { count: String(count) },
+  });
+}
+```
+
+Its test starts with a few Pods and checks the ConfigMap afterwards:
+
+```ts
+import { expect, test } from "vitest";
+import { cluster, hook, pod } from "@gojsop/testing";
+
+test("counts the tracked pods", async () => {
+  const tracked = { track: "true" };
+  const c = cluster([pod({ name: "a", labels: tracked }), pod({ name: "b", labels: tracked })]);
+
+  await hook("./hook.yaml").handle({ object: pod({ name: "a", labels: tracked }) }, { cluster: c });
+
+  expect(c.get("v1", "ConfigMap", "default", "pod-count")?.data).toEqual({ count: "2" });
+});
+```
+
+A hook may only do what `hook.yaml` allows under `permissions`.
+
+### 5. Deploy
+
+Install gojsop once per cluster. It needs
+[cert-manager](https://cert-manager.io):
 
 ```sh
 helm repo add jetstack https://charts.jetstack.io
 helm install cert-manager jetstack/cert-manager \
   --namespace cert-manager --create-namespace --set crds.enabled=true --wait
 ```
-
-Install gojsop:
 
 <!-- x-release-please-start-version -->
 ```sh
@@ -41,420 +141,101 @@ helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
 ```
 <!-- x-release-please-end -->
 
-Or without Helm:
-
-<!-- x-release-please-start-version -->
-```sh
-kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.1/install.yaml
-```
-<!-- x-release-please-end -->
-
-Try the samples, a ConfigMap sync hook and two pod policies:
-
-<!-- x-release-please-start-version -->
-```sh
-kubectl apply -k "github.com/efuturetoday/gojsop/config/samples?ref=v0.1.1"
-kubectl get jshooks,jsadmissions
-```
-<!-- x-release-please-end -->
-
-## JSHook
-
-A hook names the resources it watches in `spec.bindings` and defines
-`handle()` in `spec.source`. Every field, with the values it takes:
-
-```yaml
-apiVersion: core.gojsop.io/v1alpha1
-kind: JSHook
-metadata:
-  name: label-logger                 # cluster-scoped: no namespace
-  annotations:
-    gojsop.io/restart: "2026-10-05"  # optional; any new value prepares the script again
-spec:
-  bindings:                          # required, 1 to 32
-    - name: pods                     # required, unique in the hook, at most 63 characters
-      apiGroups: [""]                # required, concrete: "" is the core group, no "*"
-      apiVersions: ["v1"]            # required, concrete, no "*"
-      resources: ["pods"]            # required, plural names, no "*"; one resource per binding in a hook
-      events: ["Added", "Deleted"]   # optional: Added | Modified | Deleted; default all three
-      namespaceSelector:             # optional LabelSelector on the object's namespace;
-        matchLabels:                 #   one namespace: kubernetes.io/metadata.name
-          kubernetes.io/metadata.name: default
-      objectSelector:                # optional LabelSelector on the object itself
-        matchExpressions:            #   matchLabels and matchExpressions
-          - { key: app, operator: Exists }   # In | NotIn | Exists | DoesNotExist
-  permissions:                       # optional, at most 64: what kube.* may do, see Permissions
-    - apiGroups: [""]                # required, no "*"
-      resources: ["configmaps"]      # required, no "*"; subresources like "deployments/scale"
-      verbs: ["get", "list"]         # required: get | list | watch | create | update | patch | delete
-  source:                            # required: exactly one of inline or configMapRef
-    inline: |                        # at most 512 KiB
-      function handle(event) {
-        console.log(event.type, event.object.metadata.name,
-                    event.initial ? "(was there before)" : "");
-        console.log("pods in default now:", event.all().length);
-      }
-    # configMapRef:                  # instead of inline
-    #   name: my-hook                # required
-    #   namespace: default           # required
-    #   key: hook.js                 # optional, default hook.js
-  limits:                            # optional
-    memoryMB: 32                     # 1 to 512, default 32: heap of one call
-    timeoutSeconds: 30               # 1 to 300, default 30: one call, and loading the script
-```
-
-**What `handle()` receives.** One event per call:
-
-| Field | Means |
-|---|---|
-| `event.type` | `Added`, `Modified` or `Deleted` |
-| `event.object` | the object; for `Deleted` its last state |
-| `event.binding` | the name of the binding that saw it |
-| `event.initial` | `true` for an object that already existed when the hook started watching |
-| `event.all()` | every object the binding watches right now, from the watch's cache, without a call to the apiserver |
-
-Objects that exist when the hook starts arrive first, as `Added` with
-`initial: true`; after that every change arrives, and nothing that happens in
-between is lost. Most hooks only look at `event.object`. A hook that needs the
-whole picture, for example to delete copies whose original is gone, calls
-`event.all()`.
-
-**Guarantees.**
-
-- Calls of one hook never run at the same time.
-- Several waiting changes of one object fold into one call with the newest
-  state.
-- A call that throws, times out or hits the memory limit records a Warning
-  event on the `JSHook` and is retried with backoff. A retry never overwrites
-  a newer state of the same object.
-- A binding names a concrete group, version and resource. `*`, unknown
-  resources and two bindings on one resource are rejected; the hook keeps the
-  watches it had.
-
-## JSAdmission
-
-A policy names the requests it guards in `spec.rules` and defines
-`validate(req)` or `mutate(req)`. Every field, with the values it takes:
-
-```yaml
-apiVersion: core.gojsop.io/v1alpha1
-kind: JSAdmission
-metadata:
-  name: prevent-latest-tags          # cluster-scoped: no namespace
-  annotations:
-    gojsop.io/restart: "2026-10-05"  # optional; any new value prepares the script again
-spec:
-  type: validating                   # validating (calls validate) | mutating (calls mutate); default validating
-  rules:                             # required, 1 to 32
-    - apiGroups: [""]                # required; "*" allowed here
-      apiVersions: ["v1"]            # required; "*" allowed
-      resources: ["pods"]            # required; "*" and subresources ("pods/exec") allowed
-      operations: ["CREATE", "UPDATE"]  # required: CREATE | UPDATE | DELETE | CONNECT | *
-      scope: "*"                     # optional: * | Namespaced | Cluster; default *
-  namespaceSelector: {}              # optional LabelSelector on the request's namespace
-  objectSelector: {}                 # optional LabelSelector on the object
-  matchPolicy: Equivalent            # Exact | Equivalent; default Equivalent
-  enforcement: Deny                  # Deny | Warn | Audit; default Deny: what a denial does, see below
-  failurePolicy: Fail                # Fail | Ignore; default Fail: what a failed call means (Warn and Audit: always Ignore)
-  timeoutSeconds: 5                  # 1 to 30, default 5: how long the apiserver waits
-  permissions:                       # optional: what kube.get and kube.list may read
-    - apiGroups: [""]
-      resources: ["namespaces"]
-      verbs: ["get"]                 # get | list | watch only: a policy never writes
-  source:                            # required: exactly one of inline or configMapRef
-    inline: |
-      function validate(req) {
-        // Fields Kubernetes leaves empty are missing, and req.object is
-        // null on DELETE: reach into objects with ?. and ??.
-        for (const c of req.object?.spec?.containers ?? []) {
-          if (c.image?.endsWith(":latest")) {
-            return { allowed: false, message: c.image + " uses :latest" };
-          }
-        }
-        return { allowed: true };
-      }
-  limits:                            # optional
-    memoryMB: 32                     # 1 to 512, default 32
-    timeoutSeconds: 30               # 1 to 300, default 30; a call ends at the smaller of this and spec.timeoutSeconds
-```
-
-**The request.** `req` has `uid`, `kind`, `resource`, `subResource`, `name`,
-`namespace`, `operation`, `userInfo`, `object`, `oldObject` and `dryRun`.
-
-**The answer.** Return `{ allowed, message?, code?, warnings? }`. A mutating
-policy changes `req.object` and returns it as `modifiedObject`; gojsop sends
-the difference as a JSON patch. Server-managed fields and `/status` are never
-patched. A result without `allowed` denies.
-
-**Try a policy before you enforce it.** `enforcement` decides what a denial
-of the script does:
-
-| `enforcement` | The request | The person who sent it sees | The policy shows |
-|---|---|---|---|
-| `Deny` (default) | is rejected | the reason, as the error | a `PolicyViolation` event |
-| `Warn` | is admitted | the reason, as a warning | a `PolicyViolation` event |
-| `Audit` | is admitted | nothing | a `PolicyViolation` event |
-
-Start a new policy with `Audit`, read what it would deny with
-`kubectl describe jsadmission <name>`, move to `Warn` to tell the teams, then
-to `Deny`. Under `Warn` and `Audit` gojsop never denies, not even when the
-script fails.
-
-**When the script fails** — it throws, times out, hits the memory limit, or
-no script is ready yet — `failurePolicy` decides: `Ignore` admits the request
-with a warning, `Fail` denies it with code 500. The call ends at the smaller of
-`spec.timeoutSeconds` and `spec.limits.timeoutSeconds`.
-
-Every operator replica answers every policy, so scaling the operator never
-leaves a replica that answers with 404.
-
-No policy ever sees requests in the operator's namespace, `kube-system` or
-`cert-manager`, so a broken policy cannot lock up the cluster itself. Change
-the list with the operator flag `--admission-exclude-namespaces`.
-
-## Test without a cluster
-
-Tests are [vitest](https://vitest.dev) tests. The npm package
-`@gojsop/testing` hands every call to the `gojsop` CLI, which runs your script
-in the same engine as the operator, against a cluster held in memory, with the
-script's own rights and limits. The script always runs in gojsop's engine,
-never in Node, so a green test says what the cluster would do.
-
-Download the CLI from the [release](https://github.com/efuturetoday/gojsop/releases)
-and put it on your `PATH` (or set `GOJSOP_BIN` to its path). Then, in your
-repository of hooks and policies:
+Then deploy your project to the cluster `kubectl` points at:
 
 ```sh
-npm install --save-dev vitest @gojsop/testing
+npm run deploy                  # runs the tests, then kubectl apply -k .
+kubectl get jsadmissions,jshooks
 ```
 
-Put each hook or policy in a directory of its own, with its test next to it:
+Change a script and deploy again; gojsop picks it up without a restart. To
+remove a policy, run `kubectl delete -k policies/<name>`, then delete its
+folder.
 
-```
-policies/no-latest/
-  policy.yaml            # the JSAdmission, without spec.source
-  policy.js              # the script
-  policy.test.ts
-```
+> **The example policy blocks nothing yet.** It starts with
+> `enforcement: Audit` and only records what it would deny
+> (`kubectl describe jsadmission no-latest`). Set `enforcement: Deny` when
+> you are happy with it. Your tests always show what the script decides.
 
-```ts
-// policy.test.ts
-import { expect, test } from "vitest";
-import { policy, pod } from "@gojsop/testing";
-
-const noLatest = policy("./policy.yaml"); // relative to this test file
-
-test("denies :latest", async () => {
-  const result = await noLatest.review({ object: pod({ image: "nginx:latest" }) });
-  expect(result.allowed).toBe(false);
-  expect(result.message).toMatch(/uses :latest/);
-});
-```
-
-A hook test builds a fake cluster, sends an event and looks at the cluster
-afterwards. `kube.*` without the right in `spec.permissions` throws
-`Forbidden`, as in the cluster:
-
-```ts
-// hook.test.ts
-import { expect, test } from "vitest";
-import { cluster, hook, pod } from "@gojsop/testing";
-
-test("counts the tracked pods", async () => {
-  const tracked = { track: "true" };
-  const c = cluster([pod({ name: "a", labels: tracked }), pod({ name: "b", labels: tracked })]);
-
-  const result = await hook("./hook.yaml").handle({ object: pod({ name: "a", labels: tracked }) }, { cluster: c });
-
-  expect(result.return).toEqual({ counted: 2 });
-  expect(c.get("v1", "ConfigMap", "default", "pod-count")?.data).toEqual({ count: "2" });
-});
-```
-
-```sh
-npx vitest
-```
-
-A script that throws, runs out of time or hits its memory limit makes the
-call reject with a `ScriptError` (`kind` is `script`, `timeout`,
-`memoryLimit` or `input`). For a quick check without a test, run one call and
-see every `kube.*` call it makes:
-
-```sh
-gojsop run policies/no-latest/policy.yaml --request pod.yaml --trace
-```
-
-## Permissions
-
-Every hook and policy acts as a ServiceAccount of its own, which gojsop
-creates in its namespace (`jshook-<name>`, `jsadmission-<name>`) and removes
-with the resource. It gets exactly what `spec.permissions` lists, and a hook
-also gets `get`, `list` and `watch` on what its bindings watch:
-
-```yaml
-permissions:
-  - apiGroups: [""]               # "" is the core group
-    resources: ["configmaps"]
-    verbs: ["get", "create", "patch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list"]
-```
-
-- **No wildcards.** Name every group and resource; `*` is rejected.
-- **Policies only read.** A `JSAdmission` may list `get`, `list` and `watch`.
-- **You cannot hand out what you do not have.** gojsop rejects a hook or
-  policy whose rights the person applying it does not hold. Changing the
-  script of an existing hook needs its rights too; changing only labels or
-  annotations does not.
-- **A missing right is visible.** A `kube.*` call without it throws
-  `Forbidden`; the script can catch it. `status.serviceAccount` names the
-  ServiceAccount, so `kubectl auth can-i --as=system:serviceaccount:gojsop-system:jshook-<name> ...`
-  shows what it may do.
-
-> **Protect a source ConfigMap like the hook itself.** Whoever may edit the
-> ConfigMap a hook loads its script from changes what runs with the hook's
-> rights, and gojsop does not check that edit.
+That's it. Every field and option is in the [reference](docs/reference.md).
 
 ## Writing scripts
 
-**Entry points are global functions.** Write `function handle() {}` (or
-`var handle = ...`). A top-level `const`, `let` or `class`, and code a bundler
-wrapped in a closure, are not visible to gojsop; the script then fails with
-`missing required export: handle()`.
+Good to know once you write your own:
 
-**Missing fields are normal.** Kubernetes leaves out empty fields: an object
-without labels has no `metadata.labels`, and `req.object` is `null` on
-DELETE (`req.oldObject` on CREATE). `obj.metadata.labels.team` then throws,
-and the call fails. Reach into objects with `?.` and `??`:
-`obj.metadata?.labels?.team ?? "none"`.
+- **Use `function`.** gojsop calls `validate`, `mutate` or `handle` as a
+  global function. `const handle = ...` is not found, and an `async`
+  function does not work.
+- **No memory between calls.** Each call starts fresh. Keep state in the
+  cluster.
+- **Talking to the cluster:** `kube.get`, `kube.list`, `kube.apply` and
+  `kube.delete`, each with one object, for example
+  `kube.get({ apiVersion: "v1", kind: "ConfigMap", name: "x", namespace: "y" })`.
+  Policies can only read.
+- **Changing requests:** a policy with `type: mutating` defines `mutate(req)`,
+  changes `req.object` and returns `{ allowed: true, modifiedObject: req.object }`.
+- **Logging:** `console.log` shows in the test result and in the operator log.
+- **Debugging one request:**
+  `npx gojsop run policies/no-latest/policy.yaml --request policies/no-latest/pod.yaml --trace`
+  prints the result and every `kube.*` call.
+- **Limits:** 32 MB and 30 seconds per call by default.
 
-**No state between calls.** gojsop runs the top-level code once and takes a
-snapshot. Every call starts from that snapshot, so globals you change inside
-`handle()` are gone at the next call. Keep state in the cluster.
-
-**Reaching the cluster.** The global `kube` takes one object per call:
-
-| Function | Hooks | Policies | Does |
-|---|---|---|---|
-| `kube.get({apiVersion, kind, name, namespace})` | yes | yes | the object, or `null` when it is missing |
-| `kube.list({apiVersion, kind, namespace, labelSelector, fieldSelector})` | yes | yes | the items; an empty `namespace` lists all namespaces |
-| `kube.apply(object)` | yes | — | creates the object, or sends a JSON merge patch (not server-side apply); needs `get`, `create` and `patch` |
-| `kube.delete({apiVersion, kind, name, namespace})` | yes | — | deletes; a missing object is no error |
-
-A failed call throws, and the script may catch it. Every call needs the
-matching right in `spec.permissions` (see [Permissions](#permissions)).
-Policies can only read: admission must not change the cluster.
-
-**Logging.** `console.log`, `info`, `debug`, `warn` and `error` go to the
-operator log; `warn` and `error` also become Warning events on the hook or
-policy (`kubectl describe jshook <name>`).
-
-**Limits.** `spec.limits.memoryMB` (default 32, at most 512) and
-`spec.limits.timeoutSeconds` (default 30, at most 300) apply to every call
-and to loading the script. A script stuck in a loop is stopped at the
-deadline; `try/catch` cannot hold it.
-
-**Sources.** Inline in `spec.source.inline`, or from a ConfigMap:
-
-```yaml
-source:
-  configMapRef:
-    name: my-hook
-    namespace: default   # required: JSHook and JSAdmission are cluster-scoped
-    key: hook.js         # default
-```
-
-A ConfigMap edit reaches the script without a restart.
-
-## Status
-
-`kubectl get jshooks` and `kubectl get jsadmissions` show a `Ready` condition:
-
-| Reason | Means |
-|---|---|
-| `Reconciled` | the script is ready and serving |
-| `Building` | a new script is being prepared (new source, new limits or a manual restart) |
-| `BuildFailed` | the script did not load; retried with backoff, a new source is tried at once |
-| `WebhookSyncFailed` | gojsop could not write the webhook configuration; retried |
-| `Failed` | anything else, see the message and the events |
-
-Set the annotation `gojsop.io/restart` to a new value to prepare the script
-again.
+The [reference](docs/reference.md#scripts) has the details.
 
 ## How gojsop compares
 
-| | gojsop | [jsPolicy](https://github.com/loft-sh/jspolicy) | [Kyverno](https://kyverno.io) |
+As of October 2026; each claim links to its source below the table.
+
+| | gojsop | jsPolicy | Kyverno |
 |---|---|---|---|
-| Policies are written in | JavaScript | JavaScript or TypeScript, npm packages | YAML with JMESPath or CEL |
-| Engine | QuickJS as WebAssembly, pure Go | V8 through cgo | Go |
-| Validate and mutate requests | yes | yes | yes |
-| React to changes with code | yes (`JSHook`) | yes (controller policies) | declarative `generate` and `mutate-existing` |
-| Audit and warn before enforcing | yes (`enforcement`) | yes (`violationPolicy`) | yes |
-| Rights of a script | its own ServiceAccount with the rights it declares; nobody grants more than they hold | the operator is `cluster-admin` | per controller, extended by aggregated roles |
-| Policies per namespace | no, cluster-wide only | no | yes |
-| Image signature checks | no | no | yes |
-| Policy reports and background scans | no, violations are events | violations CRD | yes |
-| TypeScript, local test CLI | not yet | TypeScript yes | test CLI yes |
-| Status | alpha | last release 2023 | stable, CNCF |
+| Policies are written in | JavaScript | JavaScript or TypeScript, with npm packages [1] | YAML with CEL; JMESPath in the older, deprecated policy types [7] |
+| Engine | QuickJS as WebAssembly, pure Go | V8 through cgo [2] | Go |
+| Validate and mutate requests | yes | yes [1] | yes [7] |
+| React to changes | with code (`JSHook`) | with code (controller policies) [1] | declaratively: generate and mutate existing resources [7] |
+| Try before enforcing | `Audit` and `Warn` | `warn` [3] | `Audit`, with warnings on request [8] |
+| Rights | each script has its own ServiceAccount with the rights it declares; nobody grants more than they hold | the operator runs as `cluster-admin` by default [4] | one ServiceAccount per Kyverno controller, extended by aggregated roles [9] |
+| Namespaced policies | no | no [5] | yes [7] |
+| Image signature checks | no | not in the docs [1] | yes [7] |
+| Reports of existing resources | no, violations are events | denied requests are logged in `JsPolicyViolations` [5] | policy reports and background scans [10] |
+| Local tests | vitest; the script runs in the operator's engine | Jest in Node, from the jspolicy-sdk template [6] | `kyverno test` with YAML test files [11] |
+| Status | alpha | last release v0.3.0-beta.6, June 2024 [12] | stable, CNCF graduated [13] |
 
 gojsop is for teams that want the freedom of real code, with each script
 limited to exactly what it may touch. When a declarative policy language and
 a large ecosystem matter more, use Kyverno.
 
+<details>
+<summary>Sources</summary>
+
+1. jsPolicy README: https://github.com/loft-sh/jspolicy#readme
+2. jsPolicy `go.mod` (rogchap.com/v8go): https://github.com/loft-sh/jspolicy/blob/main/go.mod
+3. jsPolicy configuration, `violationPolicy: deny | warn`: https://github.com/loft-sh/jspolicy/blob/main/docs/pages/writing-policies/configuration.mdx
+4. jsPolicy chart, `clusterRole: cluster-admin`: https://github.com/loft-sh/jspolicy/blob/main/chart/values.yaml
+5. jsPolicy CRDs (`JsPolicy` is cluster-scoped; `JsPolicyViolations`): https://github.com/loft-sh/jspolicy/blob/main/chart/crds/crds.yaml
+6. jsPolicy, testing policies: https://github.com/loft-sh/jspolicy/blob/main/docs/pages/writing-policies/testing-policies.mdx
+7. Kyverno policy types: https://kyverno.io/docs/policy-types/overview/
+8. Kyverno validate rules, `failureAction` and `emitWarning`: https://kyverno.io/docs/policy-types/cluster-policy/validate/
+9. Kyverno installation, RBAC customization: https://kyverno.io/docs/installation/customization/
+10. Kyverno policy reports: https://kyverno.io/docs/policy-reports/
+11. Kyverno CLI, `kyverno test`: https://kyverno.io/docs/kyverno-cli/reference/kyverno_test/
+12. jsPolicy releases: https://github.com/loft-sh/jspolicy/releases
+13. CNCF, Kyverno: https://www.cncf.io/projects/kyverno/
+
+</details>
+
 ## Known limitations
 
-- **The operator is powerful.** To give hooks their rights, the operator may
-  create any ClusterRole and impersonate the ServiceAccounts of its own
-  namespace. Whoever controls the operator's Deployment controls the cluster;
-  the scripts do not.
-- **Failover gap.** Hooks run on the leader only. After a leader change the
-  new leader delivers every object again as an initial `Added`: objects that
-  changed in between arrive that way, but a deletion in between is never
-  seen.
-- **Endless retries.** A hook that always fails is retried forever.
-- **`v1alpha1`.** Fields may change without a migration path.
+- **Alpha.** Fields may still change, without a migration path.
+- **The operator holds a lot of power.** It hands each script its rights, so
+  it may create roles. Protect its namespace like `kube-system`.
+- **Hooks can miss a deletion** that happens while the operator switches its
+  leader replica. Changes are never missed.
+- **A hook that always fails is retried forever.**
 
-## Development
+## Contributing
 
-```sh
-make test          # unit and envtest integration tests
-make lint          # golangci-lint
-make test-e2e      # e2e tests on a throwaway kind cluster
-make engine-wasm   # rebuild the embedded QuickJS engine (after glue.c changes)
-make help          # every target
-```
-
-Releases come from [release-please](https://github.com/googleapis/release-please):
-it keeps a release PR open that collects the conventional commits on `main`.
-Merging it tags the version, and CI publishes the image, the Helm chart and
-`install.yaml`. `deploy/chart` holds only `Chart.yaml` and `values.yaml`,
-kept by hand; `make chart` generates the templates from `config/`, and CI
-and the release job run it.
-
-How the project is organised, its rules and its open items live in
-[`.agents/`](.agents/README.md); [AGENTS.md](AGENTS.md) is the entry point.
-
-`make sdlc-check` checks `.agents/` against the code. It runs a tool from the
-private repository `github.com/efuturetoday/agentic-sdlc`; the target sets
-`GOPRIVATE`, and Git needs credentials for GitHub, for example:
-
-```sh
-git config --global credential.https://github.com.helper '!gh auth git-credential'
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+[Apache 2.0](LICENSE)
