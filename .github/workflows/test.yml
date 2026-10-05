@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+# Read the repository, nothing else (least privilege for GITHUB_TOKEN).
+permissions:
+  contents: read
+
 jobs:
   test:
     name: unit and envtest
