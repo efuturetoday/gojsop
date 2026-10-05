@@ -26,7 +26,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 | Gates and test infrastructure | GATE | [testing](aspects/testing.md) |
 | Documentation | DOC | none |
 | Operator UI | UI | none (area not decided, UI-1) |
-| Maintainer workspace and CLI | WS | none (area not decided, WS-1) |
+| Maintainer workspace and CLI | WS | [workspace](areas/workspace.md) |
 
 ## EXEC: JS execution
 
@@ -66,7 +66,7 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **SRC-1** `gap` No OCI loader. The `spec.source.oci` field was removed until
   one exists (js-sources.R6); adding it means the field and the loader together.
-  Direction (2026-10, to refine with WS-4): pinned by digest only, no tags and
+  Direction (2026-10, to refine with WS-9): pinned by digest only, no tags and
   no polling, so new code still arrives through a changed CR and passes the
   access check (kube-access.R13). Mainly for bundles above the inline and
   ConfigMap size limits.
@@ -272,30 +272,25 @@ No open items.
 
 ## WS: Maintainer workspace and CLI
 
-Target picture (2026-10, to refine): maintainers keep their hooks and
-policies in a repository of their own, write them in TypeScript, test them
-locally and publish them with one command; GitOps tools deliver them.
+Area: [workspace](areas/workspace.md). WS-1 to WS-4 became the area and
+these steps (2026-10-05).
 
-- **WS-1** `decision` A `gojsop` CLI and workspace for maintainers: `init`
-  (repo layout, `tsconfig`, types for `event`, `req`, `kube.*`), `build`,
-  `test`, `push`. Decide scope, users and whether it is a new area. Done when
-  decided; if yes, the area exists as `proposed` with these use cases.
-- **WS-2** `decision` `gojsop build`: bundle each TypeScript hook or policy
-  into one script the engine accepts (entry point on `globalThis`, EXEC-11,
-  EXEC-12) and generate the `JSHook` and `JSAdmission` manifests with their
-  `permissions`. Decide the bundler (esbuild?), how a script declares its
-  bindings, rules and permissions (in TS or in YAML next to it), and the
-  size limit (512 KiB inline, 1 MiB ConfigMap, else SRC-1). Done when the
-  contract is recorded.
-- **WS-3** `gap` `gojsop test`: run a hook or policy locally against sample
-  events and admission requests, with the same engine as the operator
-  (embedded, pure Go and wasm) and a fake `kube`. Expected to save the most
-  frustration: no cluster needed to try a script. Done when a maintainer can
-  test a script without a cluster.
-- **WS-4** `decision` `gojsop push`: publish the built manifests as an OCI
-  artifact that Flux (`OCIRepository`) and Argo CD pull. Delivery stays with
-  GitOps tools; the operator does not poll registries itself, because a pull
-  in the operator would bypass GitOps review and the access check: whoever
-  may push to the registry would get the rights of every hook. Decide the
-  artifact format and signing (cosign?). Done when recorded.
-
+- **WS-5** `gap` Document the script contract (one ES2023 script, global
+  entry point, no Node APIs, no async entry point) as a rule in
+  js-execution, and have `gojsop build` check a JS file against it. Done
+  when the rule exists and is held by a test.
+- **WS-6** `gap` TypeScript: `gojsop build` bundles `.ts` with an embedded
+  esbuild (or takes a ready `.js`), writes manifests with the inlined source
+  to `dist/`, keeps source maps so errors point at `.ts` lines; `gojsop
+  init` and `gojsop new hook|policy`; types as `gojsop.d.ts` and
+  `@gojsop/types`. Done when a TypeScript workspace builds and tests.
+- **WS-7** `gap` `gojsop serve --stdio` and `@gojsop/testing` (`runPolicy`,
+  `runHook`) for vitest and jest; the npm package downloads the binary and
+  keeps one engine process per test worker. Done when a vitest suite runs
+  against the engine.
+- **WS-8** `gap` Coverage: instrument the script with istanbul in
+  `@gojsop/testing`, return the counters from the engine, merge them into
+  the runner's report. Done when vitest shows coverage of a policy's lines.
+- **WS-9** `decision` `gojsop push`: publish built manifests as an OCI
+  artifact for Flux and Argo CD; the operator does not poll registries.
+  Decide the artifact format and signing. Done when recorded.
