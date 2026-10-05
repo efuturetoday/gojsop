@@ -12,4 +12,4 @@ npm test
 ```
 
 The workspace holds one example policy (`policies/no-latest`) and one example
-hook (`hooks/count-pods`); copy a directory to start a new one.
+hook (`hooks/count-pods`); `npx gojsop new policy <name>` adds one.

@@ -282,8 +282,9 @@ these steps (2026-10-05).
   Decide the artifact format and signing. Done when recorded.
 - **WS-10** `gate` The CI job `npm packages` runs the vitest suite of
   `sdk/testing` and `make sdk-smoke`, but the SDLC check sees only Go
-  tests, so workspace.R7, R9 and R10 name no test. Done when the job is a
+  tests, so workspace.R7, R9, R10, R12 and R13 name no test. Done when the job is a
   required check and each rule names a test the check can find (a Go test
-  that runs the suite, or a TypeScript adapter for sdlc-check).
+  that runs the suite, or a TypeScript adapter for sdlc-check). R12 and R13
+  are held by `sdk/cli/test/workspace.test.ts` already.
 - **WS-11** `gap` `brew install gojsop` for people who run `gojsop run`
   without npm. Done when a tap formula is updated by the release job.

@@ -164,7 +164,7 @@ cli-dist: ## Build the gojsop CLI for every release target to dist/cli (VERSION=
 
 .PHONY: sdk-test
 sdk-test: gojsop ## Build and test the npm packages in sdk/ against bin/gojsop.
-	cd sdk && npm ci && npm run build && cd testing && GOJSOP_BIN=$(CURDIR)/bin/gojsop npx vitest run
+	cd sdk && npm ci && npm run build && GOJSOP_BIN=$(CURDIR)/bin/gojsop npm test
 
 .PHONY: sdk-claim
 sdk-claim: ## Once, after npm login: claim the npm package names and trust release.yml to publish them.
