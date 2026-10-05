@@ -118,6 +118,21 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 
 - **ADM-8** `decision` When the patch diff fails, `fillResponse` allows the
   request. The reason is not recorded; confirm or deny instead.
+- **ADM-13** `decision` Background scans of existing objects (deferred
+  2026-10-05, to refine). Audit and Warn only see new requests; before
+  switching a policy to Deny, its owner must know which objects already in
+  the cluster it would deny. Requirement: the full list of affected objects,
+  per object with its reason, readable by each team for its own namespaces,
+  so teams can be told and migrate. Counts alone are useless. Direction:
+  PolicyReports (`wgpolicyk8s.io`, one per namespace, as Kyverno writes
+  them), not a sample in the policy status. Draft for the script: `req.object`
+  and `req.namespace` from the live object, `operation: CREATE`, no
+  `userInfo`, `req.background: true`; validating policies only, on by
+  default, `spec.background: false` to opt out; scan on change and hourly;
+  leader only, through the same runner and limits as requests. Open: who
+  installs the PolicyReport CRD when Kyverno already owns it; load on large
+  clusters; resolving `*` in rules. Mutating policies are out of scope: to
+  change existing objects, use a JSHook (mutate-existing).
 
 ## KUBE: Kubernetes access from JS
 
