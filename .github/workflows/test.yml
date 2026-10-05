@@ -30,9 +30,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Running Tests
-        run: |
-          go mod tidy
-          make test
+        run: make test
 
   sdk:
     name: npm packages

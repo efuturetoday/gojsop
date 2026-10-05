@@ -2,9 +2,9 @@ name: Release
 
 # release-please keeps a release PR open that collects the conventional
 # commits on main. Merging it tags vX.Y.Z and creates the GitHub release;
-# the publish job then pushes the image, the Helm chart, install.yaml, the
-# CLI binaries and the npm packages (@gojsop/cli, @gojsop/testing,
-# @gojsop/create).
+# the jobs after it publish, in parallel: the image, the Helm chart, the
+# CLI binaries with the npm packages, and install.yaml. Each can be rerun on
+# its own; the npm publish skips versions that are on npm already.
 
 on:
   push:
@@ -29,26 +29,17 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  publish:
+  image:
     needs: release-please
     if: needs.release-please.outputs.released == 'true'
     runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
       packages: write
-      id-token: write # npm provenance and trusted publishing
-    env:
-      VERSION: ${{ needs.release-please.outputs.version }}
-      TAG: ${{ needs.release-please.outputs.tag }}
-      IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.tag }}
-
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
 
       - uses: docker/setup-buildx-action@v4
 
@@ -65,8 +56,28 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ env.VERSION }}
-            ${{ env.IMAGE }}:latest
+            ghcr.io/${{ github.repository }}:${{ needs.release-please.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,scope=release,mode=max
+
+  chart:
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.release-please.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
 
       - uses: azure/setup-helm@v5
 
@@ -77,13 +88,40 @@ jobs:
           helm package deploy/chart --version "$VERSION" --app-version "$VERSION"
           helm push "gojsop-$VERSION.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
+  cli-npm:
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write # npm provenance and trusted publishing
+    env:
+      VERSION: ${{ needs.release-please.outputs.version }}
+      TAG: ${{ needs.release-please.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
       - name: Attach the gojsop CLI to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          make cli-dist VERSION="$VERSION"
-          (cd dist/cli && sha256sum * > checksums.txt)
-          gh release upload "$TAG" dist/cli/*
+          make cli-archives VERSION="$VERSION"
+          gh release upload "$TAG" dist/release/* --clobber
+          # Say what the files are, under the changelog release-please wrote.
+          notes="$(gh release view "$TAG" --json body -q .body)"
+          case "$notes" in *"## Downloads"*) ;; *)
+            gh release edit "$TAG" --notes "$notes
+
+          ## Downloads
+
+          \`gojsop_*\` is the gojsop CLI (\`gojsop run\`, \`gojsop serve\`) for macOS, Linux and Windows, for use without npm; \`checksums.txt\` holds their SHA-256. With npm, \`npm create @gojsop\` installs it for you. The operator itself is the image \`ghcr.io/efuturetoday/gojsop:$VERSION\`, the Helm chart \`oci://ghcr.io/efuturetoday/charts/gojsop\` or \`install.yaml\`." ;;
+          esac
 
       - uses: actions/setup-node@v7
         with:
@@ -101,9 +139,27 @@ jobs:
           npm run build
           node scripts/publish.ts --version "$VERSION" --bin-dir ../dist/cli
 
+  install-yaml:
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.release-please.outputs.version }}
+      TAG: ${{ needs.release-please.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release-please.outputs.tag }}
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
       - name: Attach install.yaml to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          make build-installer IMG="$IMAGE:$VERSION"
-          gh release upload "$TAG" dist/install.yaml
+          make build-installer IMG="ghcr.io/${{ github.repository }}:$VERSION"
+          gh release upload "$TAG" dist/install.yaml --clobber

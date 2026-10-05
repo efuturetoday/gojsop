@@ -41,15 +41,21 @@ jobs:
       - name: Create kind cluster
         run: kind create cluster
 
-      - name: Prepare gojsop
-        run: |
-          go mod tidy
-          make docker-build IMG=gojsop:ci
-          kind load docker-image gojsop:ci
+      - uses: docker/setup-buildx-action@v4
 
-      - name: Install Helm
-        run: |
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      - name: Build the manager image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: gojsop:ci
+          cache-from: type=gha,scope=manager
+          cache-to: type=gha,scope=manager,mode=max
+
+      - name: Load the image into kind
+        run: kind load docker-image gojsop:ci
+
+      - uses: azure/setup-helm@v5
 
       - name: Verify Helm installation
         run: helm version
