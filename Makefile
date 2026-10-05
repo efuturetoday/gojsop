@@ -147,6 +147,14 @@ sdlc-check: ## Check .agents against the method of the SDLC library (github.com/
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
+.PHONY: gojsop
+gojsop: ## Build the gojsop CLI to bin/gojsop.
+	go build -o bin/gojsop ./cmd/gojsop
+
+.PHONY: sdk-test
+sdk-test: gojsop ## Build and test the npm package @gojsop/testing against bin/gojsop.
+	cd sdk/testing && npm ci && npm run build && GOJSOP_BIN=$(CURDIR)/bin/gojsop npx vitest run
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go
