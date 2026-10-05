@@ -22,9 +22,9 @@ npm packages take their version from the tag; the repository keeps `0.0.0`.
 
 ## Helm chart
 
-The chart in `dist/chart` is generated from `config/`: after a change there,
-run `make build-installer` and `kubebuilder edit --plugins=helm/v2-alpha`,
-and keep `Chart.yaml` and `values.yaml` by hand.
+`deploy/chart` holds only `Chart.yaml` and `values.yaml`, kept by hand.
+`make chart` generates the templates from `config/`; CI and the release job
+run it, so the chart always matches `config/`.
 
 ## Project rules
 

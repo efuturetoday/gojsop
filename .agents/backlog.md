@@ -252,11 +252,6 @@ enforcement), `debt` (code or rule violation), `doc` (missing or wrong docs),
 - **GATE-29** `gate` Report tests that no rule names (testing.R11). Today only the
   7 tests of the spike module `hack/spikes/quickjs-wasm` hold no rule. Done when: `make sdlc-check` or a test
   lists them and the list is empty or each entry is accepted on purpose.
-- **GATE-30** `gate` CI fails when `dist/chart` differs from a fresh
-  `make build-installer` plus `kubebuilder edit --plugins=helm/v2-alpha`. Seen
-  2026-10-05: a CRD validation reached `config/crd` but not the chart.
-  Done when the check runs in CI.
-
 ## DOC: Documentation
 
 No open items.

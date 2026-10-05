@@ -27,8 +27,8 @@ explains areas, aspects, rule IDs, gates and open items.
 ## Critical rules
 
 - Never edit generated files: `**/zz_generated.*.go`, `config/crd/bases/`,
-  `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`,
-  `dist/chart/templates/`.
+  `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`.
+  `deploy/chart/templates/` is not in Git; `make chart` writes it.
   Details: [kubebuilder-scaffold](.agents/aspects/kubebuilder-scaffold.md).
 - Never delete `// +kubebuilder:scaffold:*` comments.
 - Run user JavaScript only through the port `jsrun.Runner` (`Invoke`); callers

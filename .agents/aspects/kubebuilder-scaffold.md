@@ -90,9 +90,9 @@ Adding a kind:
   Why: the tests create and delete cluster resources.
   Gate: `make test-e2e`.
 - **R5** Never edit generated files: `zz_generated.*.go`, `config/crd/bases`,
-  `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`,
-  `dist/chart/templates/` (the Helm plugin regenerates them from `config/`;
-  `Chart.yaml` and `values.yaml` are kept by hand).
+  `config/rbac/role.yaml`, `config/webhook/manifests.yaml`, `PROJECT`
+  (change it only through the Kubebuilder CLI). `deploy/chart/templates/`
+  is not in Git: `make chart` writes it from `config/`.
   Why: the next regeneration overwrites the edit.
   Gate: missing → GATE-14.
 - **R6** Never delete `// +kubebuilder:scaffold:*` comments.
@@ -111,8 +111,11 @@ Adding a kind:
   Status: accepted (2026-10, OPS-4). Why: Helm is what most clusters install
   with, `install.yaml` serves the rest, and generating both from the one
   Kustomize tree keeps them equal. The chart comes from Kubebuilder's
-  `helm/v2-alpha` plugin into `dist/chart`; release-please turns the
-  conventional commits into versions and bumps the image tag in
+  `helm/v2-alpha` plugin: `make chart` writes `deploy/chart/templates` from
+  `config/` in CI and in the release job, and only `Chart.yaml` and
+  `values.yaml` are in Git, so the chart cannot drift from `config/`
+  (2026-10-05, replaces committed templates in `dist/chart`). release-please
+  turns the conventional commits into versions and bumps the image tag in
   `config/manager`, `Chart.yaml` and `values.yaml`. The image, the chart
   (`oci://ghcr.io/efuturetoday/charts/gojsop`) and `install.yaml` are
   published by `.github/workflows/release.yml`.
@@ -129,4 +132,4 @@ Adding a kind:
 
 ## Open
 
-Tracked in [backlog](../backlog.md): GATE-14, GATE-30, OPS-4.
+Tracked in [backlog](../backlog.md): GATE-14, OPS-4.
