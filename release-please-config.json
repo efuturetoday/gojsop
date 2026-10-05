@@ -17,6 +17,10 @@
         {
           "type": "generic",
           "path": "dist/chart/values.yaml"
+        },
+        {
+          "type": "generic",
+          "path": "README.md"
         }
       ],
       "initial-version": "0.1.0"

@@ -20,7 +20,7 @@ exactly the cluster rights you grant it.
 > **Status: alpha.** The API is `core.gojsop.io/v1alpha1` and may still change
 > in incompatible ways. See [Known limitations](#known-limitations).
 
-## Install
+## Quick start
 
 You need a Kubernetes cluster with [cert-manager](https://cert-manager.io),
 which issues the webhook certificate:
@@ -31,48 +31,26 @@ helm install cert-manager jetstack/cert-manager \
   --namespace cert-manager --create-namespace --set crds.enabled=true --wait
 ```
 
-Then install gojsop from its Helm chart, `<version>` being a
-[release](https://github.com/efuturetoday/gojsop/releases) without the `v`:
+Install gojsop:
 
 ```sh
-helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop --version <version> \
-  --namespace gojsop-system --create-namespace --wait
+helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
+  --namespace gojsop-system --create-namespace --wait \
+  --version 0.1.0 # x-release-please-version
 ```
 
-Without Helm, apply the `install.yaml` attached to the release:
-`kubectl apply -f install.yaml`.
-
-> **The repository is private for now**, and so are the image and the chart.
-> Log in first with a GitHub token that may read packages
-> (`helm registry login ghcr.io`), and give the cluster an image pull secret:
->
-> ```sh
-> kubectl -n gojsop-system create secret docker-registry ghcr \
->   --docker-server=ghcr.io --docker-username=<user> --docker-password=<token>
-> helm install ... --set 'manager.imagePullSecrets[0].name=ghcr'
-> ```
-
-Try the samples from a clone of this repository, a ConfigMap sync hook and
-two pod policies:
+Or without Helm:
 
 ```sh
-kubectl apply -k config/samples/
+kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.0/install.yaml # x-release-please-version
+```
+
+Try the samples, a ConfigMap sync hook and two pod policies:
+
+```sh
+kubectl apply -k "github.com/efuturetoday/gojsop/config/samples?ref=v0.1.0" # x-release-please-version
 kubectl get jshooks,jsadmissions
 ```
-
-### From source
-
-With Docker and Go 1.25+:
-
-```sh
-make install-certmanager
-make docker-build docker-push IMG=<registry>/gojsop:dev
-make deploy IMG=<registry>/gojsop:dev
-```
-
-On [kind](https://kind.sigs.k8s.io/), skip the push and load the image instead:
-`make docker-build IMG=gojsop:dev && kind load docker-image gojsop:dev`.
-Remove it with `make undeploy`.
 
 ## JSHook
 
