@@ -10,6 +10,7 @@ walks you through a first hook and policy.
 - [Permissions](#permissions)
 - [Scripts](#scripts)
 - [Status](#status)
+- [Workspace and CLI](#workspace-and-cli)
 
 ## Install
 
@@ -272,7 +273,8 @@ Policies can only read: admission must not change the cluster.
 
 **Logging.** `console.log`, `info`, `debug`, `warn` and `error` go to the
 operator log; `warn` and `error` also become Warning events on the hook or
-policy (`kubectl describe jshook <name>`).
+policy (`kubectl describe jshook <name>`). In a test they are in
+`result.console`.
 
 **Limits.** `spec.limits.memoryMB` (default 32, at most 512) and
 `spec.limits.timeoutSeconds` (default 30, at most 300) apply to every call
@@ -305,3 +307,30 @@ A ConfigMap edit reaches the script without a restart.
 
 Set the annotation `gojsop.io/restart` to a new value to prepare the script
 again.
+
+## Workspace and CLI
+
+`npm create @gojsop <dir>` creates a workspace: one directory per hook or
+policy, holding `policy.yaml` or `hook.yaml` (without `spec.source`), the
+script `policy.ts` or `hook.ts` (or a plain `.js`) and its tests.
+
+| Command | Does |
+|---|---|
+| `npx gojsop new <policy\|hook> <name>` | creates `policies/<name>` or `hooks/<name>` with manifest, script and a passing test; a new policy starts with `enforcement: Audit` |
+| `npx gojsop rn <name> <new-name>` | renames `metadata.name` and the directory |
+| `npx gojsop rm <name> [--yes]` | removes the directory, after a confirmation; the resource stays in the cluster |
+| `npx gojsop build` | writes `dist/policy-<name>.yaml` and `dist/hook-<name>.yaml` with the bundled script in `spec.source.inline` (at most 512 KiB), and removes files of hooks and policies that are gone |
+| `npx gojsop run <manifest> (--request <file> \| --event <file>) [--cluster <file>] [--trace]` | runs one call against a cluster in memory and prints the result; `--trace` prints every `kube.*` call |
+
+A name is a DNS label: lowercase letters, digits and `-`, at most 63
+characters. A name that a hook and a policy share needs the directory
+instead, for example `gojsop rm hooks/<name>`.
+
+The input of a call, in a test (`review("./pod.yaml")`) or with
+`--request` / `--event`, is a YAML or JSON file with a request or an event,
+or a plain object as `kubectl get -o yaml` prints it; a plain object becomes
+the request's or event's `object`.
+
+Tests use [`@gojsop/testing`](../sdk/testing/README.md): `policy(path).review()`,
+`hook(path).handle()`, a cluster in memory and fixtures. A script runs in the
+operator's engine, never in Node.

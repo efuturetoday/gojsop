@@ -7,9 +7,27 @@ make test          # unit and envtest integration tests
 make lint          # golangci-lint
 make test-e2e      # e2e tests on a throwaway kind cluster
 make engine-wasm   # rebuild the embedded QuickJS engine (after glue.c changes)
+make chart         # generate deploy/chart/templates from config/
+make sdk-lint      # Biome: format and lint of sdk/ (make sdk-format fixes)
 make sdk-test      # vitest suite of the npm packages against bin/gojsop
 make sdk-smoke     # pack the npm packages, create a workspace, run its tests
 make help          # every target
+```
+
+## npm packages
+
+`sdk/` is one npm workspace: `@gojsop/cli` (the launcher, `gojsop build`,
+`new`, `rn`, `rm`), `@gojsop/types`, `@gojsop/testing` and `@gojsop/create`
+(with the workspace template). The packages are strict TypeScript, built
+with `tsc`; Biome formats and lints them. The rules are in the aspect
+[npm-packages](.agents/aspects/npm-packages.md).
+
+To try a change the way a user gets it, pack the packages and install the
+tarballs into a workspace:
+
+```bash
+make sdk-pack                            # sdk/build/tarballs/*-0.0.0-dev.tgz
+cd ../my-workspace && npm install ../gojsop/sdk/build/tarballs/<package>.tgz
 ```
 
 ## Releases
