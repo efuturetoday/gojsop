@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.0](https://github.com/efuturetoday/gojsop/compare/v0.1.1...v0.2.0) (2026-10-05)
+
+
+### Features
+
+* **cli:** add the gojsop CLI with run and serve ([#23](https://github.com/efuturetoday/gojsop/issues/23)) ([436acf0](https://github.com/efuturetoday/gojsop/commit/436acf0ab1df7a4db773f07fda66a9298db4b237))
+* **sdk:** test with vitest, ship gojsop through npm, add npm create [@gojsop](https://github.com/gojsop) ([#24](https://github.com/efuturetoday/gojsop/issues/24)) ([4441546](https://github.com/efuturetoday/gojsop/commit/444154674ba2937987eb4126ca7a83c596a6da27))
+* **sdk:** TypeScript scripts, gojsop new/rn/rm, one dist/ with inline scripts ([#25](https://github.com/efuturetoday/gojsop/issues/25)) ([a572b1c](https://github.com/efuturetoday/gojsop/commit/a572b1cb9d42771440ab4b700369153eff83b88b))
+
 ## [0.1.1](https://github.com/efuturetoday/gojsop/compare/v0.1.0...v0.1.1) (2026-10-05)
 
 
