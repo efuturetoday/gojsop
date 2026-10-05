@@ -214,42 +214,75 @@ the list with the operator flag `--admission-exclude-namespaces`.
 
 ## Test without a cluster
 
-The `gojsop` CLI runs a hook or policy in the same engine as the operator,
-against a cluster held in memory, with the script's own rights and limits.
-Download it from the [release](https://github.com/efuturetoday/gojsop/releases),
-put each hook or policy in a directory of its own, and add test cases:
+Tests are [vitest](https://vitest.dev) tests. The npm package
+`@gojsop/testing` hands every call to the `gojsop` CLI, which runs your script
+in the same engine as the operator, against a cluster held in memory, with the
+script's own rights and limits. The script always runs in gojsop's engine,
+never in Node, so a green test says what the cluster would do.
+
+Download the CLI from the [release](https://github.com/efuturetoday/gojsop/releases)
+and put it on your `PATH` (or set `GOJSOP_BIN` to its path). Then, in your
+repository of hooks and policies:
+
+```sh
+npm install --save-dev vitest @gojsop/testing
+```
+
+Put each hook or policy in a directory of its own, with its test next to it:
 
 ```
 policies/no-latest/
   policy.yaml            # the JSAdmission, without spec.source
   policy.js              # the script
-  tests/denies-latest.yaml
+  policy.test.ts
 ```
 
-```yaml
-# tests/denies-latest.yaml
-name: denies :latest
-request:
-  operation: CREATE
-  object:
-    apiVersion: v1
-    kind: Pod
-    metadata: { name: web, namespace: team-a }
-    spec: { containers: [{ name: web, image: nginx:latest }] }
-expect:
-  allowed: false
-  message: /uses :latest/    # exact text, or a regular expression between slashes
+```ts
+// policy.test.ts
+import { expect, test } from "vitest";
+import { policy, pod } from "@gojsop/testing";
+
+const noLatest = policy("./policy.yaml"); // relative to this test file
+
+test("denies :latest", async () => {
+  const result = await noLatest.review({ object: pod({ image: "nginx:latest" }) });
+  expect(result.allowed).toBe(false);
+  expect(result.message).toMatch(/uses :latest/);
+});
+```
+
+A hook test builds a fake cluster, sends an event and looks at the cluster
+afterwards. `kube.*` without the right in `spec.permissions` throws
+`Forbidden`, as in the cluster:
+
+```ts
+// hook.test.ts
+import { expect, test } from "vitest";
+import { cluster, hook, pod } from "@gojsop/testing";
+
+test("counts the tracked pods", async () => {
+  const tracked = { track: "true" };
+  const c = cluster([pod({ name: "a", labels: tracked }), pod({ name: "b", labels: tracked })]);
+
+  const result = await hook("./hook.yaml").handle({ object: pod({ name: "a", labels: tracked }) }, { cluster: c });
+
+  expect(result.return).toEqual({ counted: 2 });
+  expect(c.get("v1", "ConfigMap", "default", "pod-count")?.data).toEqual({ count: "2" });
+});
 ```
 
 ```sh
-gojsop test                          # every case below the current directory
-gojsop run policies/no-latest/policy.yaml --request pod.yaml --trace
+npx vitest
 ```
 
-A hook case gives an `event` and the `cluster` before, and expects objects
-in the `cluster` after; `kube.*` without the right in `spec.permissions`
-throws `Forbidden`, as in the cluster. `expect.error` expects the script to
-fail, for example `/timeout/`.
+A script that throws, runs out of time or hits its memory limit makes the
+call reject with a `ScriptError` (`kind` is `script`, `timeout`,
+`memoryLimit` or `input`). For a quick check without a test, run one call and
+see every `kube.*` call it makes:
+
+```sh
+gojsop run policies/no-latest/policy.yaml --request pod.yaml --trace
+```
 
 ## Permissions
 
