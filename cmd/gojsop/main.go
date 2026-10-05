@@ -18,7 +18,7 @@ import (
 
 const usage = `usage:
   gojsop run <manifest> (--request <file> | --event <file>) [--cluster <file>] [--trace]
-  gojsop test [dir ...]
+  gojsop serve --stdio
 `
 
 func main() {
@@ -29,7 +29,7 @@ func main() {
 }
 
 // execute runs one command line and returns the exit code: 0 on success, 1
-// when a script failed or a case did, 2 on bad usage.
+// when a script failed, 2 on bad usage.
 func execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stderr, usage)
@@ -38,8 +38,8 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "run":
 		return runCmd(ctx, args[1:], stdout, stderr)
-	case "test":
-		return testCmd(ctx, args[1:], stdout, stderr)
+	case "serve":
+		return serveCmd(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "-h", "--help", "help":
 		_, _ = fmt.Fprint(stdout, usage)
 		return 0
@@ -48,13 +48,15 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-func testCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	failed, err := workspace.RunTests(ctx, stdout, args)
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "gojsop:", err)
+// serveCmd answers the calls of @gojsop/testing on stdin and stdout; logs go
+// to stderr so stdout stays one JSON object per line (workspace.R4).
+func serveCmd(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) != 1 || args[0] != "--stdio" {
+		_, _ = fmt.Fprint(stderr, usage)
 		return 2
 	}
-	if failed > 0 {
+	if err := workspace.Serve(ctx, stdin, stdout); err != nil {
+		_, _ = fmt.Fprintln(stderr, "gojsop:", err)
 		return 1
 	}
 	return 0

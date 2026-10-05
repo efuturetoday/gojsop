@@ -4,6 +4,7 @@ status: proposed
 entrypoints:
   - workspace.Load
   - workspace.Manifest.Run
+  - workspace.Serve
 ---
 
 # Workspace

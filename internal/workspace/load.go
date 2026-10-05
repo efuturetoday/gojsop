@@ -1,6 +1,6 @@
 // Package workspace is the logic behind the gojsop CLI: it loads a hook or
-// policy from a directory, runs one call of its script against a fake
-// cluster, and checks test cases. It always runs the script in the engine
+// policy from a directory and runs calls of its script against a fake
+// cluster, one at a time (Run) or for `gojsop serve` (Serve). It always runs the script in the engine
 // the operator uses; only the dynamic client is a fake.
 package workspace
 

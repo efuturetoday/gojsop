@@ -1,7 +1,9 @@
 package workspace_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"maps"
 	"os"
 	"path/filepath"
@@ -178,106 +180,8 @@ func TestFakeCluster_EnforcesPermissions(t *testing.T) {
 	}
 }
 
-// workspace.R4
-func TestCase_PolicyExpectations(t *testing.T) {
-	ctx := context.Background()
-	deny := load(t, "testdata/no-latest")
-	latest := &workspace.RequestSpec{Object: obj("Pod", "d", "p", map[string]any{
-		"spec": map[string]any{"containers": []any{map[string]any{"name": "a", "image": "nginx:latest"}}},
-	})}
-	run := func(m *workspace.Manifest, c *workspace.Case) []string {
-		t.Helper()
-		diffs, err := m.RunCase(ctx, c)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return diffs
-	}
-	no := false
-	for name, tc := range map[string]struct {
-		expect workspace.Expect
-		fails  bool
-	}{
-		"exact message":      {workspace.Expect{Allowed: &no, Message: "nginx:latest uses :latest"}, false},
-		"regex message":      {workspace.Expect{Allowed: &no, Message: "/^nginx.*:latest$/"}, false},
-		"wrong message":      {workspace.Expect{Allowed: &no, Message: "nope"}, true},
-		"wrong regex":        {workspace.Expect{Allowed: &no, Message: "/pinned/"}, true},
-		"allowed by default": {workspace.Expect{}, true},
-		"warnings count":     {workspace.Expect{Allowed: &no, Warnings: []string{"x"}}, true},
-	} {
-		diffs := run(deny, &workspace.Case{Request: latest, Expect: tc.expect})
-		if (len(diffs) > 0) != tc.fails {
-			t.Errorf("%s: diffs = %v, want failure = %t", name, diffs, tc.fails)
-		}
-	}
-
-	// A mutating policy: the expected object is a subset of the patched one.
-	mut := load(t, "testdata/add-team-label")
-	req := &workspace.RequestSpec{Object: obj("Deployment", "shop", "api", map[string]any{
-		"spec": map[string]any{"replicas": 2},
-	})}
-	ok := &workspace.Case{Request: req, Expect: workspace.Expect{Object: map[string]any{
-		"metadata": map[string]any{"labels": map[string]any{"team": "unowned"}},
-		"spec":     map[string]any{"replicas": 2},
-	}}}
-	if diffs := run(mut, ok); len(diffs) != 0 {
-		t.Errorf("subset should hold: %v", diffs)
-	}
-	bad := &workspace.Case{Request: req, Expect: workspace.Expect{Object: map[string]any{
-		"metadata": map[string]any{"labels": map[string]any{"team": "other"}},
-	}}}
-	diffs := run(mut, bad)
-	if len(diffs) != 1 || !strings.Contains(diffs[0], `object.metadata.labels.team: want "other", got "unowned"`) {
-		t.Errorf("diff = %v", diffs)
-	}
-}
-
-// workspace.R5
-func TestCase_ErrorsAndLimits(t *testing.T) {
-	ctx := context.Background()
-	m := load(t, writeFiles(t, map[string]string{
-		"policy.yaml": policyHeader + `  limits: {memoryMB: 4, timeoutSeconds: 1}
-  source:
-    inline: |
-      function validate(req) {
-        const mode = req.object.metadata.name;
-        if (mode === "throw") { throw new Error("boom"); }
-        if (mode === "loop") { for (;;) {} }
-        if (mode === "memory") { const a = []; for (;;) { a.push(new Array(100000).fill(1)); } }
-        return {allowed: true};
-      }
-`,
-	}))
-	for _, tc := range []struct{ name, want string }{
-		{"throw", "/boom/"},
-		{"loop", "/timeout/"},
-		{"memory", "/memory/"},
-	} {
-		c := &workspace.Case{
-			Request: &workspace.RequestSpec{Object: obj("Pod", "d", tc.name, nil)},
-			Expect:  workspace.Expect{Error: tc.want},
-		}
-		if diffs, err := m.RunCase(ctx, c); err != nil || len(diffs) != 0 {
-			t.Errorf("%s: expected error %s: diffs = %v, err = %v", tc.name, tc.want, diffs, err)
-		}
-		// Without the expectation the same call fails the case.
-		c.Expect = workspace.Expect{}
-		if diffs, err := m.RunCase(ctx, c); err != nil || len(diffs) != 1 || !strings.HasPrefix(diffs[0], "unexpected error") {
-			t.Errorf("%s: unexpected error not reported: diffs = %v, err = %v", tc.name, diffs, err)
-		}
-	}
-	// A call that succeeds does not meet an error expectation.
-	c := &workspace.Case{
-		Request: &workspace.RequestSpec{Object: obj("Pod", "d", "fine", nil)},
-		Expect:  workspace.Expect{Error: "/boom/"},
-	}
-	if diffs, _ := m.RunCase(ctx, c); len(diffs) != 1 {
-		t.Errorf("success where an error was expected: %v", diffs)
-	}
-}
-
 // workspace.R6
-func TestCase_HookChangesTheFakeCluster(t *testing.T) {
+func TestRun_HookChangesTheFakeCluster(t *testing.T) {
 	ctx := context.Background()
 	m := load(t, "testdata/count-pods")
 	pod := func(name string, labels map[string]any) map[string]any {
@@ -286,22 +190,21 @@ func TestCase_HookChangesTheFakeCluster(t *testing.T) {
 		})
 	}
 	tracked := map[string]any{"track": "true"}
-	cm := func(count string) map[string]any {
-		return obj("ConfigMap", "default", "pod-count", map[string]any{"data": map[string]any{"count": count}})
-	}
-	c := &workspace.Case{
+	out, err := m.Run(ctx, workspace.Input{
 		Cluster: []map[string]any{pod("a", tracked), pod("b", tracked), pod("c", map[string]any{})},
 		Event:   &workspace.EventSpec{Object: pod("a", tracked)},
-		Expect:  workspace.Expect{Cluster: []map[string]any{cm("2")}},
+	})
+	if err != nil || out.Error != "" {
+		t.Fatalf("err = %v, out.Error = %q", err, out.Error)
 	}
-	if diffs, err := m.RunCase(ctx, c); err != nil || len(diffs) != 0 {
-		t.Fatalf("diffs = %v, err = %v", diffs, err)
+	var count any
+	for _, o := range out.Cluster {
+		if o["kind"] == "ConfigMap" {
+			count = o["data"].(map[string]any)["count"]
+		}
 	}
-	c.Expect.Cluster = []map[string]any{cm("3"), obj("ConfigMap", "default", "absent", nil)}
-	diffs, err := m.RunCase(ctx, c)
-	if err != nil || len(diffs) != 2 ||
-		!strings.Contains(diffs[0], `data.count: want "3", got "2"`) || !strings.Contains(diffs[1], "absent is missing") {
-		t.Fatalf("diffs = %v, err = %v", diffs, err)
+	if count != "2" || len(out.Cluster) != 4 { // event.all() skipped the untracked pod
+		t.Fatalf("count = %v, cluster = %v", count, out.Cluster)
 	}
 
 	// The binding's namespaceSelector reads the labels of Namespace objects.
@@ -322,11 +225,111 @@ spec:
 	prod := obj("Namespace", "", "prod", map[string]any{"metadata": map[string]any{"name": "prod", "labels": map[string]any{"env": "prod"}}})
 	dev := obj("Namespace", "", "dev", nil)
 	inNS := func(ns, name string) map[string]any { return obj("Pod", ns, name, nil) }
-	out, err := ns.Run(ctx, workspace.Input{
+	out, err = ns.Run(ctx, workspace.Input{
 		Cluster: []map[string]any{prod, dev, inNS("prod", "p1"), inNS("dev", "d1")},
 		Event:   &workspace.EventSpec{Object: inNS("prod", "p1")},
 	})
 	if err != nil || out.Error != "" || string(out.Return) != `["p1"]` {
 		t.Fatalf("event.all() = %s, err = %v, out.Error = %q", out.Return, err, out.Error)
+	}
+}
+
+// serve sends the requests to workspace.Serve and returns its answers.
+func serve(t *testing.T, requests ...map[string]any) []map[string]any {
+	t.Helper()
+	var in bytes.Buffer
+	for _, r := range requests {
+		line, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in.Write(line)
+		in.WriteByte('\n')
+	}
+	var out bytes.Buffer
+	if err := workspace.Serve(context.Background(), &in, &out); err != nil {
+		t.Fatal(err)
+	}
+	answers := make([]map[string]any, 0, len(requests))
+	for line := range bytes.SplitSeq(bytes.TrimSpace(out.Bytes()), []byte("\n")) {
+		var a map[string]any
+		if err := json.Unmarshal(line, &a); err != nil {
+			t.Fatalf("answer %q: %v", line, err)
+		}
+		answers = append(answers, a)
+	}
+	if len(answers) != len(requests) {
+		t.Fatalf("%d answers for %d requests: %s", len(answers), len(requests), out.String())
+	}
+	return answers
+}
+
+// workspace.R4
+func TestServe_AnswersReviewAndHandle(t *testing.T) {
+	pod := obj("Pod", "default", "a", map[string]any{
+		"metadata": map[string]any{"name": "a", "namespace": "default", "labels": map[string]any{"track": "true"}},
+		"spec":     map[string]any{"containers": []any{map[string]any{"name": "app", "image": "nginx:latest"}}},
+	})
+	ans := serve(t,
+		map[string]any{"id": 1, "op": "review", "manifest": "testdata/no-latest/policy.yaml", "input": map[string]any{"object": pod}},
+		map[string]any{"id": "two", "op": "handle", "manifest": "testdata/count-pods", "input": map[string]any{"object": pod}, "cluster": []any{pod}},
+	)
+
+	review := ans[0]
+	result, _ := review["result"].(map[string]any)
+	if review["id"] != float64(1) || review["error"] != nil || result["allowed"] != false || result["message"] != "nginx:latest uses :latest" {
+		t.Errorf("review answer = %v", review)
+	}
+
+	handle := ans[1]
+	result, _ = handle["result"].(map[string]any)
+	cluster, _ := handle["cluster"].([]any)
+	if handle["id"] != "two" || handle["error"] != nil || result["return"] == nil || len(cluster) != 2 {
+		t.Errorf("handle answer = %v", handle)
+	}
+	if handle["console"] == nil {
+		t.Errorf("console must be a list, got null")
+	}
+}
+
+// workspace.R5
+func TestServe_ErrorsAndLimitsKeepServing(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		"policy.yaml": policyHeader + `  limits: {memoryMB: 4, timeoutSeconds: 1}
+  source:
+    inline: |
+      function validate(req) {
+        const mode = req.object.metadata.name;
+        if (mode === "throw") { throw new Error("boom"); }
+        if (mode === "loop") { for (;;) {} }
+        if (mode === "memory") { const a = []; for (;;) { a.push(new Array(100000).fill(1)); } }
+        return {allowed: true};
+      }
+`,
+	})
+	review := func(id any, name string) map[string]any {
+		return map[string]any{"id": id, "op": "review", "manifest": dir, "input": map[string]any{"object": obj("Pod", "d", name, nil)}}
+	}
+	ans := serve(t,
+		review(1, "throw"),
+		review(2, "loop"),
+		review(3, "memory"),
+		map[string]any{"id": 4, "op": "review", "manifest": dir + "/missing.yaml", "input": map[string]any{}},
+		map[string]any{"id": 5, "op": "handle", "manifest": dir, "input": map[string]any{}},
+		review(6, "fine"),
+	)
+	for i, want := range []struct{ kind, text string }{
+		{"script", "boom"}, {"timeout", "timeout"}, {"memoryLimit", "memory"}, {"input", ""}, {"input", "hook manifest"},
+	} {
+		e, _ := ans[i]["error"].(map[string]any)
+		msg, _ := e["message"].(string)
+		if e["kind"] != want.kind || !strings.Contains(msg, want.text) || ans[i]["id"] != float64(i+1) {
+			t.Errorf("answer %d = %v, want kind %s containing %q", i+1, ans[i], want.kind, want.text)
+		}
+	}
+	// After every failure the process still answers.
+	last, _ := ans[5]["result"].(map[string]any)
+	if ans[5]["error"] != nil || last["allowed"] != true {
+		t.Errorf("last answer = %v", ans[5])
 	}
 }

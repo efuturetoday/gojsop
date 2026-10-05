@@ -31,7 +31,7 @@ import (
 // script; the script's own limits apply inside.
 const buildTimeout = time.Minute
 
-// RequestSpec is the admission request of a case or of `gojsop run
+// RequestSpec is the admission request of `gojsop run
 // --request`. Kind, resource, name and namespace come from the object unless
 // given.
 type RequestSpec struct {
@@ -44,7 +44,7 @@ type RequestSpec struct {
 	DryRun    bool                 `json:"dryRun,omitempty"`
 }
 
-// EventSpec is the hook event of a case or of `gojsop run --event`. Binding
+// EventSpec is the hook event of `gojsop run --event`. Binding
 // defaults to the first binding that watches the object's kind.
 type EventSpec struct {
 	Type    string         `json:"type,omitempty"`
@@ -73,11 +73,25 @@ type Output struct {
 	Return json.RawMessage `json:"return,omitempty"`
 	// Console holds the console lines of the script.
 	Console []jslog.Line `json:"console,omitempty"`
-	// Cluster is the fake cluster after a hook call.
+	// Cluster is the fake cluster after the call.
 	Cluster []map[string]any `json:"cluster,omitempty"`
 	// Error is set when the script threw, timed out or hit its memory limit.
 	Error string `json:"error,omitempty"`
+	// Kind names what Error is: script, timeout or memoryLimit (workspace.R5).
+	Kind string `json:"-"`
 }
+
+// Error kinds of a failed call, as serve names them.
+const (
+	KindScript      = "script"
+	KindTimeout     = "timeout"
+	KindMemoryLimit = "memoryLimit"
+	KindInput       = "input"
+)
+
+// errBuild marks an error from preparing the script, which is the script's
+// fault and not the input's.
+var errBuild = errors.New("script does not build")
 
 // Run prepares the script of m as the operator does and runs one call. The
 // error is set only when nothing could run (bad input, the script does not
@@ -140,10 +154,8 @@ func (m *Manifest) Run(ctx context.Context, in Input) (*Output, error) {
 		return nil, err
 	}
 	out.Console = console.Lines()
-	out.Error = describe(res)
-	if m.Hook != nil {
-		out.Cluster = c.all()
-	}
+	out.Error, out.Kind = describe(res)
+	out.Cluster = c.all()
 	return out, nil
 }
 
@@ -397,7 +409,7 @@ func prepare(ctx context.Context, reg *jsregistry.Registry, key jsrun.Key, spec 
 		case jsrun.PhaseReady:
 			return nil
 		case jsrun.PhaseFailed:
-			return fmt.Errorf("prepare script: %w", st.Err)
+			return fmt.Errorf("prepare script: %w: %w", errBuild, st.Err)
 		}
 		select {
 		case <-ctx.Done():
@@ -407,20 +419,21 @@ func prepare(ctx context.Context, reg *jsregistry.Registry, key jsrun.Key, spec 
 	}
 }
 
-// describe is the error text of a call that did not return, "" when it did.
+// describe is the error text and kind of a call that did not return, "" when
+// it did.
 // workspace.R5
-func describe(res jsrun.Result) string {
+func describe(res jsrun.Result) (text, kind string) {
 	switch res.Outcome {
 	case jsrun.OutcomeOK:
-		return ""
+		return "", ""
 	case jsrun.OutcomePanic:
-		return fmt.Sprintf("panic: %v", res.Panic)
+		return fmt.Sprintf("panic: %v", res.Panic), KindScript
 	case jsrun.OutcomeMemoryLimit:
-		return "memory limit: " + errText(res.Err)
+		return "memory limit: " + errText(res.Err), KindMemoryLimit
 	case jsrun.OutcomeCancelled:
-		return "timeout: " + errText(res.Err)
+		return "timeout: " + errText(res.Err), KindTimeout
 	}
-	return errText(res.Err)
+	return errText(res.Err), KindScript
 }
 
 func errText(err error) string {
