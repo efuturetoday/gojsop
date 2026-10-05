@@ -36,19 +36,19 @@ Install gojsop:
 ```sh
 helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
   --namespace gojsop-system --create-namespace --wait \
-  --version 0.1.0 # x-release-please-version
+  --version 0.1.1 # x-release-please-version
 ```
 
 Or without Helm:
 
 ```sh
-kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.0/install.yaml # x-release-please-version
+kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.1/install.yaml # x-release-please-version
 ```
 
 Try the samples, a ConfigMap sync hook and two pod policies:
 
 ```sh
-kubectl apply -k "github.com/efuturetoday/gojsop/config/samples?ref=v0.1.0" # x-release-please-version
+kubectl apply -k "github.com/efuturetoday/gojsop/config/samples?ref=v0.1.1" # x-release-please-version
 kubectl get jshooks,jsadmissions
 ```
 
