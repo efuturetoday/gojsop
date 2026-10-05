@@ -166,6 +166,14 @@ cli-dist: ## Build the gojsop CLI for every release target to dist/cli (VERSION=
 sdk-test: gojsop ## Build and test the npm packages in sdk/ against bin/gojsop.
 	cd sdk && npm ci && npm run build && cd testing && GOJSOP_BIN=$(CURDIR)/bin/gojsop npx vitest run
 
+.PHONY: sdk-lint
+sdk-lint: ## Check format and lint of the npm packages in sdk/ with Biome (sdk-format fixes).
+	cd sdk && npm ci && npm run lint
+
+.PHONY: sdk-format
+sdk-format: ## Format the npm packages in sdk/ and apply safe Biome fixes.
+	cd sdk && npm run format
+
 .PHONY: sdk-smoke
 sdk-smoke: ## Pack the npm packages, create a workspace from them and run its tests, as a user would.
 	$(MAKE) cli-dist VERSION=0.0.0-smoke

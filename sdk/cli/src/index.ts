@@ -28,3 +28,5 @@ export function notFoundHint(bin: string): string {
     `Reinstall @gojsop/cli without --omit=optional, put gojsop on PATH, or set GOJSOP_BIN to its path.`
   );
 }
+
+export { type Bundle, bundle, isModule, scriptBeside } from "./bundle.js";

@@ -1,8 +1,8 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { cluster, configMap, hook, namespace, pod, policy, ScriptError, secret } from "@gojsop/testing";
 import { describe, expect, test } from "vitest";
-import { ScriptError, cluster, configMap, hook, namespace, pod, policy, secret } from "@gojsop/testing";
 
 const policyHeader = `apiVersion: core.gojsop.io/v1alpha1
 kind: JSAdmission
@@ -131,7 +131,38 @@ describe("fixtures", () => {
   test("have sensible defaults", () => {
     expect(pod()).toMatchObject({ kind: "Pod", metadata: { name: "pod", namespace: "default" } });
     expect(pod({ image: "x:1", labels: { a: "b" } }).metadata?.labels).toEqual({ a: "b" });
-    expect(configMap("ns/n", { data: { a: "b" } })).toMatchObject({ metadata: { namespace: "ns", name: "n" }, data: { a: "b" } });
+    expect(configMap("ns/n", { data: { a: "b" } })).toMatchObject({
+      metadata: { namespace: "ns", name: "n" },
+      data: { a: "b" },
+    });
     expect(namespace("n").metadata).toEqual({ name: "n" });
+  });
+});
+
+describe("TypeScript", () => {
+  const ts = policy("./ts-policy/policy.yaml");
+
+  test("bundles policy.ts with its imports and runs it in the engine", async () => {
+    const result = await ts.review({ object: pod({ image: "nginx:latest" }) });
+    expect(result).toMatchObject({ allowed: false, message: "nginx:latest uses :latest" });
+  });
+
+  test("points a script error at the TypeScript line", async () => {
+    const err = await ts.review({ object: pod({ image: "boom:1" }) }).catch((e) => e);
+    expect(err).toBeInstanceOf(ScriptError);
+    expect(err.kind).toBe("script");
+    expect(err.message).toMatch(/refused boom:1/);
+    expect(err.message).toMatch(/ts-policy[\\/]rules\.ts:4:\d+\)/);
+  });
+
+  test("rebuilds after the script changes", async () => {
+    const file = manifest("policy.yaml", policyHeader);
+    const script = path.join(path.dirname(file), "policy.ts");
+    writeFileSync(script, `export function validate() { return { allowed: true }; }`);
+    expect((await policy(file).review({ object: pod() })).allowed).toBe(true);
+    // a later mtime, as an editor's save gives
+    writeFileSync(script, `export function validate() { return { allowed: false, message: "changed" }; }`);
+    utimesSync(script, new Date(), new Date(Date.now() + 5000));
+    expect((await policy(file).review({ object: pod() })).message).toBe("changed");
   });
 });

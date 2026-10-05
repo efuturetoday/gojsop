@@ -11,7 +11,7 @@ export class Cluster {
   private items: KubeObject[] = [];
 
   constructor(objects: KubeObject[] = []) {
-    objects.forEach((o) => this.add(o));
+    for (const o of objects) this.add(o);
   }
 
   /** Adds an object, replacing the one with the same kind, namespace and name. */

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // npm create @gojsop [dir]: copies the template into dir (default
-// "gojsop-workspace") and pins @gojsop/testing to this package's version.
+// "gojsop-workspace") and pins the @gojsop packages to this package's version.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,10 +23,12 @@ fs.renameSync(path.join(target, "_gitignore"), path.join(target, ".gitignore"));
 const pkgPath = path.join(target, "package.json");
 const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 pkg.name = path.basename(target);
-pkg.devDependencies["@gojsop/testing"] = `^${version}`;
-fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+for (const dep of Object.keys(pkg.devDependencies)) {
+  if (dep.startsWith("@gojsop/")) pkg.devDependencies[dep] = `^${version}`;
+}
+fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 
-console.log(`Created ${dir}: one policy (policies/no-latest) and one hook (hooks/count-pods) with tests.
+console.log(`Created ${dir}: one policy (policies/no-latest) and one hook (hooks/count-pods), in TypeScript, with tests.
 
   cd ${dir}
   npm install

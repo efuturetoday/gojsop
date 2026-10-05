@@ -15,7 +15,8 @@ on their own machine: test them with vitest, and run them once with the
 
 The maintainer keeps hooks and policies in a repository of their own, one
 directory each: the manifest (`hook.yaml` or `policy.yaml`, a `JSHook` or
-`JSAdmission`), the script next to it, and tests (`*.test.ts`). Tests are
+`JSAdmission`), the script next to it (`policy.ts`, `hook.ts`, or plain
+`.js`), and tests (`*.test.ts`). Tests are
 vitest tests that use the npm package `@gojsop/testing`. That package
 starts the `gojsop` binary and hands every call to it.
 
@@ -82,7 +83,7 @@ Words used here:
 | ID | Rule | Source | Held by |
 |---|---|---|---|
 | workspace.R1 | gojsop runs a script through the same engine, registry and `kube.*` binder as the operator; only the dynamic client is a fake. | decision "engine only" | `TestRun_UsesTheOperatorsEngineAndKubeSurface` |
-| workspace.R2 | The script comes from `spec.source.inline`, or else from the one `.js` file next to the manifest. | decision "contract, not toolchain" | `TestLoad_ScriptInlineOrBesideTheManifest` |
+| workspace.R2 | The script comes from `spec.source.inline`, or else from the one `.js` file next to the manifest. | decision "TypeScript through Vite" | `TestLoad_ScriptInlineOrBesideTheManifest` |
 | workspace.R3 | `kube.*` has exactly the rights of `spec.permissions` (and, for a hook, read on its bindings); anything else throws `Forbidden`. | kube-access.R11 | `TestFakeCluster_EnforcesPermissions` |
 | workspace.R4 | `gojsop serve --stdio` reads one JSON request per line (`review` or `handle`, manifest path, input, cluster) and writes one JSON answer per line: the result, console lines, the fake cluster after, or an error. | decision "vitest only" | `TestServe_AnswersReviewAndHandle` |
 | workspace.R5 | A script that throws, times out or hits its memory limit yields an error answer naming which; the limits are the manifest's, and serve keeps answering. | js-execution.R3, js-execution.R5 | `TestServe_ErrorsAndLimitsKeepServing` |
@@ -90,6 +91,7 @@ Words used here:
 | workspace.R7 | `@gojsop/testing` runs every `review` and `handle` through one `gojsop serve` per vitest worker and stops it when the worker ends. | decision "vitest only" | missing → WS-10 |
 | workspace.R8 | `gojsop run --trace` prints every `kube.*` call with its arguments and its answer or error. | decision "no debugger" | `TestRun_TraceShowsKubeCalls` |
 | workspace.R9 | Installing `@gojsop/testing` or `@gojsop/cli` brings the `gojsop` binary of the release with the same version for macOS and Linux (x64, arm64) and Windows (x64); `GOJSOP_BIN` overrides it. | decision "npm carries the binary" | missing → WS-10 |
+| workspace.R11 | A caller may hand serve the script with the request; it replaces the `.js` next to the manifest, and together with `spec.source.inline` it is an error. `@gojsop/testing`, `gojsop build` and `npx gojsop run` hand over `policy.ts` or `hook.ts` (or the one module script) bundled with Vite, its exports as globals; an error in it names the TypeScript line. | decision "TypeScript through Vite" | `TestServe_SourceFromTheCaller` |
 | workspace.R10 | `npm create @gojsop <dir>` creates a workspace whose tests pass after `npm install`, and refuses a directory that is not empty. | decision "npm carries the binary" | missing → WS-10 |
 
 Every rule is held by a test or is `missing → <KEY>`.
@@ -99,15 +101,16 @@ Every rule is held by a test or is `missing → <KEY>`.
 - [js-execution](../aspects/js-execution.md): the engine, limits and the entry point contract gojsop shares.
 - [js-registry](../aspects/js-registry.md): how gojsop prepares and calls a script, as the operator does.
 - [kube-access](../aspects/kube-access.md): the `kube.*` surface and the rights the fake cluster enforces.
+- [npm-packages](../aspects/npm-packages.md): how the npm packages are built, checked and published.
 
 ## Decisions
 
 - **Scripts run only in the operator's engine, never in Node.** Status: accepted (2026-10-05). Why: Node differs in async, globals, language features, speed, limits and the JSON border, so a green Node run proves nothing; Cloudflare left its Node emulation (Miniflare) for its real runtime for the same reason. Not taken: a Node debug mode, because it would be a second truth.
 - **Tests are vitest tests through `@gojsop/testing`; there is no second way.** Status: accepted (2026-10-05). Why: JS developers know vitest, its editor integration, watch mode, UI and reporters; one way keeps the docs, the examples and the code small. vitest needs Node, the script still runs in the engine through `gojsop serve`. Not taken: YAML cases and a built-in `gojsop test` runner with its own `gojsop:test` API, because two ways to test split users and maintenance.
-- **gojsop sets a contract, not a toolchain for the script.** Status: accepted (2026-10-05). Why: in the end the operator takes one JavaScript file (ES2023 script, global entry point, no Node APIs, no async entry point, WS-5). Bundling TypeScript comes with `@gojsop/testing` and a build step (WS-6).
+- **TypeScript through Vite; the operator takes one JavaScript file.** Status: accepted (2026-10-05). Why: scripts are written as modules in TypeScript (`export function validate`), with imports and types from `@gojsop/types`. `@gojsop/testing` bundles them with the Vite that vitest brings before every call, and `gojsop build` writes the same bundle to `dist/` for the ConfigMap, so tests and cluster run the same code. The operator stays unchanged: one ES2023 script with global entry points (WS-5). A plain `.js` script still works as it is. Not taken: bundling in the operator, because the cluster would then build code nobody tested; esbuild as our own bundler, see the aspect npm-packages.
 - **npm carries the binary; the release tag carries the version.** Status: accepted (2026-10-05). Why: JS developers install with npm, and an optional dependency per platform (as esbuild does) needs no Go and no download step. `@gojsop/cli` holds the launcher, `@gojsop/cli-<os>-<arch>` the binary, `@gojsop/testing` and `@gojsop/create` build on them; all are published by the release job with the version of the tag, pinned to each other, with provenance. The repository keeps `0.0.0`, so release-please touches no `package.json` and no lockfile. Not taken: a postinstall download, because it breaks offline installs and installs without scripts.
 - **No breakpoint debugger in the script.** Status: accepted (2026-10-05). Why: QuickJS has no debug protocol; `--trace`, `console` and stack traces cover most needs. Test code itself is debugged in Node as usual.
 
 ## Open
 
-WS-5, WS-6, WS-8, WS-9, WS-10, WS-11
+WS-5, WS-8, WS-9, WS-10, WS-11

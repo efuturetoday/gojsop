@@ -6,6 +6,6 @@ configMapGenerator:
   - name: no-latest
     namespace: gojsop-system
     files:
-      - policy.js
+      - policy.js=dist/policy.js # written by npm run build
     options:
       disableNameSuffixHash: true # policy.yaml refers to the ConfigMap by this name

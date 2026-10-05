@@ -29,5 +29,6 @@ Ways of doing things that both areas share.
 | [api-design](aspects/api-design.md) | CRD markers, validation, versioning |
 | [kubebuilder-scaffold](aspects/kubebuilder-scaffold.md) | Generated files, scaffold markers, layout |
 | [testing](aspects/testing.md) | Test layers, Make targets, CI |
+| [npm-packages](aspects/npm-packages.md) | The packages in `sdk/`: TypeScript, Biome, versions, publishing |
 
 Open items: [backlog.md](backlog.md). Check: `make sdlc-check`.

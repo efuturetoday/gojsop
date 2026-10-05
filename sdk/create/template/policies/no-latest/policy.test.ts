@@ -1,5 +1,5 @@
-import { describe, expect, test } from "vitest";
 import { pod, policy } from "@gojsop/testing";
+import { describe, expect, test } from "vitest";
 
 const noLatest = policy("./policy.yaml");
 

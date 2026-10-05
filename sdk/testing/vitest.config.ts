@@ -15,11 +15,7 @@ export default defineConfig({
   },
   server: { fs: { allow: [here("../..")] } },
   test: {
-    include: [
-      "test/**/*.test.ts",
-      "../../internal/workspace/testdata/**/*.test.ts",
-      "../create/template/**/*.test.ts",
-    ],
+    include: ["test/**/*.test.ts", "../../internal/workspace/testdata/**/*.test.ts", "../create/template/**/*.test.ts"],
     testTimeout: 30_000,
   },
 });

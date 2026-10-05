@@ -5,10 +5,13 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "deploy": "vitest run && kubectl apply -k ."
+    "build": "gojsop build",
+    "deploy": "vitest run && gojsop build && kubectl apply -k ."
   },
   "devDependencies": {
+    "@gojsop/cli": "^0.0.0",
     "@gojsop/testing": "^0.0.0",
+    "@gojsop/types": "^0.0.0",
     "vitest": "^5.0.3"
   }
 }

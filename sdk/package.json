@@ -2,9 +2,19 @@
   "name": "gojsop-sdk",
   "private": true,
   "description": "npm packages of gojsop. Versions are stamped from the release tag by scripts/publish.mjs.",
-  "workspaces": ["cli", "testing", "create"],
+  "workspaces": [
+    "types",
+    "cli",
+    "testing",
+    "create"
+  ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm test --workspaces --if-present"
+    "test": "npm test --workspaces --if-present",
+    "lint": "biome check .",
+    "format": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15"
   }
 }

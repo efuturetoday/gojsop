@@ -23,7 +23,11 @@ unset GOJSOP_BIN
 npm install --no-audit --no-fund \
   "$tgz/gojsop-cli-$host-$VERSION.tgz" \
   "$tgz/gojsop-cli-$VERSION.tgz" \
+  "$tgz/gojsop-types-$VERSION.tgz" \
   "$tgz/gojsop-testing-$VERSION.tgz"
 npm test
+npm run build
+test -s policies/no-latest/dist/policy.js
+test -s hooks/count-pods/dist/hook.js
 npx gojsop --help >/dev/null
 echo "smoke test passed on $host"

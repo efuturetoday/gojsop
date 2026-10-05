@@ -239,10 +239,13 @@ permissions:
 
 ## Scripts
 
-**Entry points are global functions.** Write `function handle() {}` (or
-`var handle = ...`). A top-level `const`, `let` or `class`, and code a bundler
-wrapped in a closure, are not visible to gojsop; the script then fails with
-`missing required export: handle()`.
+**Entry points are global functions.** The operator runs one JavaScript
+script and calls `validate`, `mutate` or `handle` as a global function. In a
+workspace you write TypeScript with `export function handle`; `gojsop build`
+bundles it and makes the exports global. In a plain script, write
+`function handle() {}` (or `var handle = ...`): a top-level `const`, `let` or
+`class` is not visible to gojsop, and the script fails with
+`missing required export: handle()`. An entry point must not be `async`.
 
 **Missing fields are normal.** Kubernetes leaves out empty fields: an object
 without labels has no `metadata.labels`, and `req.object` is `null` on
