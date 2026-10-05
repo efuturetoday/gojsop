@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // AdmissionRule mirrors a single rule entry inside a *WebhookConfiguration's
@@ -198,7 +199,10 @@ type JSAdmissionList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&JSAdmission{}, &JSAdmissionList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(SchemeGroupVersion, &JSAdmission{}, &JSAdmissionList{})
+		return nil
+	})
 }
 
 // Values of JSAdmissionSpec.Enforcement.

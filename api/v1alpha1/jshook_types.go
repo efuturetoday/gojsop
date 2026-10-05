@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // JSHookSpec defines the desired state of JSHook.
@@ -133,5 +134,8 @@ type JSHookList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&JSHook{}, &JSHookList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(SchemeGroupVersion, &JSHook{}, &JSHookList{})
+		return nil
+	})
 }
