@@ -1,0 +1,21 @@
+{
+  "name": "@gojsop/types",
+  "version": "0.0.0-smoke",
+  "description": "Types for gojsop scripts: the request a policy gets, the event a hook gets, and the global kube.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/efuturetoday/gojsop.git",
+    "directory": "sdk/types"
+  },
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts"
+    }
+  },
+  "files": [
+    "index.d.ts",
+    "README.md"
+  ]
+}

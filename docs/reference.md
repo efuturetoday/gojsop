@@ -16,7 +16,7 @@ walks you through a first hook and policy.
 gojsop needs [cert-manager](https://cert-manager.io), which issues the webhook
 certificate:
 
-```sh
+```bash
 helm repo add jetstack https://charts.jetstack.io
 helm install cert-manager jetstack/cert-manager \
   --namespace cert-manager --create-namespace --set crds.enabled=true --wait
@@ -25,7 +25,7 @@ helm install cert-manager jetstack/cert-manager \
 With Helm:
 
 <!-- x-release-please-start-version -->
-```sh
+```bash
 helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
   --namespace gojsop-system --create-namespace --wait \
   --version 0.1.1
@@ -35,7 +35,7 @@ helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
 Or without Helm:
 
 <!-- x-release-please-start-version -->
-```sh
+```bash
 kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.1/install.yaml
 ```
 <!-- x-release-please-end -->
@@ -43,7 +43,7 @@ kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.1
 The samples, a ConfigMap sync hook and two pod policies:
 
 <!-- x-release-please-start-version -->
-```sh
+```bash
 kubectl apply -k "github.com/efuturetoday/gojsop/config/samples?ref=v0.1.1"
 kubectl get jshooks,jsadmissions
 ```
@@ -239,10 +239,13 @@ permissions:
 
 ## Scripts
 
-**Entry points are global functions.** Write `function handle() {}` (or
-`var handle = ...`). A top-level `const`, `let` or `class`, and code a bundler
-wrapped in a closure, are not visible to gojsop; the script then fails with
-`missing required export: handle()`.
+**Entry points are global functions.** The operator runs one JavaScript
+script and calls `validate`, `mutate` or `handle` as a global function. In a
+workspace you write TypeScript with `export function handle`; `gojsop build`
+bundles it and makes the exports global. In a plain script, write
+`function handle() {}` (or `var handle = ...`): a top-level `const`, `let` or
+`class` is not visible to gojsop, and the script fails with
+`missing required export: handle()`. An entry point must not be `async`.
 
 **Missing fields are normal.** Kubernetes leaves out empty fields: an object
 without labels has no `metadata.labels`, and `req.object` is `null` on
@@ -276,7 +279,7 @@ policy (`kubectl describe jshook <name>`).
 and to loading the script. A script stuck in a loop is stopped at the
 deadline; `try/catch` cannot hold it.
 
-**Sources.** Inline in `spec.source.inline`, or from a ConfigMap (a workspace from `npm create @gojsop` builds it with kustomize):
+**Sources.** Inline in `spec.source.inline` (what `gojsop build` writes), or from a ConfigMap:
 
 ```yaml
 source:

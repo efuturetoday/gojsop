@@ -55,6 +55,19 @@ func (m *Manifest) Mutating() bool {
 // directory holding one) and its script.
 // workspace.R2
 func Load(path string) (*Manifest, error) {
+	return load(path, nil)
+}
+
+// LoadWithSource reads the manifest at path like Load, but takes the script
+// from the caller: @gojsop/testing bundles a TypeScript or module script
+// and hands over the result. A manifest with spec.source.inline is an error,
+// because then two scripts compete.
+// workspace.R11
+func LoadWithSource(path string, source []byte) (*Manifest, error) {
+	return load(path, source)
+}
+
+func load(path string, source []byte) (*Manifest, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -108,6 +121,13 @@ func Load(path string) (*Manifest, error) {
 	}
 	if m.Name == "" {
 		m.Name = filepath.Base(dir)
+	}
+	if source != nil {
+		if inline != "" {
+			return nil, fmt.Errorf("%s: has spec.source.inline and a script file next to it; keep one", path)
+		}
+		m.Source = source
+		return m, nil
 	}
 	if inline != "" {
 		m.Source = []byte(inline)

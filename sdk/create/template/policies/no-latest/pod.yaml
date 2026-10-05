@@ -1,12 +1,12 @@
-# A sample request for: npx gojsop run policies/no-latest/policy.yaml --request policies/no-latest/pod.yaml --trace
-operation: CREATE
-object:
-  apiVersion: v1
-  kind: Pod
-  metadata:
-    name: web
-    namespace: default
-  spec:
-    containers:
-      - name: web
-        image: nginx:latest
+# A Pod as kubectl get pod <name> -o yaml prints it. Tests review it with
+# review("./pod.yaml"); on the command line:
+#   npx gojsop run policies/no-latest --request policies/no-latest/pod.yaml --trace
+apiVersion: v1
+kind: Pod
+metadata:
+  name: web
+  namespace: default
+spec:
+  containers:
+    - name: web
+      image: nginx:latest

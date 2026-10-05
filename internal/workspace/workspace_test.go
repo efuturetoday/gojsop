@@ -292,6 +292,56 @@ func TestServe_AnswersReviewAndHandle(t *testing.T) {
 	}
 }
 
+// workspace.R11
+func TestServe_SourceFromTheCaller(t *testing.T) {
+	bundled := "globalThis.validate = function () { return {allowed: false, message: \"bundled\"}; };"
+	tsOnly := writeFiles(t, map[string]string{"policy.yaml": policyHeader, "policy.ts": "export function validate() {}"})
+	inline := writeFiles(t, map[string]string{
+		"policy.yaml": policyHeader + "  source:\n    inline: \"function validate() { return {allowed: true}; }\"\n",
+	})
+	review := func(id int, manifest string) map[string]any {
+		return map[string]any{"id": id, "op": "review", "manifest": manifest, "source": bundled,
+			"input": map[string]any{"object": obj("Pod", "d", "a", nil)}}
+	}
+	ans := serve(t, review(1, "testdata/no-latest"), review(2, tsOnly), review(3, inline))
+
+	for i := range 2 {
+		result, _ := ans[i]["result"].(map[string]any)
+		if ans[i]["error"] != nil || result["message"] != "bundled" {
+			t.Errorf("answer %d = %v, want the caller's script", i+1, ans[i])
+		}
+	}
+	e, _ := ans[2]["error"].(map[string]any)
+	if msg, _ := e["message"].(string); e["kind"] != "input" || !strings.Contains(msg, "keep one") {
+		t.Errorf("source and inline: answer = %v", ans[2])
+	}
+}
+
+// workspace.R14
+func TestServe_InputFromAFile(t *testing.T) {
+	dir := writeFiles(t, map[string]string{
+		// what kubectl get pod -o yaml prints: an object, not a request
+		"pod.yaml": "apiVersion: v1\nkind: Pod\nmetadata: {name: web, namespace: default}\n" +
+			"spec: {containers: [{name: web, image: nginx:latest}]}\n",
+		"request.yaml": "operation: UPDATE\nobject: {apiVersion: v1, kind: Pod, metadata: {name: web}," +
+			" spec: {containers: [{name: web, image: nginx:1.27}]}}\n",
+	})
+	review := func(id int, file string) map[string]any {
+		return map[string]any{"id": id, "op": "review", "manifest": "testdata/no-latest", "inputFile": filepath.Join(dir, file)}
+	}
+	ans := serve(t, review(1, "pod.yaml"), review(2, "request.yaml"), review(3, "missing.yaml"))
+
+	if r, _ := ans[0]["result"].(map[string]any); r["allowed"] != false {
+		t.Errorf("an object as input: answer = %v", ans[0])
+	}
+	if r, _ := ans[1]["result"].(map[string]any); r["allowed"] != true {
+		t.Errorf("a request as input: answer = %v", ans[1])
+	}
+	if e, _ := ans[2]["error"].(map[string]any); e["kind"] != "input" {
+		t.Errorf("a missing file: answer = %v", ans[2])
+	}
+}
+
 // workspace.R5
 func TestServe_ErrorsAndLimitsKeepServing(t *testing.T) {
 	dir := writeFiles(t, map[string]string{

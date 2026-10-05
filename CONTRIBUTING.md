@@ -2,7 +2,7 @@
 
 ## Make targets
 
-```sh
+```bash
 make test          # unit and envtest integration tests
 make lint          # golangci-lint
 make test-e2e      # e2e tests on a throwaway kind cluster
@@ -45,6 +45,6 @@ How the project is organised, its rules and its open items live in
 private repository `github.com/efuturetoday/agentic-sdlc`; the target sets
 `GOPRIVATE`, and Git needs credentials for GitHub, for example:
 
-```sh
+```bash
 git config --global credential.https://github.com.helper '!gh auth git-credential'
 ```

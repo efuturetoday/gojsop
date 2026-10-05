@@ -1,15 +1,11 @@
-import { expect, test } from "vitest";
 import { cluster, hook, pod } from "@gojsop/testing";
+import { expect, test } from "vitest";
 
 const countPods = hook("./hook.yaml");
 
 test("counts only the pods its binding selects", async () => {
   const tracked = { track: "true" };
-  const c = cluster([
-    pod({ name: "a", labels: tracked }),
-    pod({ name: "b", labels: tracked }),
-    pod({ name: "c" }),
-  ]);
+  const c = cluster([pod({ name: "a", labels: tracked }), pod({ name: "b", labels: tracked }), pod({ name: "c" })]);
 
   const result = await countPods.handle({ object: pod({ name: "a", labels: tracked }) }, { cluster: c });
 

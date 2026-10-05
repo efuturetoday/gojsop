@@ -8,7 +8,7 @@ Node.
 
 ## Install
 
-```sh
+```bash
 npm install --save-dev vitest @gojsop/testing
 ```
 
@@ -53,9 +53,12 @@ test("counts the tracked pods", async () => {
 
 ## API
 
-- `policy(path).review(request, { cluster? })` resolves to `ReviewResult`
+- `policy(path).review(request, { cluster? })` resolves to `ReviewResult`;
+  `request` is an object or the path of a YAML file with a request or a plain
+  object (as `kubectl get -o yaml` prints it), relative to the test file
   (`allowed`, `message`, `warnings`, `modifiedObject`, `patchedObject`, `console`).
-- `hook(path).handle(event, { cluster? })` resolves to `HandleResult`
+- `hook(path).handle(event, { cluster? })` resolves to `HandleResult`; `event`
+  is an object or the path of a YAML file, as for `review`
   (`return`, `console`).
 - `path` is a manifest or its directory; a relative path is relative to the
   test file.

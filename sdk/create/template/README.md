@@ -1,15 +1,17 @@
 # gojsop workspace
 
 Hooks and policies for [gojsop](https://github.com/efuturetoday/gojsop), one
-directory each: the manifest, its script and its vitest tests.
+directory each: the manifest, its script and its tests.
 
-```sh
+```bash
 npm install
-npm test            # or: npx vitest (watch mode)
-npm run deploy      # tests, then kubectl apply -k .: every hook and policy, scripts as ConfigMaps
+npm test                          # or: npx vitest (watch mode)
+npx gojsop new policy <name>      # add a policy (or: new hook <name>)
+npx gojsop rn <name> <new-name>   # rename one
+npx gojsop rm <name>              # remove one
+npm run deploy                    # tests, builds dist/, kubectl apply -f dist/
 ```
 
 The scripts run in gojsop's engine, never in Node, against a cluster held in
-memory. Start a new hook or policy by copying a directory and listing it in
-`kustomization.yaml`. To remove one, run `kubectl delete -k <directory>`
-before you drop it from `kustomization.yaml`; `kubectl apply` does not prune.
+memory. `npm run build` writes one file per hook and policy to `dist/`, with
+the script inside.

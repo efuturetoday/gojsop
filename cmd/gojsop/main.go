@@ -17,8 +17,11 @@ import (
 )
 
 const usage = `usage:
-  gojsop run <manifest> (--request <file> | --event <file>) [--cluster <file>] [--trace]
+  gojsop run <manifest> (--request <file> | --event <file>) [--cluster <file>] [--trace] [--source <file>]
   gojsop serve --stdio
+
+npx gojsop (from npm) also has: gojsop build [dir...], and bundles a
+TypeScript script for gojsop run.
 `
 
 func main() {
@@ -69,6 +72,7 @@ func runCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	event := fs.String("event", "", "hook event file (hook)")
 	clusterFile := fs.String("cluster", "", "file with the objects of the fake cluster")
 	trace := fs.Bool("trace", false, "print every kube.* call to stderr")
+	source := fs.String("source", "", "script to run instead of the one next to the manifest")
 	// The manifest comes first, the flags after it; flag stops at the first
 	// non-flag, so parse twice.
 	if err := fs.Parse(args); err != nil {
@@ -92,7 +96,16 @@ func runCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "gojsop:", err)
 		return 2
 	}
-	m, err := workspace.Load(manifest)
+	var m *workspace.Manifest
+	var err error
+	if *source != "" {
+		var src []byte
+		if src, err = os.ReadFile(*source); err == nil {
+			m, err = workspace.LoadWithSource(manifest, src)
+		}
+	} else {
+		m, err = workspace.Load(manifest)
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -135,7 +148,7 @@ func readStrict(path string, into any) error {
 	if err != nil {
 		return err
 	}
-	if err := yaml.UnmarshalStrict(raw, into); err != nil {
+	if err := workspace.DecodeInput(raw, into); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	return nil

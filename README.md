@@ -7,7 +7,8 @@ Automate and guard your Kubernetes cluster with a few lines of JavaScript.
 - **Hooks** react when something changes: copy a ConfigMap into new
   namespaces, label new Pods, clean up after a deleted object.
 
-You write a function, test it with vitest, and deploy it with `kubectl`. Each
+You write a function in TypeScript or JavaScript, test it with vitest, and
+deploy it with `kubectl`. Each
 script runs sandboxed inside gojsop, with a memory limit, a timeout and only
 the rights you give it.
 
@@ -15,38 +16,33 @@ the rights you give it.
 
 ## Get started
 
-You need Node.js 20 or newer. You need a cluster only for the last step.
+You need Node.js 22 or newer. You need a cluster only for the last step.
 
 ### 1. Create a project
 
-```sh
+```bash
 npm create @gojsop my-policies
 cd my-policies
 npm install
 npm test
 ```
 
-You get one example policy and one example hook, each in its own folder with
-its tests:
+The project starts with two examples you can read and delete:
+`policies/no-latest` and `hooks/count-pods`.
 
+### 2. Add a policy
+
+```bash
+npx gojsop new policy require-owner
 ```
-my-policies/
-  policies/no-latest/    policy.yaml, policy.js, policy.test.ts
-  hooks/count-pods/      hook.yaml, hook.js, hook.test.ts
-```
 
-For a new policy or hook, copy a folder and add it to `kustomization.yaml`.
+This creates `policies/require-owner/` with three files: the manifest, the
+script and a test that already passes.
 
-### 2. Write a policy
-
-`policy.yaml` says which requests the policy sees, here every Pod that is
-created or updated (shortened):
+`policy.yaml` says which requests the policy sees. The new one sees every Pod
+that is created or updated:
 
 ```yaml
-apiVersion: core.gojsop.io/v1alpha1
-kind: JSAdmission
-metadata:
-  name: no-latest
 spec:
   rules:
     - apiGroups: [""]
@@ -55,86 +51,126 @@ spec:
       operations: ["CREATE", "UPDATE"]
 ```
 
-`policy.js` decides:
+`policy.ts` decides. Make it require an owner label:
 
-```js
-function validate(req) {
-  for (const c of req.object?.spec?.containers ?? []) {
-    if (c.image?.endsWith(":latest")) {
-      return { allowed: false, message: c.image + " uses :latest" };
-    }
+```ts
+import type { Request, Response } from "@gojsop/types";
+
+export function validate(req: Request): Response {
+  if (req.object?.metadata?.labels?.owner) {
+    return { allowed: true };
   }
-  return { allowed: true };
+  return { allowed: false, message: "every pod needs an owner label" };
 }
 ```
 
-Tip: Kubernetes leaves out empty fields, so use `?.` and `??`.
+Tip: Kubernetes leaves out empty fields, so use `?.` and `??`. You can
+import your own modules and npm packages; gojsop bundles them.
 
 ### 3. Test it
 
+Write the cases into `policy.test.ts`:
+
 ```ts
 import { expect, test } from "vitest";
-import { policy, pod } from "@gojsop/testing";
+import { pod, policy } from "@gojsop/testing";
 
-const noLatest = policy("./policy.yaml");
+const requireOwner = policy("./policy.yaml");
 
-test("denies :latest", async () => {
-  const result = await noLatest.review({ object: pod({ image: "nginx:latest" }) });
+test("denies a pod without owner", async () => {
+  const result = await requireOwner.review({ object: pod() });
   expect(result.allowed).toBe(false);
+});
+
+test("allows a pod with owner", async () => {
+  const result = await requireOwner.review({ object: pod({ labels: { owner: "team-a" } }) });
+  expect(result.allowed).toBe(true);
 });
 ```
 
 Run `npx vitest`; it reruns the tests whenever you save. Your script runs
 exactly as it would in the cluster, so a green test means it works there too.
 
-### 4. Write a hook
+A test can also take a YAML file, for example a Pod you copied from the
+cluster with `kubectl get pod web -o yaml > pod.yaml`:
 
-A hook gets an event for every change of what it watches. This one counts
-the Pods labeled `track: "true"` and writes the number into a ConfigMap:
+```ts
+const result = await requireOwner.review("./pod.yaml");
+```
 
-```js
-function handle(event) {
-  const count = event.all().length;
+### 4. Add a hook
+
+A hook reacts to changes. This one copies the ConfigMap `default/shared` into
+every new namespace:
+
+```bash
+npx gojsop new hook copy-config
+```
+
+In `hook.yaml`, say what the hook watches and what it may do:
+
+```yaml
+spec:
+  bindings:
+    - name: namespaces
+      apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["namespaces"]
+      events: ["Added"]
+  permissions:
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get", "create", "patch"]
+```
+
+`hook.ts`:
+
+```ts
+import type { Event } from "@gojsop/types";
+
+export function handle(event: Event) {
+  const shared = kube.get({ apiVersion: "v1", kind: "ConfigMap", namespace: "default", name: "shared" });
+  if (!shared) return;
   kube.apply({
     apiVersion: "v1",
     kind: "ConfigMap",
-    metadata: { name: "pod-count", namespace: event.object.metadata.namespace },
-    data: { count: String(count) },
+    metadata: { name: "shared", namespace: event.object.metadata?.name },
+    data: shared.data,
   });
 }
 ```
 
-Its test starts with a few Pods and checks the ConfigMap afterwards:
+Its test starts with a cluster in memory and checks it afterwards:
 
 ```ts
 import { expect, test } from "vitest";
-import { cluster, hook, pod } from "@gojsop/testing";
+import { cluster, configMap, hook, namespace } from "@gojsop/testing";
 
-test("counts the tracked pods", async () => {
-  const tracked = { track: "true" };
-  const c = cluster([pod({ name: "a", labels: tracked }), pod({ name: "b", labels: tracked })]);
+test("copies the shared ConfigMap into a new namespace", async () => {
+  const c = cluster([configMap("default/shared", { data: { color: "blue" } })]);
 
-  await hook("./hook.yaml").handle({ object: pod({ name: "a", labels: tracked }) }, { cluster: c });
+  await hook("./hook.yaml").handle({ object: namespace("team-a") }, { cluster: c });
 
-  expect(c.get("v1", "ConfigMap", "default", "pod-count")?.data).toEqual({ count: "2" });
+  expect(c.get("v1", "ConfigMap", "team-a", "shared")?.data).toEqual({ color: "blue" });
 });
 ```
 
-A hook may only do what `hook.yaml` allows under `permissions`.
+A hook may only do what `permissions` allows; anything else fails, in the
+test as in the cluster.
 
 ### 5. Deploy
 
 Install gojsop once per cluster. It needs
 [cert-manager](https://cert-manager.io):
 
-```sh
+```bash
 helm repo add jetstack https://charts.jetstack.io
 helm install cert-manager jetstack/cert-manager \
   --namespace cert-manager --create-namespace --set crds.enabled=true --wait
 ```
 
 <!-- x-release-please-start-version -->
-```sh
+```bash
 helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
   --namespace gojsop-system --create-namespace --wait \
   --version 0.1.1
@@ -143,19 +179,30 @@ helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
 
 Then deploy your project to the cluster `kubectl` points at:
 
-```sh
-npm run deploy                  # runs the tests, then kubectl apply -k .
+```bash
+npm run deploy                  # tests, builds dist/, kubectl apply -f dist/
 kubectl get jsadmissions,jshooks
 ```
 
-Change a script and deploy again; gojsop picks it up without a restart. To
-remove a policy, run `kubectl delete -k policies/<name>`, then delete its
-folder.
+`npm run build` writes one file per hook and policy to `dist/`, with the
+script inside. Change a script and deploy again; gojsop picks it up without
+a restart.
 
-> **The example policy blocks nothing yet.** It starts with
-> `enforcement: Audit` and only records what it would deny
-> (`kubectl describe jsadmission no-latest`). Set `enforcement: Deny` when
-> you are happy with it. Your tests always show what the script decides.
+Rename or remove a policy or hook with one command:
+
+```bash
+npx gojsop rn require-owner need-owner
+npx gojsop rm need-owner
+```
+
+What you remove stays in the cluster until you delete it there, for example
+`kubectl delete jsadmission need-owner`.
+
+> **A new policy blocks nothing yet.** `gojsop new` sets
+> `enforcement: Audit`: the policy only records what it would deny
+> (`kubectl describe jsadmission require-owner`). Set `enforcement: Deny` in
+> `policy.yaml` when you are happy with it. Your tests always show what the
+> script decides.
 
 That's it. Every field and option is in the [reference](docs/reference.md).
 
@@ -163,9 +210,10 @@ That's it. Every field and option is in the [reference](docs/reference.md).
 
 Good to know once you write your own:
 
-- **Use `function`.** gojsop calls `validate`, `mutate` or `handle` as a
-  global function. `const handle = ...` is not found, and an `async`
-  function does not work.
+- **Export the entry point:** `export function validate`, `mutate` or
+  `handle`. It must not be `async`.
+- **Plain JavaScript works too:** name the file `policy.js` and write
+  `function validate(req) {}` without `export`; it runs as it is.
 - **No memory between calls.** Each call starts fresh. Keep state in the
   cluster.
 - **Talking to the cluster:** `kube.get`, `kube.list`, `kube.apply` and

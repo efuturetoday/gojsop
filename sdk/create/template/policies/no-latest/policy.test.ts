@@ -1,5 +1,5 @@
-import { describe, expect, test } from "vitest";
 import { pod, policy } from "@gojsop/testing";
+import { describe, expect, test } from "vitest";
 
 const noLatest = policy("./policy.yaml");
 
@@ -19,5 +19,10 @@ describe("no-latest", () => {
     const result = await noLatest.review({ object: pod({ image: "nginx" }) });
     expect(result.allowed).toBe(true);
     expect(result.warnings).toEqual(["container app has no tag"]);
+  });
+
+  test("denies the pod in pod.yaml", async () => {
+    const result = await noLatest.review("./pod.yaml");
+    expect(result.allowed).toBe(false);
   });
 });

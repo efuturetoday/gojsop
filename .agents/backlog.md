@@ -274,12 +274,6 @@ these steps (2026-10-05).
   entry point, no Node APIs, no async entry point) as a rule in
   js-execution, and have `gojsop build` check a JS file against it. Done
   when the rule exists and is held by a test.
-- **WS-6** `gap` TypeScript and modules for scripts: `@gojsop/testing`
-  bundles a `.ts` or ES-module script with esbuild before it hands it to
-  serve, and a build step (`gojsop-build` in the npm package) writes the
-  manifests with the bundled source; source maps so errors point at `.ts`
-  lines; types for `event`, `req`, `kube.*`. Done when a TypeScript policy
-  tests and builds.
 - **WS-8** `gap` Coverage: instrument the script with istanbul in
   `@gojsop/testing`, return the counters from the engine, merge them into
   vitest's report. Done when `vitest --coverage` shows a policy's lines.
@@ -288,8 +282,9 @@ these steps (2026-10-05).
   Decide the artifact format and signing. Done when recorded.
 - **WS-10** `gate` The CI job `npm packages` runs the vitest suite of
   `sdk/testing` and `make sdk-smoke`, but the SDLC check sees only Go
-  tests, so workspace.R7, R9 and R10 name no test. Done when the job is a
+  tests, so workspace.R7, R9, R10, R12 and R13 name no test. Done when the job is a
   required check and each rule names a test the check can find (a Go test
-  that runs the suite, or a TypeScript adapter for sdlc-check).
+  that runs the suite, or a TypeScript adapter for sdlc-check). R12 and R13
+  are held by `sdk/cli/test/workspace.test.ts` already.
 - **WS-11** `gap` `brew install gojsop` for people who run `gojsop run`
   without npm. Done when a tap formula is updated by the release job.
