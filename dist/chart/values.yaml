@@ -19,7 +19,7 @@ manager:
     repository: ghcr.io/efuturetoday/gojsop
     ## Image tag (defaults to Chart.appVersion if not set)
     ##
-    tag: 0.1.0 # x-release-please-version
+    tag: 0.1.1 # x-release-please-version
     pullPolicy: IfNotPresent
 
   ## Arguments
