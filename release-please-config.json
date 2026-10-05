@@ -21,6 +21,10 @@
         {
           "type": "generic",
           "path": "README.md"
+        },
+        {
+          "type": "generic",
+          "path": "docs/reference.md"
         }
       ],
       "initial-version": "0.1.0"
