@@ -39,6 +39,11 @@ updates:
     directory: /sdk
     schedule:
       interval: weekly
+    # @types/node follows the oldest Node the packages support (engines),
+    # not the newest Node.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: build
       include: scope
