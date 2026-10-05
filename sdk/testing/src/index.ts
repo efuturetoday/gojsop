@@ -31,7 +31,7 @@ try {
   // not under vitest
 }
 
-function resolveManifest(p: string): string {
+function resolvePath(p: string): string {
   if (path.isAbsolute(p)) return p;
   let base = process.cwd();
   try {
@@ -46,7 +46,7 @@ function resolveManifest(p: string): string {
 async function run<R>(op: "review" | "handle", manifest: string, input: unknown, opts?: CallOptions): Promise<R> {
   const c = opts?.cluster;
   const objects = c instanceof Cluster ? c.objects() : (c ?? []);
-  const a = await callServe(op, manifest, input, objects);
+  const a = await callServe(op, manifest, typeof input === "string" ? resolvePath(input) : input, objects);
   if (c instanceof Cluster) c.replace(a.cluster);
   raise(a);
   return { ...a.result, console: a.console } as R;
@@ -58,9 +58,14 @@ async function run<R>(op: "review" | "handle", manifest: string, input: unknown,
  */
 export function policy(manifestPath: string) {
   return {
-    /** Runs `validate` or `mutate` on the request. Rejects with a ScriptError when the script fails. */
-    review(request: AdmissionRequest, opts?: CallOptions): Promise<ReviewResult> {
-      return run("review", resolveManifest(manifestPath), request, opts);
+    /**
+     * Runs `validate` or `mutate` on the request: an object, or the path of a
+     * YAML file (relative to the test file) holding a request or a plain
+     * object such as `kubectl get pod web -o yaml` prints. Rejects with a
+     * ScriptError when the script fails.
+     */
+    review(request: AdmissionRequest | string, opts?: CallOptions): Promise<ReviewResult> {
+      return run("review", resolvePath(manifestPath), request, opts);
     },
   };
 }
@@ -71,9 +76,13 @@ export function policy(manifestPath: string) {
  */
 export function hook(manifestPath: string) {
   return {
-    /** Runs `handle` on the event. Rejects with a ScriptError when the script fails. */
-    handle(event: HookEvent, opts?: CallOptions): Promise<HandleResult> {
-      return run("handle", resolveManifest(manifestPath), event, opts);
+    /**
+     * Runs `handle` on the event: an object, or the path of a YAML file
+     * (relative to the test file) holding an event or a plain object.
+     * Rejects with a ScriptError when the script fails.
+     */
+    handle(event: HookEvent | string, opts?: CallOptions): Promise<HandleResult> {
+      return run("handle", resolvePath(manifestPath), event, opts);
     },
   };
 }

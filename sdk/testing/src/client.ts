@@ -157,7 +157,14 @@ export async function callServe(
     throw new ScriptError("script", e instanceof Error ? e.message : String(e));
   }
   server ??= new Server();
-  const a = await server.call({ op, manifest, input, cluster, ...(built ? { source: built.code } : {}) });
+  const a = await server.call({
+    op,
+    manifest,
+    // A string is the path of a YAML or JSON file; gojsop reads it.
+    ...(typeof input === "string" ? { inputFile: input } : { input }),
+    cluster,
+    ...(built ? { source: built.code } : {}),
+  });
   if (a.error && built) a.error.message = mapStack(a.error.message, built);
   return a;
 }
