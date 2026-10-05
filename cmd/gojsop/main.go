@@ -148,7 +148,7 @@ func readStrict(path string, into any) error {
 	if err != nil {
 		return err
 	}
-	if err := yaml.UnmarshalStrict(raw, into); err != nil {
+	if err := workspace.DecodeInput(raw, into); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}
 	return nil

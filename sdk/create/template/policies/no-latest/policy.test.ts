@@ -20,4 +20,9 @@ describe("no-latest", () => {
     expect(result.allowed).toBe(true);
     expect(result.warnings).toEqual(["container app has no tag"]);
   });
+
+  test("denies the pod in pod.yaml", async () => {
+    const result = await noLatest.review("./pod.yaml");
+    expect(result.allowed).toBe(false);
+  });
 });

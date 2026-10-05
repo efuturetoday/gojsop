@@ -94,6 +94,13 @@ test("denies :latest", async () => {
 });
 ```
 
+A test can also take a YAML file, for example a Pod you copied from the
+cluster with `kubectl get pod web -o yaml > pod.yaml`:
+
+```ts
+const result = await noLatest.review("./pod.yaml");
+```
+
 Run `npx vitest`; it reruns the tests whenever you save. Your script runs
 exactly as it would in the cluster, so a green test means it works there too.
 
