@@ -1,11 +1,11 @@
-// Publishes a placeholder 0.0.0 of every npm package that does not exist yet:
+// Sets up the npm packages for trusted publishing, once, by a maintainer:
 //
-//   npm login && node scripts/claim.ts
+//   npm login && make sdk-claim
 //
-// Run once, by a maintainer, before the first release. npm accepts trusted
-// publishing (OIDC from release.yml) only for packages that exist, so the
-// names have to be claimed by hand first; then add the trusted publisher
-// to each package on npmjs.com (see CONTRIBUTING.md).
+// For every package it publishes a placeholder 0.0.0 if the package does
+// not exist yet (npm accepts trusted publishing only for existing
+// packages), then trusts .github/workflows/release.yml of this repository
+// to publish it. Run it in a terminal: npm asks for 2FA.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -28,6 +28,11 @@ const exists = (name: string) => {
     return false;
   }
 };
+
+if (!process.stdin.isTTY) {
+  console.error("Run this in a terminal: npm asks for 2FA.");
+  process.exit(1);
+}
 
 for (const name of names) {
   if (exists(name)) {
@@ -55,4 +60,17 @@ for (const name of names) {
   );
   // stdio inherit: npm asks for the 2FA code here.
   execFileSync("npm", ["publish", "--access", "public"], { cwd: dir, stdio: "inherit" });
+}
+
+for (const name of names) {
+  const trusted = execFileSync("npm", ["trust", "list", name, "--json"], { encoding: "utf8" });
+  if (trusted.includes("release.yml")) {
+    console.log(`${name} trusts release.yml already; skipped`);
+    continue;
+  }
+  execFileSync(
+    "npm",
+    ["trust", "github", name, "--repo", "efuturetoday/gojsop", "--file", "release.yml", "--allow-publish", "--yes"],
+    { stdio: "inherit" },
+  );
 }

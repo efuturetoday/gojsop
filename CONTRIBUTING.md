@@ -25,12 +25,10 @@ The npm packages are published with
 npm trusts `release.yml` through OIDC. A new package needs this once, by a
 maintainer:
 
-1. `npm login`, then `cd sdk && node scripts/claim.ts`. It publishes a
-   placeholder `0.0.0` of every package that does not exist yet (npm asks for
-   the 2FA code), because trusted publishing works only for existing
-   packages.
-2. On npmjs.com, for each package: Settings → Trusted Publisher → GitHub
-   Actions, repository `efuturetoday/gojsop`, workflow `release.yml`.
+`npm login`, then `make sdk-claim` in a terminal. It publishes a
+placeholder `0.0.0` of every package that does not exist yet, because
+trusted publishing works only for existing packages, and trusts
+`release.yml` of this repository to publish each package. npm asks for 2FA.
 
 ## Helm chart
 

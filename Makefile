@@ -166,6 +166,10 @@ cli-dist: ## Build the gojsop CLI for every release target to dist/cli (VERSION=
 sdk-test: gojsop ## Build and test the npm packages in sdk/ against bin/gojsop.
 	cd sdk && npm ci && npm run build && cd testing && GOJSOP_BIN=$(CURDIR)/bin/gojsop npx vitest run
 
+.PHONY: sdk-claim
+sdk-claim: ## Once, after npm login: claim the npm package names and trust release.yml to publish them.
+	cd sdk && node scripts/claim.ts
+
 .PHONY: sdk-smoke
 sdk-smoke: ## Pack the npm packages, create a workspace from them and run its tests, as a user would.
 	$(MAKE) cli-dist VERSION=0.0.0-smoke
