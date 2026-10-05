@@ -159,7 +159,7 @@ cli-dist: ## Build the gojsop CLI for every release target to dist/cli (VERSION=
 	@mkdir -p dist/cli; set -e; for target in $(CLI_TARGETS); do \
 	  os=$${target%/*}; arch=$${target#*/}; ext=""; [ "$$os" = windows ] && ext=".exe"; \
 	  echo "gojsop $$os/$$arch"; \
-	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -o "dist/cli/gojsop_$(VERSION)_$${os}_$${arch}$${ext}" ./cmd/gojsop; \
+	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="-s -w" -o "dist/cli/gojsop_$(VERSION)_$${os}_$${arch}$${ext}" ./cmd/gojsop; \
 	done
 
 .PHONY: sdk-test
