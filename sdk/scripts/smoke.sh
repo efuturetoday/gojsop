@@ -26,8 +26,12 @@ npm install --no-audit --no-fund \
   "$tgz/gojsop-types-$VERSION.tgz" \
   "$tgz/gojsop-testing-$VERSION.tgz"
 npm test
+npx gojsop new policy require-owner
+npm test
 npm run build
-test -s policies/no-latest/dist/policy.js
-test -s hooks/count-pods/dist/hook.js
+test -s dist/policy-no-latest.yaml
+test -s dist/policy-require-owner.yaml
+test -s dist/hook-count-pods.yaml
+npx gojsop run dist/policy-no-latest.yaml --request policies/no-latest/pod.yaml
 npx gojsop --help >/dev/null
 echo "smoke test passed on $host"

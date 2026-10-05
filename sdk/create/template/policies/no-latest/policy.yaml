@@ -12,7 +12,3 @@ spec:
   # Audit records what the policy would deny and blocks nothing; switch to
   # Deny once kubectl describe jsadmission no-latest shows no surprises.
   enforcement: Audit
-  # The tests run policy.ts. In the cluster the script is the ConfigMap that
-  # kustomization.yaml builds from dist/policy.js (npm run build).
-  source:
-    configMapRef: {name: no-latest, namespace: gojsop-system, key: policy.js}

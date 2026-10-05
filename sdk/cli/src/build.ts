@@ -1,39 +1,45 @@
 import fs from "node:fs";
 import path from "node:path";
+import { parseDocument, Scalar } from "yaml";
 import { bundle, isModule, scriptBeside } from "./bundle.js";
+import { entries } from "./workspace.js";
 
-const MANIFESTS = ["policy.yaml", "hook.yaml"];
-const SKIP = new Set(["node_modules", "dist"]);
-
-function* manifestDirs(dir: string): Generator<string> {
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  if (entries.some((e) => e.isFile() && MANIFESTS.includes(e.name))) yield dir;
-  for (const e of entries) {
-    if (e.isDirectory() && !SKIP.has(e.name) && !e.name.startsWith(".")) {
-      yield* manifestDirs(path.join(dir, e.name));
-    }
-  }
-}
+/** The most spec.source.inline may hold. */
+const INLINE_LIMIT = 512 * 1024;
+const OWN = /^(policy|hook)-.+\.yaml$/;
 
 /**
- * gojsop build [dir...]: writes the script of every hook and policy below
- * the directories (default: the current one) to dist/<name>.js next to its
- * manifest, the file kustomize ships as the script's ConfigMap. A
- * TypeScript or module script is bundled; a plain .js script is copied.
+ * gojsop build: writes every hook and policy of the workspace to
+ * dist/<policy|hook>-<name>.yaml, with its script bundled into
+ * spec.source.inline, ready for kubectl apply -f dist/. Files it wrote
+ * before for hooks and policies that are gone are removed.
  */
-export async function build(roots: string[]): Promise<number> {
-  let built = 0;
-  for (const root of roots.length ? roots : ["."]) {
-    for (const dir of manifestDirs(root)) {
-      const entry = scriptBeside(dir);
-      if (!entry) continue;
+export async function build(out = "dist"): Promise<number> {
+  const all = entries();
+  fs.mkdirSync(out, { recursive: true });
+  for (const f of fs.readdirSync(out)) if (OWN.test(f)) fs.rmSync(path.join(out, f));
+
+  const seen = new Set<string>();
+  for (const e of all) {
+    const file = `${e.kind}-${e.name}.yaml`;
+    if (seen.has(file)) throw new Error(`two ${e.kind === "hook" ? "hooks" : "policies"} are named ${e.name}`);
+    seen.add(file);
+
+    const doc = parseDocument(fs.readFileSync(e.manifest, "utf8"));
+    if (!doc.hasIn(["spec", "source", "inline"]) && !doc.hasIn(["spec", "source", "configMapRef"])) {
+      const entry = scriptBeside(e.dir);
+      if (!entry) throw new Error(`${e.dir}: no script next to ${path.basename(e.manifest)}`);
       const code = isModule(entry) ? (await bundle(entry)).code : fs.readFileSync(entry, "utf8");
-      const out = path.join(dir, "dist", path.basename(entry).replace(/\.[^.]+$/, ".js"));
-      fs.mkdirSync(path.dirname(out), { recursive: true });
-      fs.writeFileSync(out, code);
-      console.log(`built ${path.relative(process.cwd(), out)}`);
-      built++;
+      if (Buffer.byteLength(code) > INLINE_LIMIT) {
+        throw new Error(`${entry}: the bundled script has ${Buffer.byteLength(code)} bytes, more than 512 KiB`);
+      }
+      const inline = new Scalar(code);
+      inline.type = Scalar.BLOCK_LITERAL;
+      doc.setIn(["spec", "source"], doc.createNode({ inline }));
     }
+    fs.writeFileSync(path.join(out, file), doc.toString({ lineWidth: 0, flowCollectionPadding: false }));
+    console.log(`built ${path.join(out, file)}`);
   }
-  return built;
+  if (all.length === 0) console.log("no hooks or policies found");
+  return all.length;
 }

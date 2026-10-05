@@ -36,7 +36,13 @@ my-policies/
   hooks/count-pods/      hook.yaml, hook.ts, hook.test.ts
 ```
 
-For a new policy or hook, copy a folder and add it to `kustomization.yaml`.
+Add, rename or remove a policy or hook with one command each:
+
+```sh
+npx gojsop new policy require-owner     # or: new hook <name>; comes with a passing test
+npx gojsop rn require-owner need-owner
+npx gojsop rm need-owner
+```
 
 ### 2. Write a policy
 
@@ -150,13 +156,14 @@ helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
 Then deploy your project to the cluster `kubectl` points at:
 
 ```sh
-npm run deploy                  # tests, builds the scripts, kubectl apply -k .
+npm run deploy                  # tests, builds dist/, kubectl apply -f dist/
 kubectl get jsadmissions,jshooks
 ```
 
-Change a script and deploy again; gojsop picks it up without a restart. To
-remove a policy, run `kubectl delete -k policies/<name>`, then delete its
-folder.
+`npm run build` writes one file per hook and policy to `dist/`, with the
+script inside. Change a script and deploy again; gojsop picks it up without
+a restart. A policy you remove with `gojsop rm` stays in the cluster until
+you run `kubectl delete jsadmission <name>`.
 
 > **The example policy blocks nothing yet.** It starts with
 > `enforcement: Audit` and only records what it would deny

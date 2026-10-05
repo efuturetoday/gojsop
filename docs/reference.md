@@ -279,7 +279,7 @@ policy (`kubectl describe jshook <name>`).
 and to loading the script. A script stuck in a loop is stopped at the
 deadline; `try/catch` cannot hold it.
 
-**Sources.** Inline in `spec.source.inline`, or from a ConfigMap (a workspace from `npm create @gojsop` builds it with kustomize):
+**Sources.** Inline in `spec.source.inline` (what `gojsop build` writes), or from a ConfigMap:
 
 ```yaml
 source:

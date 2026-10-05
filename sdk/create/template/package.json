@@ -6,7 +6,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "gojsop build",
-    "deploy": "vitest run && gojsop build && kubectl apply -k ."
+    "deploy": "vitest run && gojsop build && kubectl apply -f dist/"
   },
   "devDependencies": {
     "@gojsop/cli": "^0.0.0",
