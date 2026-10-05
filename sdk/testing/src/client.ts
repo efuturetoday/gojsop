@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { binaryPath, notFoundHint } from "@gojsop/cli";
 import { createInterface } from "node:readline";
 import type { ConsoleLine, ErrorKind, KubeObject } from "./types.js";
 
@@ -51,7 +52,7 @@ class Server {
 
   private start(): ChildProcess {
     if (this.child) return this.child;
-    const bin = process.env.GOJSOP_BIN || "gojsop";
+    const bin = binaryPath();
     const child = spawn(bin, ["serve", "--stdio"], { stdio: ["pipe", "pipe", "inherit"] });
     this.child = child;
     // The child must not keep Node alive; it ends with Node (or on EOF of stdin).
@@ -69,7 +70,7 @@ class Server {
     child.on("error", (e: NodeJS.ErrnoException) =>
       end(
         e.code === "ENOENT"
-          ? `cannot start the gojsop binary "${bin}": not found. Install gojsop and put it on PATH, or set GOJSOP_BIN to its path.`
+          ? notFoundHint(bin)
           : `cannot start the gojsop binary "${bin}": ${e.message}`,
       ),
     );

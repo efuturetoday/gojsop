@@ -12,8 +12,9 @@ Node.
 npm install --save-dev vitest @gojsop/testing
 ```
 
-The package needs the `gojsop` binary: put it on `PATH` or set `GOJSOP_BIN` to
-its path. One `gojsop serve` process starts per vitest worker, on the first
+npm installs the `gojsop` binary for your platform through
+[`@gojsop/cli`](https://www.npmjs.com/package/@gojsop/cli); no Go needed. Set
+`GOJSOP_BIN` to use another binary. One `gojsop serve` process starts per vitest worker, on the first
 call, and ends with the worker.
 
 ## Test a policy

@@ -1,0 +1,14 @@
+{
+  "name": "gojsop-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "vitest run && kubectl apply -k ."
+  },
+  "devDependencies": {
+    "@gojsop/testing": "^0.0.0",
+    "vitest": "^5.0.3"
+  }
+}

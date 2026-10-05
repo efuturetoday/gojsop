@@ -1,12 +1,12 @@
 {
-  "name": "@gojsop/testing",
+  "name": "@gojsop/cli",
   "version": "0.0.0",
-  "description": "Test gojsop hooks and policies with vitest. The script runs in gojsop's engine, never in Node.",
+  "description": "The gojsop CLI: run and serve gojsop hooks and policies locally, in the engine the operator uses.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/efuturetoday/gojsop.git",
-    "directory": "sdk/testing"
+    "directory": "sdk/cli"
   },
   "type": "module",
   "main": "./dist/index.js",
@@ -17,6 +17,9 @@
       "default": "./dist/index.js"
     }
   },
+  "bin": {
+    "gojsop": "dist/bin.js"
+  },
   "files": [
     "dist",
     "README.md"
@@ -25,18 +28,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@gojsop/cli": "0.0.0"
-  },
-  "peerDependencies": {
-    "vitest": ">=2"
+    "build": "tsc -p tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "typescript": "^5.9.0",
-    "vitest": "^5.0.3"
+    "typescript": "^5.9.0"
   }
 }

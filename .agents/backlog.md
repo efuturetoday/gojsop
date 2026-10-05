@@ -280,16 +280,16 @@ these steps (2026-10-05).
   manifests with the bundled source; source maps so errors point at `.ts`
   lines; types for `event`, `req`, `kube.*`. Done when a TypeScript policy
   tests and builds.
-- **WS-7** `gap` Distribution: the npm package installs the `gojsop` binary
-  for the platform (optional dependencies per OS/arch, as esbuild does);
-  `brew` and a release download for `gojsop run`. Done when `npm i -D
-  @gojsop/testing` works without Go.
 - **WS-8** `gap` Coverage: instrument the script with istanbul in
   `@gojsop/testing`, return the counters from the engine, merge them into
   vitest's report. Done when `vitest --coverage` shows a policy's lines.
 - **WS-9** `decision` `gojsop push`: publish built manifests as an OCI
   artifact for Flux and Argo CD; the operator does not poll registries.
   Decide the artifact format and signing. Done when recorded.
-- **WS-10** `gate` A CI job runs the vitest suite of `sdk/testing` against
-  the built `gojsop`, and a Go test holds workspace.R7. Done when the job
-  is required and the rule names its test.
+- **WS-10** `gate` The CI job `npm packages` runs the vitest suite of
+  `sdk/testing` and `make sdk-smoke`, but the SDLC check sees only Go
+  tests, so workspace.R7, R9 and R10 name no test. Done when the job is a
+  required check and each rule names a test the check can find (a Go test
+  that runs the suite, or a TypeScript adapter for sdlc-check).
+- **WS-11** `gap` `brew install gojsop` for people who run `gojsop run`
+  without npm. Done when a tap formula is updated by the release job.
