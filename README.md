@@ -173,7 +173,7 @@ helm install cert-manager jetstack/cert-manager \
 ```bash
 helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
   --namespace gojsop-system --create-namespace --wait \
-  --version 0.1.1
+  --version 0.2.0
 ```
 <!-- x-release-please-end -->
 

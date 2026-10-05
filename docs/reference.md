@@ -29,7 +29,7 @@ With Helm:
 ```bash
 helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
   --namespace gojsop-system --create-namespace --wait \
-  --version 0.1.1
+  --version 0.2.0
 ```
 <!-- x-release-please-end -->
 
@@ -37,7 +37,7 @@ Or without Helm:
 
 <!-- x-release-please-start-version -->
 ```bash
-kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.1/install.yaml
+kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.2.0/install.yaml
 ```
 <!-- x-release-please-end -->
 
@@ -45,7 +45,7 @@ The samples, a ConfigMap sync hook and two pod policies:
 
 <!-- x-release-please-start-version -->
 ```bash
-kubectl apply -k "github.com/efuturetoday/gojsop/config/samples?ref=v0.1.1"
+kubectl apply -k "github.com/efuturetoday/gojsop/config/samples?ref=v0.2.0"
 kubectl get jshooks,jsadmissions
 ```
 <!-- x-release-please-end -->
