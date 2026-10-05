@@ -29,7 +29,18 @@ jobs:
           # for; building from source uses the Go set up above, as `make lint` does.
           install-mode: goinstall
 
+      # sdlc-check lives in a private repository. Dependabot and fork PRs get
+      # no secrets, so they skip it; they do not touch .agents, and main and
+      # our own PRs still run it.
+      - name: Note a skipped SDLC check
+        if: env.SDLC_DEPLOY_KEY == ''
+        env:
+          SDLC_DEPLOY_KEY: ${{ secrets.SDLC_DEPLOY_KEY }}
+        run: |
+          echo "::notice::sdlc-check skipped: no SDLC_DEPLOY_KEY in this run (Dependabot or fork PR)"
+
       - name: Give Go read access to the SDLC library
+        if: env.SDLC_DEPLOY_KEY != ''
         env:
           SDLC_DEPLOY_KEY: ${{ secrets.SDLC_DEPLOY_KEY }}
         run: |
@@ -41,9 +52,11 @@ jobs:
           git config --global url."git@github.com:efuturetoday/agentic-sdlc".insteadOf "https://github.com/efuturetoday/agentic-sdlc"
 
       - name: Check .agents against the SDLC method
+        if: env.SDLC_DEPLOY_KEY != ''
         run: make sdlc-check
         env:
           GOPRIVATE: github.com/efuturetoday
           # sdlc-check needs a newer Go than go.mod; setup-go sets
           # GOTOOLCHAIN=local, so let Go fetch the toolchain it asks for.
           GOTOOLCHAIN: auto
+          SDLC_DEPLOY_KEY: ${{ secrets.SDLC_DEPLOY_KEY }}
