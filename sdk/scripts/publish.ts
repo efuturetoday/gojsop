@@ -82,7 +82,7 @@ for (const [key, p] of Object.entries(platforms)) {
 const originals = new Map<string, string>();
 const stamp = (name: string, edit?: (pkg: Manifest) => void) => {
   const f = path.join(sdk, name, "package.json");
-  originals.set(f, fs.readFileSync(f, "utf8"));
+  if (!originals.has(f)) originals.set(f, fs.readFileSync(f, "utf8"));
   const pkg = readJSON(f);
   pkg.version = version;
   edit?.(pkg);
@@ -92,7 +92,6 @@ const stamp = (name: string, edit?: (pkg: Manifest) => void) => {
 stamp("cli", (pkg) => {
   pkg.optionalDependencies = Object.fromEntries(Object.values(platforms).map((p) => [p.pkg, version]));
 });
-stamp("types");
 stamp("types");
 stamp("testing", (pkg) => {
   pkg.dependencies = { ...pkg.dependencies, "@gojsop/cli": version };
