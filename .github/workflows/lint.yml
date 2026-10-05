@@ -21,6 +21,9 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.7.2
+          # The release binaries are built with an older Go than go.mod asks
+          # for; building from source uses the Go set up above, as `make lint` does.
+          install-mode: goinstall
 
       - name: Give Go read access to the SDLC library
         env:
