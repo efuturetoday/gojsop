@@ -1,0 +1,18 @@
+apiVersion: core.gojsop.io/v1alpha1
+kind: JSAdmission
+metadata:
+  name: no-latest
+spec:
+  type: validating
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE", "UPDATE"]
+  # Audit records what the policy would deny and blocks nothing; switch to
+  # Deny once kubectl describe jsadmission no-latest shows no surprises.
+  enforcement: Audit
+  # gojsop's tests read policy.js next to this file; in the cluster the
+  # ConfigMap that kustomization.yaml builds from it.
+  source:
+    configMapRef: {name: no-latest, namespace: gojsop-system, key: policy.js}

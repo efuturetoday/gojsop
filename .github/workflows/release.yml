@@ -2,7 +2,9 @@ name: Release
 
 # release-please keeps a release PR open that collects the conventional
 # commits on main. Merging it tags vX.Y.Z and creates the GitHub release;
-# the publish job then pushes the image, the Helm chart and install.yaml.
+# the publish job then pushes the image, the Helm chart, install.yaml, the
+# CLI binaries and the npm packages (@gojsop/cli, @gojsop/testing,
+# @gojsop/create).
 
 on:
   push:
@@ -31,6 +33,10 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.released == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      id-token: write # npm provenance and trusted publishing
     env:
       VERSION: ${{ needs.release-please.outputs.version }}
       TAG: ${{ needs.release-please.outputs.tag }}
@@ -75,14 +81,25 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p cli
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-            os=${target%/*}; arch=${target#*/}; ext=""; [ "$os" = windows ] && ext=".exe"
-            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
-              -o "cli/gojsop_${VERSION}_${os}_${arch}${ext}" ./cmd/gojsop
-          done
-          (cd cli && sha256sum * > checksums.txt)
-          gh release upload "$TAG" cli/*
+          make cli-dist VERSION="$VERSION"
+          (cd dist/cli && sha256sum * > checksums.txt)
+          gh release upload "$TAG" dist/cli/*
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing: npm trusts this workflow through OIDC
+      # (id-token: write above), so there is no token. Each package names
+      # efuturetoday/gojsop and release.yml as its trusted publisher on
+      # npmjs.com; see CONTRIBUTING.md.
+      - name: Publish the npm packages
+        working-directory: sdk
+        run: |
+          npm ci
+          npm run build
+          node scripts/publish.ts --version "$VERSION" --bin-dir ../dist/cli
 
       - name: Attach install.yaml to the release
         env:

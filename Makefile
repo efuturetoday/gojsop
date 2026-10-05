@@ -147,6 +147,34 @@ sdlc-check: ## Check .agents against the method of the SDLC library (github.com/
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/main.go
 
+.PHONY: gojsop
+gojsop: ## Build the gojsop CLI to bin/gojsop.
+	go build -o bin/gojsop ./cmd/gojsop
+
+CLI_TARGETS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64
+
+.PHONY: cli-dist
+cli-dist: ## Build the gojsop CLI for every release target to dist/cli (VERSION=x.y.z).
+	@test -n "$(VERSION)" || { echo "set VERSION"; exit 1; }
+	@mkdir -p dist/cli; set -e; for target in $(CLI_TARGETS); do \
+	  os=$${target%/*}; arch=$${target#*/}; ext=""; [ "$$os" = windows ] && ext=".exe"; \
+	  echo "gojsop $$os/$$arch"; \
+	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -o "dist/cli/gojsop_$(VERSION)_$${os}_$${arch}$${ext}" ./cmd/gojsop; \
+	done
+
+.PHONY: sdk-test
+sdk-test: gojsop ## Build and test the npm packages in sdk/ against bin/gojsop.
+	cd sdk && npm ci && npm run build && cd testing && GOJSOP_BIN=$(CURDIR)/bin/gojsop npx vitest run
+
+.PHONY: sdk-claim
+sdk-claim: ## Once, after npm login: claim the npm package names and trust release.yml to publish them.
+	cd sdk && node scripts/claim.ts
+
+.PHONY: sdk-smoke
+sdk-smoke: ## Pack the npm packages, create a workspace from them and run its tests, as a user would.
+	$(MAKE) cli-dist VERSION=0.0.0-smoke
+	cd sdk && npm ci && npm run build && ./scripts/smoke.sh
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/main.go

@@ -1,0 +1,12 @@
+# A sample request for: npx gojsop run policies/no-latest/policy.yaml --request policies/no-latest/pod.yaml --trace
+operation: CREATE
+object:
+  apiVersion: v1
+  kind: Pod
+  metadata:
+    name: web
+    namespace: default
+  spec:
+    containers:
+      - name: web
+        image: nginx:latest
