@@ -1,8 +1,16 @@
 name: Tests
 
+# Pull requests run here; push only for main, so a PR branch does not run
+# twice.
 on:
   push:
+    branches: [main]
   pull_request:
+
+# A new push to a PR, or a new merge to main, cancels the run it supersedes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 # Read the repository, nothing else (least privilege for GITHUB_TOKEN).
 permissions:
