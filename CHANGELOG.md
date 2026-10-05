@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/efuturetoday/gojsop/compare/v0.1.0...v0.1.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **deps:** patch vulnerable dependencies, build with Go 1.26.8 ([22bafe0](https://github.com/efuturetoday/gojsop/commit/22bafe0d2cf29965f61efa4da45712afbb46c30a))
+
 ## 0.1.0 (2026-10-05)
 
 
