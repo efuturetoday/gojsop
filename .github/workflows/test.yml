@@ -25,3 +25,28 @@ jobs:
         run: |
           go mod tidy
           make test
+
+  sdk:
+    name: npm packages
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/package-lock.json
+
+      - name: Test with vitest against bin/gojsop
+        run: make sdk-test
+
+      - name: Install the packed packages and test a new workspace
+        run: make sdk-smoke

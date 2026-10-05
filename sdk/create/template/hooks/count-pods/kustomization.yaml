@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - hook.yaml
+configMapGenerator:
+  - name: count-pods
+    namespace: gojsop-system
+    files:
+      - hook.js
+    options:
+      disableNameSuffixHash: true # hook.yaml refers to the ConfigMap by this name

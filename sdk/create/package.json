@@ -1,0 +1,30 @@
+{
+  "name": "@gojsop/create",
+  "version": "0.0.0",
+  "description": "Create a gojsop workspace: hooks and policies with vitest tests. Run: npm create @gojsop",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/efuturetoday/gojsop.git",
+    "directory": "sdk/create"
+  },
+  "type": "module",
+  "bin": {
+    "create-gojsop": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "template",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

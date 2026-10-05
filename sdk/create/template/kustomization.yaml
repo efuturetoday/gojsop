@@ -1,0 +1,7 @@
+# kubectl apply -k . (npm run deploy) applies every hook and policy.
+# List a new directory here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - policies/no-latest
+  - hooks/count-pods

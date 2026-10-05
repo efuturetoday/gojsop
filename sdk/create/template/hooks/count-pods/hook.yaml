@@ -1,0 +1,20 @@
+apiVersion: core.gojsop.io/v1alpha1
+kind: JSHook
+metadata:
+  name: count-pods
+spec:
+  bindings:
+    - name: pods
+      apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      objectSelector:
+        matchLabels: {track: "true"}
+  permissions:
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get", "create", "patch"]
+  # gojsop's tests read hook.js next to this file; in the cluster the
+  # ConfigMap that kustomization.yaml builds from it.
+  source:
+    configMapRef: {name: count-pods, namespace: gojsop-system, key: hook.js}
