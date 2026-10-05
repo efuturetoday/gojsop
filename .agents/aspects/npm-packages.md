@@ -52,6 +52,14 @@ a hand-written `.d.ts`. Biome formats and lints all of it.
 
 ## Decisions
 
+- **The release job publishes with trusted publishing, without a token.**
+  Status: accepted (2026-10-05). Why: npm trusts `release.yml` through OIDC
+  and adds provenance; npm rejects direct publishes with bypass-2FA tokens
+  from 2027. A new package is claimed once by hand
+  (`sdk/scripts/claim.ts`), because trusted publishing needs an existing
+  package. Not taken: staged publishing with a stage-only token, because
+  every release would wait for a 2FA approval of each of nine packages.
+
 - **Biome formats and lints the npm packages.** Status: accepted
   (2026-10-05). Why: one fast tool for both, one config file, no plugins to
   keep in step. Not taken: ESLint with Prettier, because two tools and their
