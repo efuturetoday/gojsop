@@ -12,11 +12,11 @@
         },
         {
           "type": "generic",
-          "path": "dist/chart/Chart.yaml"
+          "path": "deploy/chart/Chart.yaml"
         },
         {
           "type": "generic",
-          "path": "dist/chart/values.yaml"
+          "path": "deploy/chart/values.yaml"
         },
         {
           "type": "generic",

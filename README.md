@@ -356,10 +356,9 @@ make help          # every target
 Releases come from [release-please](https://github.com/googleapis/release-please):
 it keeps a release PR open that collects the conventional commits on `main`.
 Merging it tags the version, and CI publishes the image, the Helm chart and
-`install.yaml`. The chart in `dist/chart` is generated from `config/`:
-after a change there, run `make build-installer` and
-`kubebuilder edit --plugins=helm/v2-alpha`, and keep `Chart.yaml` and
-`values.yaml` by hand.
+`install.yaml`. `deploy/chart` holds only `Chart.yaml` and `values.yaml`,
+kept by hand; `make chart` generates the templates from `config/`, and CI
+and the release job run it.
 
 How the project is organised, its rules and its open items live in
 [`.agents/`](.agents/README.md); [AGENTS.md](AGENTS.md) is the entry point.

@@ -1,8 +1,9 @@
 # Binaries
 bin/
-# dist/ holds build output; the Helm chart in dist/chart is source.
-dist/*
-!dist/chart/
+# Build output. The chart's templates come from config/ (make chart);
+# only Chart.yaml and values.yaml in deploy/chart are kept by hand.
+dist/
+deploy/chart/templates/
 *.exe
 *.dll
 *.so

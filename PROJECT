@@ -9,7 +9,7 @@ layout:
 plugins:
   helm.kubebuilder.io/v2-alpha:
     manifests: dist/install.yaml
-    output: dist
+    output: deploy
 projectName: gojsop
 repo: github.com/efuturetoday/gojsop
 resources:

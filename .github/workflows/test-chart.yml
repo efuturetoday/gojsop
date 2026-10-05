@@ -46,9 +46,12 @@ jobs:
       - name: Verify Helm installation
         run: helm version
 
+      - name: Generate the chart templates from config/
+        run: make chart
+
       - name: Lint Helm Chart
         run: |
-          helm lint ./dist/chart
+          helm lint ./deploy/chart
 
 
       - name: Install cert-manager via Helm (wait for readiness)
@@ -73,7 +76,7 @@ jobs:
         run: |
           # The image built above, and wait until the operator is ready: a
           # chart that installs but whose operator cannot start is broken.
-          helm install my-release ./dist/chart --create-namespace --namespace gojsop-system \
+          helm install my-release ./deploy/chart --create-namespace --namespace gojsop-system \
             --set manager.image.repository=gojsop --set manager.image.tag=ci \
             --wait --timeout 300s
 
