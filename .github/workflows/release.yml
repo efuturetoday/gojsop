@@ -90,11 +90,11 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      # Trusted publishing (OIDC) once it is set up for each package on
-      # npmjs.com; until then the token in the secret NPM_TOKEN.
+      # Trusted publishing: npm trusts this workflow through OIDC
+      # (id-token: write above), so there is no token. Each package names
+      # efuturetoday/gojsop and release.yml as its trusted publisher on
+      # npmjs.com; see CONTRIBUTING.md.
       - name: Publish the npm packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         working-directory: sdk
         run: |
           npm ci

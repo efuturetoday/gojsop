@@ -20,6 +20,18 @@ Merging it tags the version, and CI publishes the image, the Helm chart,
 `install.yaml`, the CLI binaries and the npm packages in [`sdk/`](sdk). The
 npm packages take their version from the tag; the repository keeps `0.0.0`.
 
+The npm packages are published with
+[trusted publishing](https://docs.npmjs.com/trusted-publishers/): no token,
+npm trusts `release.yml` through OIDC. A new package needs this once, by a
+maintainer:
+
+1. `npm login`, then `cd sdk && node scripts/claim.ts`. It publishes a
+   placeholder `0.0.0` of every package that does not exist yet (npm asks for
+   the 2FA code), because trusted publishing works only for existing
+   packages.
+2. On npmjs.com, for each package: Settings → Trusted Publisher → GitHub
+   Actions, repository `efuturetoday/gojsop`, workflow `release.yml`.
+
 ## Helm chart
 
 `deploy/chart` holds only `Chart.yaml` and `values.yaml`, kept by hand.
