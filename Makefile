@@ -170,6 +170,14 @@ sdk-test: gojsop ## Build and test the npm packages in sdk/ against bin/gojsop.
 sdk-claim: ## Once, after npm login: claim the npm package names and trust release.yml to publish them.
 	cd sdk && node scripts/claim.ts
 
+.PHONY: sdk-lint
+sdk-lint: ## Check format and lint of the npm packages in sdk/ with Biome (sdk-format fixes).
+	cd sdk && npm ci && npm run lint
+
+.PHONY: sdk-format
+sdk-format: ## Format the npm packages in sdk/ and apply safe Biome fixes.
+	cd sdk && npm run format
+
 .PHONY: sdk-smoke
 sdk-smoke: ## Pack the npm packages, create a workspace from them and run its tests, as a user would.
 	$(MAKE) cli-dist VERSION=0.0.0-smoke

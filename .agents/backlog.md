@@ -274,12 +274,6 @@ these steps (2026-10-05).
   entry point, no Node APIs, no async entry point) as a rule in
   js-execution, and have `gojsop build` check a JS file against it. Done
   when the rule exists and is held by a test.
-- **WS-6** `gap` TypeScript and modules for scripts: `@gojsop/testing`
-  bundles a `.ts` or ES-module script with esbuild before it hands it to
-  serve, and a build step (`gojsop-build` in the npm package) writes the
-  manifests with the bundled source; source maps so errors point at `.ts`
-  lines; types for `event`, `req`, `kube.*`. Done when a TypeScript policy
-  tests and builds.
 - **WS-8** `gap` Coverage: instrument the script with istanbul in
   `@gojsop/testing`, return the counters from the engine, merge them into
   vitest's report. Done when `vitest --coverage` shows a policy's lines.

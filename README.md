@@ -7,7 +7,8 @@ Automate and guard your Kubernetes cluster with a few lines of JavaScript.
 - **Hooks** react when something changes: copy a ConfigMap into new
   namespaces, label new Pods, clean up after a deleted object.
 
-You write a function, test it with vitest, and deploy it with `kubectl`. Each
+You write a function in TypeScript or JavaScript, test it with vitest, and
+deploy it with `kubectl`. Each
 script runs sandboxed inside gojsop, with a memory limit, a timeout and only
 the rights you give it.
 
@@ -15,7 +16,7 @@ the rights you give it.
 
 ## Get started
 
-You need Node.js 20 or newer. You need a cluster only for the last step.
+You need Node.js 22 or newer. You need a cluster only for the last step.
 
 ### 1. Create a project
 
@@ -31,8 +32,8 @@ its tests:
 
 ```
 my-policies/
-  policies/no-latest/    policy.yaml, policy.js, policy.test.ts
-  hooks/count-pods/      hook.yaml, hook.js, hook.test.ts
+  policies/no-latest/    policy.yaml, policy.ts, policy.test.ts
+  hooks/count-pods/      hook.yaml, hook.ts, hook.test.ts
 ```
 
 For a new policy or hook, copy a folder and add it to `kustomization.yaml`.
@@ -55,20 +56,23 @@ spec:
       operations: ["CREATE", "UPDATE"]
 ```
 
-`policy.js` decides:
+`policy.ts` decides:
 
-```js
-function validate(req) {
+```ts
+import type { Request, Response } from "@gojsop/types";
+
+export function validate(req: Request): Response {
   for (const c of req.object?.spec?.containers ?? []) {
     if (c.image?.endsWith(":latest")) {
-      return { allowed: false, message: c.image + " uses :latest" };
+      return { allowed: false, message: `${c.image} uses :latest` };
     }
   }
   return { allowed: true };
 }
 ```
 
-Tip: Kubernetes leaves out empty fields, so use `?.` and `??`.
+Tip: Kubernetes leaves out empty fields, so use `?.` and `??`. You can
+import your own modules and npm packages; gojsop bundles them.
 
 ### 3. Test it
 
@@ -92,13 +96,15 @@ exactly as it would in the cluster, so a green test means it works there too.
 A hook gets an event for every change of what it watches. This one counts
 the Pods labeled `track: "true"` and writes the number into a ConfigMap:
 
-```js
-function handle(event) {
+```ts
+import type { Event } from "@gojsop/types";
+
+export function handle(event: Event) {
   const count = event.all().length;
   kube.apply({
     apiVersion: "v1",
     kind: "ConfigMap",
-    metadata: { name: "pod-count", namespace: event.object.metadata.namespace },
+    metadata: { name: "pod-count", namespace: event.object.metadata?.namespace },
     data: { count: String(count) },
   });
 }
@@ -144,7 +150,7 @@ helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
 Then deploy your project to the cluster `kubectl` points at:
 
 ```sh
-npm run deploy                  # runs the tests, then kubectl apply -k .
+npm run deploy                  # tests, builds the scripts, kubectl apply -k .
 kubectl get jsadmissions,jshooks
 ```
 
@@ -163,9 +169,10 @@ That's it. Every field and option is in the [reference](docs/reference.md).
 
 Good to know once you write your own:
 
-- **Use `function`.** gojsop calls `validate`, `mutate` or `handle` as a
-  global function. `const handle = ...` is not found, and an `async`
-  function does not work.
+- **Export the entry point:** `export function validate`, `mutate` or
+  `handle`. It must not be `async`.
+- **Plain JavaScript works too:** name the file `policy.js` and write
+  `function validate(req) {}` without `export`; it runs as it is.
 - **No memory between calls.** Each call starts fresh. Keep state in the
   cluster.
 - **Talking to the cluster:** `kube.get`, `kube.list`, `kube.apply` and

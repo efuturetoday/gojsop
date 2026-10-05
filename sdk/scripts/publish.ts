@@ -5,14 +5,15 @@
 // The release tag is the only source of the version: this script stamps it
 // into every package and pins the packages to each other. It builds one
 // package per platform around the binaries of `make cli-dist`, then
-// publishes the platforms, @gojsop/cli, @gojsop/testing and @gojsop/create,
+// publishes the platforms, @gojsop/cli, @gojsop/types, @gojsop/testing and
+// @gojsop/create,
 // in that order. A version that is already on npm is skipped, so a failed
 // release job can be rerun. --pack writes tarballs instead of publishing.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { platforms } from "../cli/src/platforms.ts";
 
 const { values: args } = parseArgs({
@@ -34,8 +35,18 @@ const binDir = path.resolve(args["bin-dir"]);
 const build = path.join(sdk, "build");
 fs.rmSync(build, { recursive: true, force: true });
 
-const readJSON = (f: string): any => JSON.parse(fs.readFileSync(f, "utf8"));
-const writeJSON = (f: string, v: unknown) => fs.writeFileSync(f, JSON.stringify(v, null, 2) + "\n");
+// A package.json: the fields this script reads and writes.
+interface Manifest {
+  name: string;
+  version: string;
+  license?: string;
+  repository?: unknown;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}
+
+const readJSON = (f: string): Manifest => JSON.parse(fs.readFileSync(f, "utf8"));
+const writeJSON = (f: string, v: unknown) => fs.writeFileSync(f, `${JSON.stringify(v, null, 2)}\n`);
 const cli = readJSON(path.join(sdk, "cli/package.json"));
 
 // One package per platform, holding only the binary.
@@ -59,14 +70,17 @@ for (const [key, p] of Object.entries(platforms)) {
     cpu: [cpu],
     files: ["bin"],
   });
-  fs.writeFileSync(path.join(dir, "README.md"), `# ${p.pkg}\n\nThe gojsop binary for ${key}. Install [@gojsop/cli](https://www.npmjs.com/package/@gojsop/cli) instead.\n`);
+  fs.writeFileSync(
+    path.join(dir, "README.md"),
+    `# ${p.pkg}\n\nThe gojsop binary for ${key}. Install [@gojsop/cli](https://www.npmjs.com/package/@gojsop/cli) instead.\n`,
+  );
   dirs.push(dir);
 }
 
 // Stamp the version and pin the packages to each other; the manifests are
 // restored at the end, so a local --pack leaves the repository unchanged.
 const originals = new Map<string, string>();
-const stamp = (name: string, edit?: (pkg: any) => void) => {
+const stamp = (name: string, edit?: (pkg: Manifest) => void) => {
   const f = path.join(sdk, name, "package.json");
   originals.set(f, fs.readFileSync(f, "utf8"));
   const pkg = readJSON(f);
@@ -78,8 +92,10 @@ const stamp = (name: string, edit?: (pkg: any) => void) => {
 stamp("cli", (pkg) => {
   pkg.optionalDependencies = Object.fromEntries(Object.values(platforms).map((p) => [p.pkg, version]));
 });
+stamp("types");
+stamp("types");
 stamp("testing", (pkg) => {
-  pkg.dependencies["@gojsop/cli"] = version;
+  pkg.dependencies = { ...pkg.dependencies, "@gojsop/cli": version };
 });
 stamp("create");
 for (const name of ["cli", "testing", "create"]) {

@@ -6,6 +6,6 @@ configMapGenerator:
   - name: count-pods
     namespace: gojsop-system
     files:
-      - hook.js
+      - hook.js=dist/hook.js # written by npm run build
     options:
       disableNameSuffixHash: true # hook.yaml refers to the ConfigMap by this name
