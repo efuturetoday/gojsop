@@ -277,10 +277,10 @@ func (r *Registrar) applyValidating(ctx context.Context, policies []PolicyMeta, 
 			Name:                    DNSWebhookName(p.Key),
 			ClientConfig:            r.clientConfig(p.Path, caBundle),
 			Rules:                   p.Rules,
-			FailurePolicy:           ptr(orFailDefault(p.FailurePolicy)),
-			MatchPolicy:             ptr(orMatchDefault(p.MatchPolicy)),
-			SideEffects:             ptr(orSideEffectDefault(p.SideEffects)),
-			TimeoutSeconds:          ptr(orTimeoutDefault(p.TimeoutSeconds)),
+			FailurePolicy:           new(orFailDefault(p.FailurePolicy)),
+			MatchPolicy:             new(orMatchDefault(p.MatchPolicy)),
+			SideEffects:             new(orSideEffectDefault(p.SideEffects)),
+			TimeoutSeconds:          new(orTimeoutDefault(p.TimeoutSeconds)),
 			AdmissionReviewVersions: []string{"v1"},
 			NamespaceSelector:       r.mergeNSSelector(p.NSSelector),
 			ObjectSelector:          p.ObjectSelector,
@@ -301,10 +301,10 @@ func (r *Registrar) applyMutating(ctx context.Context, policies []PolicyMeta, ca
 			Name:                    DNSWebhookName(p.Key),
 			ClientConfig:            r.clientConfig(p.Path, caBundle),
 			Rules:                   p.Rules,
-			FailurePolicy:           ptr(orFailDefault(p.FailurePolicy)),
-			MatchPolicy:             ptr(orMatchDefault(p.MatchPolicy)),
-			SideEffects:             ptr(orSideEffectDefault(p.SideEffects)),
-			TimeoutSeconds:          ptr(orTimeoutDefault(p.TimeoutSeconds)),
+			FailurePolicy:           new(orFailDefault(p.FailurePolicy)),
+			MatchPolicy:             new(orMatchDefault(p.MatchPolicy)),
+			SideEffects:             new(orSideEffectDefault(p.SideEffects)),
+			TimeoutSeconds:          new(orTimeoutDefault(p.TimeoutSeconds)),
 			AdmissionReviewVersions: []string{"v1"},
 			NamespaceSelector:       r.mergeNSSelector(p.NSSelector),
 			ObjectSelector:          p.ObjectSelector,
@@ -316,7 +316,7 @@ func (r *Registrar) applyMutating(ctx context.Context, policies []PolicyMeta, ca
 
 func (r *Registrar) clientConfig(path string, caBundle []byte) admissionregv1.WebhookClientConfig {
 	svc := r.Service
-	svc.Path = ptr(path)
+	svc.Path = new(path)
 	return admissionregv1.WebhookClientConfig{Service: &svc, CABundle: caBundle}
 }
 
@@ -450,5 +450,3 @@ func orTimeoutDefault(v int32) int32 {
 	}
 	return v
 }
-
-func ptr[T any](v T) *T { return &v }
