@@ -13,6 +13,7 @@ What gojsop promises the engineers who write JavaScript for it.
 |---|---|
 | [jshook](areas/jshook.md) | JSHook: `spec.bindings`, Synchronization and events, `handle()` |
 | [jsadmission](areas/jsadmission.md) | JSAdmission: which requests reach the script, its answer, failure policy |
+| [workspace](areas/workspace.md) | The `gojsop` CLI: run and test hooks and policies without a cluster |
 
 ## Aspects
 

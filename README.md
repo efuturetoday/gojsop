@@ -212,6 +212,45 @@ No policy ever sees requests in the operator's namespace, `kube-system` or
 `cert-manager`, so a broken policy cannot lock up the cluster itself. Change
 the list with the operator flag `--admission-exclude-namespaces`.
 
+## Test without a cluster
+
+The `gojsop` CLI runs a hook or policy in the same engine as the operator,
+against a cluster held in memory, with the script's own rights and limits.
+Download it from the [release](https://github.com/efuturetoday/gojsop/releases),
+put each hook or policy in a directory of its own, and add test cases:
+
+```
+policies/no-latest/
+  policy.yaml            # the JSAdmission, without spec.source
+  policy.js              # the script
+  tests/denies-latest.yaml
+```
+
+```yaml
+# tests/denies-latest.yaml
+name: denies :latest
+request:
+  operation: CREATE
+  object:
+    apiVersion: v1
+    kind: Pod
+    metadata: { name: web, namespace: team-a }
+    spec: { containers: [{ name: web, image: nginx:latest }] }
+expect:
+  allowed: false
+  message: /uses :latest/    # exact text, or a regular expression between slashes
+```
+
+```sh
+gojsop test                          # every case below the current directory
+gojsop run policies/no-latest/policy.yaml --request pod.yaml --trace
+```
+
+A hook case gives an `event` and the `cluster` before, and expects objects
+in the `cluster` after; `kube.*` without the right in `spec.permissions`
+throws `Forbidden`, as in the cluster. `expect.error` expects the script to
+fail, for example `/timeout/`.
+
 ## Permissions
 
 Every hook and policy acts as a ServiceAccount of its own, which gojsop

@@ -71,6 +71,19 @@ jobs:
           helm package deploy/chart --version "$VERSION" --app-version "$VERSION"
           helm push "gojsop-$VERSION.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
 
+      - name: Attach the gojsop CLI to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p cli
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${target%/*}; arch=${target#*/}; ext=""; [ "$os" = windows ] && ext=".exe"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+              -o "cli/gojsop_${VERSION}_${os}_${arch}${ext}" ./cmd/gojsop
+          done
+          (cd cli && sha256sum * > checksums.txt)
+          gh release upload "$TAG" cli/*
+
       - name: Attach install.yaml to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
