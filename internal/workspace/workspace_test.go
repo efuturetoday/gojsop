@@ -292,6 +292,31 @@ func TestServe_AnswersReviewAndHandle(t *testing.T) {
 	}
 }
 
+// workspace.R11
+func TestServe_SourceFromTheCaller(t *testing.T) {
+	bundled := "globalThis.validate = function () { return {allowed: false, message: \"bundled\"}; };"
+	tsOnly := writeFiles(t, map[string]string{"policy.yaml": policyHeader, "policy.ts": "export function validate() {}"})
+	inline := writeFiles(t, map[string]string{
+		"policy.yaml": policyHeader + "  source:\n    inline: \"function validate() { return {allowed: true}; }\"\n",
+	})
+	review := func(id int, manifest string) map[string]any {
+		return map[string]any{"id": id, "op": "review", "manifest": manifest, "source": bundled,
+			"input": map[string]any{"object": obj("Pod", "d", "a", nil)}}
+	}
+	ans := serve(t, review(1, "testdata/no-latest"), review(2, tsOnly), review(3, inline))
+
+	for i := range 2 {
+		result, _ := ans[i]["result"].(map[string]any)
+		if ans[i]["error"] != nil || result["message"] != "bundled" {
+			t.Errorf("answer %d = %v, want the caller's script", i+1, ans[i])
+		}
+	}
+	e, _ := ans[2]["error"].(map[string]any)
+	if msg, _ := e["message"].(string); e["kind"] != "input" || !strings.Contains(msg, "keep one") {
+		t.Errorf("source and inline: answer = %v", ans[2])
+	}
+}
+
 // workspace.R5
 func TestServe_ErrorsAndLimitsKeepServing(t *testing.T) {
 	dir := writeFiles(t, map[string]string{

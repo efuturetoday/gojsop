@@ -21,6 +21,9 @@ type serveRequest struct {
 	Manifest string           `json:"manifest"`
 	Input    json.RawMessage  `json:"input"`
 	Cluster  []map[string]any `json:"cluster"`
+	// Source, when set, is the script to run instead of the one the
+	// manifest names (workspace.R11).
+	Source *string `json:"source,omitempty"`
 }
 
 // serveError is the error of an answer; Kind is one of the Kind constants.
@@ -84,7 +87,13 @@ func serveOne(ctx context.Context, line []byte) serveAnswer {
 	}
 	ans.Cluster = nonNil(req.Cluster)
 
-	m, err := Load(req.Manifest)
+	var m *Manifest
+	var err error
+	if req.Source != nil {
+		m, err = LoadWithSource(req.Manifest, []byte(*req.Source))
+	} else {
+		m, err = Load(req.Manifest)
+	}
 	if err != nil {
 		return fail(KindInput, err)
 	}
