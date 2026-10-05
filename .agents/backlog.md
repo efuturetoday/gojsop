@@ -279,18 +279,22 @@ these steps (2026-10-05).
   entry point, no Node APIs, no async entry point) as a rule in
   js-execution, and have `gojsop build` check a JS file against it. Done
   when the rule exists and is held by a test.
-- **WS-6** `gap` TypeScript: `gojsop build` bundles `.ts` with an embedded
-  esbuild (or takes a ready `.js`), writes manifests with the inlined source
-  to `dist/`, keeps source maps so errors point at `.ts` lines; `gojsop
-  init` and `gojsop new hook|policy`; types as `gojsop.d.ts` and
-  `@gojsop/types`. Done when a TypeScript workspace builds and tests.
-- **WS-7** `gap` `gojsop serve --stdio` and `@gojsop/testing` (`runPolicy`,
-  `runHook`) for vitest and jest; the npm package downloads the binary and
-  keeps one engine process per test worker. Done when a vitest suite runs
-  against the engine.
+- **WS-6** `gap` TypeScript and modules for scripts: `@gojsop/testing`
+  bundles a `.ts` or ES-module script with esbuild before it hands it to
+  serve, and a build step (`gojsop-build` in the npm package) writes the
+  manifests with the bundled source; source maps so errors point at `.ts`
+  lines; types for `event`, `req`, `kube.*`. Done when a TypeScript policy
+  tests and builds.
+- **WS-7** `gap` Distribution: the npm package installs the `gojsop` binary
+  for the platform (optional dependencies per OS/arch, as esbuild does);
+  `brew` and a release download for `gojsop run`. Done when `npm i -D
+  @gojsop/testing` works without Go.
 - **WS-8** `gap` Coverage: instrument the script with istanbul in
   `@gojsop/testing`, return the counters from the engine, merge them into
-  the runner's report. Done when vitest shows coverage of a policy's lines.
+  vitest's report. Done when `vitest --coverage` shows a policy's lines.
 - **WS-9** `decision` `gojsop push`: publish built manifests as an OCI
   artifact for Flux and Argo CD; the operator does not poll registries.
   Decide the artifact format and signing. Done when recorded.
+- **WS-10** `gate` A CI job runs the vitest suite of `sdk/testing` against
+  the built `gojsop`, and a Go test holds workspace.R7. Done when the job
+  is required and the rule names its test.
