@@ -1,0 +1,13 @@
+apiVersion: core.gojsop.io/v1alpha1
+kind: JSAdmission
+metadata:
+  name: no-latest
+spec:
+  type: validating
+  rules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+      operations: ["CREATE", "UPDATE"]
+  # The script is the one policy.js next to this file.
+  source: {}

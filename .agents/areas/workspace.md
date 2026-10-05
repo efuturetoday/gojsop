@@ -1,6 +1,10 @@
 ---
 id: workspace
 status: proposed
+entrypoints:
+  - workspace.Load
+  - workspace.Manifest.Run
+  - workspace.RunTests
 ---
 
 # Workspace

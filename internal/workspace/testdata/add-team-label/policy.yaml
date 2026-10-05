@@ -1,0 +1,25 @@
+apiVersion: core.gojsop.io/v1alpha1
+kind: JSAdmission
+metadata:
+  name: add-team-label
+spec:
+  type: mutating
+  rules:
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployments"]
+      operations: ["CREATE"]
+  permissions:
+    - apiGroups: [""]
+      resources: ["namespaces"]
+      verbs: ["get"]
+  source:
+    inline: |
+      function mutate(req) {
+        const obj = req.object;
+        const ns = kube.get({apiVersion: "v1", kind: "Namespace", name: req.namespace});
+        const team = ns?.metadata?.labels?.team ?? "unowned";
+        obj.metadata.labels = {...(obj.metadata.labels ?? {}), team};
+        console.log("team is " + team);
+        return { allowed: true, modifiedObject: obj };
+      }

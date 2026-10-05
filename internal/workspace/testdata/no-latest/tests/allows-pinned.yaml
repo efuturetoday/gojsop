@@ -1,0 +1,12 @@
+name: allows a pinned tag
+request:
+  object:
+    apiVersion: v1
+    kind: Pod
+    metadata: {name: web, namespace: default}
+    spec:
+      containers:
+        - {name: app, image: "nginx:1.27"}
+expect:
+  allowed: true
+  warnings: []

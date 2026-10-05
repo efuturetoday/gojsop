@@ -1,0 +1,13 @@
+name: denies :latest
+request:
+  operation: CREATE
+  object:
+    apiVersion: v1
+    kind: Pod
+    metadata: {name: web, namespace: default}
+    spec:
+      containers:
+        - {name: app, image: "nginx:latest"}
+expect:
+  allowed: false
+  message: /uses :latest/

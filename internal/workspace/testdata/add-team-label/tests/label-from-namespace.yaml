@@ -1,0 +1,17 @@
+name: copies the team label from the namespace
+cluster:
+  - apiVersion: v1
+    kind: Namespace
+    metadata: {name: shop, labels: {team: checkout}}
+request:
+  object:
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata: {name: api, namespace: shop}
+    spec: {replicas: 2}
+expect:
+  allowed: true
+  object:
+    metadata:
+      labels: {team: checkout}
+    spec: {replicas: 2}
