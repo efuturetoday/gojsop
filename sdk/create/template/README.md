@@ -3,7 +3,7 @@
 Hooks and policies for [gojsop](https://github.com/efuturetoday/gojsop), one
 directory each: the manifest, its script and its tests.
 
-```sh
+```bash
 npm install
 npm test                          # or: npx vitest (watch mode)
 npx gojsop new policy <name>      # add a policy (or: new hook <name>)

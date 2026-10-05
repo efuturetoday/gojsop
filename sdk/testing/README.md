@@ -8,7 +8,7 @@ Node.
 
 ## Install
 
-```sh
+```bash
 npm install --save-dev vitest @gojsop/testing
 ```
 

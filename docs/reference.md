@@ -16,7 +16,7 @@ walks you through a first hook and policy.
 gojsop needs [cert-manager](https://cert-manager.io), which issues the webhook
 certificate:
 
-```sh
+```bash
 helm repo add jetstack https://charts.jetstack.io
 helm install cert-manager jetstack/cert-manager \
   --namespace cert-manager --create-namespace --set crds.enabled=true --wait
@@ -25,7 +25,7 @@ helm install cert-manager jetstack/cert-manager \
 With Helm:
 
 <!-- x-release-please-start-version -->
-```sh
+```bash
 helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
   --namespace gojsop-system --create-namespace --wait \
   --version 0.1.1
@@ -35,7 +35,7 @@ helm install gojsop oci://ghcr.io/efuturetoday/charts/gojsop \
 Or without Helm:
 
 <!-- x-release-please-start-version -->
-```sh
+```bash
 kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.1/install.yaml
 ```
 <!-- x-release-please-end -->
@@ -43,7 +43,7 @@ kubectl apply -f https://github.com/efuturetoday/gojsop/releases/download/v0.1.1
 The samples, a ConfigMap sync hook and two pod policies:
 
 <!-- x-release-please-start-version -->
-```sh
+```bash
 kubectl apply -k "github.com/efuturetoday/gojsop/config/samples?ref=v0.1.1"
 kubectl get jshooks,jsadmissions
 ```

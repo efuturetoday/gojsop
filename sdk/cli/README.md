@@ -4,7 +4,7 @@ The [gojsop](https://github.com/efuturetoday/gojsop) CLI. It runs hooks and
 policies on your machine, in the engine the operator uses, against a cluster
 held in memory.
 
-```sh
+```bash
 npm install --save-dev @gojsop/cli
 npx gojsop run policy.yaml --request request.yaml --trace
 ```

@@ -4,7 +4,7 @@ Creates a workspace for [gojsop](https://github.com/efuturetoday/gojsop)
 hooks and policies, with vitest tests that run the scripts in gojsop's
 engine.
 
-```sh
+```bash
 npm create @gojsop my-policies
 cd my-policies
 npm install
