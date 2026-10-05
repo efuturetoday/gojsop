@@ -162,6 +162,19 @@ cli-dist: ## Build the gojsop CLI for every release target to dist/cli (VERSION=
 	  CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="-s -w" -o "dist/cli/gojsop_$(VERSION)_$${os}_$${arch}$${ext}" ./cmd/gojsop; \
 	done
 
+.PHONY: cli-archives
+cli-archives: cli-dist ## Pack the CLI of every target with LICENSE for the GitHub release, to dist/release (VERSION=x.y.z).
+	@rm -rf dist/release dist/pack; mkdir -p dist/release; set -e; for target in $(CLI_TARGETS); do \
+	  os=$${target%/*}; arch=$${target#*/}; name="gojsop_$(VERSION)_$${os}_$${arch}"; \
+	  rm -rf dist/pack; mkdir -p dist/pack; cp LICENSE dist/pack/; \
+	  if [ "$$os" = windows ]; then \
+	    cp "dist/cli/$$name.exe" dist/pack/gojsop.exe; (cd dist/pack && zip -q "../release/$$name.zip" gojsop.exe LICENSE); \
+	  else \
+	    cp "dist/cli/$$name" dist/pack/gojsop; chmod +x dist/pack/gojsop; tar -czf "dist/release/$$name.tar.gz" -C dist/pack gojsop LICENSE; \
+	  fi; \
+	done; rm -rf dist/pack
+	cd dist/release && { command -v sha256sum >/dev/null && sha256sum gojsop_* || shasum -a 256 gojsop_*; } > checksums.txt
+
 .PHONY: sdk-test
 sdk-test: gojsop ## Build and test the npm packages in sdk/ against bin/gojsop.
 	cd sdk && npm ci && npm run build && GOJSOP_BIN=$(CURDIR)/bin/gojsop npm test

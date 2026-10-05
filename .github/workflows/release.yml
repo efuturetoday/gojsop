@@ -111,9 +111,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          make cli-dist VERSION="$VERSION"
-          (cd dist/cli && sha256sum * > checksums.txt)
-          gh release upload "$TAG" dist/cli/* --clobber
+          make cli-archives VERSION="$VERSION"
+          gh release upload "$TAG" dist/release/* --clobber
+          # Say what the files are, under the changelog release-please wrote.
+          notes="$(gh release view "$TAG" --json body -q .body)"
+          case "$notes" in *"## Downloads"*) ;; *)
+            gh release edit "$TAG" --notes "$notes
+
+          ## Downloads
+
+          \`gojsop_*\` is the gojsop CLI (\`gojsop run\`, \`gojsop serve\`) for macOS, Linux and Windows, for use without npm; \`checksums.txt\` holds their SHA-256. With npm, \`npm create @gojsop\` installs it for you. The operator itself is the image \`ghcr.io/efuturetoday/gojsop:$VERSION\`, the Helm chart \`oci://ghcr.io/efuturetoday/charts/gojsop\` or \`install.yaml\`." ;;
+          esac
 
       - uses: actions/setup-node@v7
         with:
